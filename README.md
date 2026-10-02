@@ -1,5 +1,19 @@
 # micro-cc
 
+```
+                   88
+                   ""
+
+88,dPYba,,adPYba,  88  ,adPPYba, 8b,dPPYba,  ,adPPYba,     ,adPPYba,  ,adPPYba,
+88P'   "88"    "8a 88 a8"     "" 88P'   "Y8 a8"     "8a   a8"     "" a8"     ""
+88      88      88 88 8b         88         8b       d8 · 8b         8b
+88      88      88 88 "8a,   ,aa 88         "8a,   ,a8"   "8a,   ,aa "8a,   ,aa
+88      88      88 88  `"Ybbd8"' 88          `"YbbdP"'     `"Ybbd8"'  `"Ybbd8"'
+Knowledge work is, by extension, a coding problem.
+
+enter submit · esc interrupt · / commands
+```
+
 A terminal harness that gives frontier models full system access: shell, filesystem, browser and MCP.
 
 ## Install
