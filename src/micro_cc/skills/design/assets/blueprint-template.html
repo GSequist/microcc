@@ -1,0 +1,151 @@
+<title>REPLACE ME</title>
+<style>
+  :root {
+    --bg: #FFFFFF;
+    --ink: #17130F;
+    --muted: #6B6459;
+    --line: #E4E0D8;
+    /* keep only the ONE accent pair this slide uses — delete the rest */
+    --accent: #BFCDB6;
+    --accent-line: #4F5F45;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: clamp(2rem, 4.5vw, 4.5rem);
+    gap: 2rem;
+  }
+
+  header { display: flex; align-items: center; gap: 0.6rem; }
+
+  .num {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .swatch {
+    width: 10px;
+    height: 10px;
+    background: var(--accent);
+    border: 1px solid var(--accent-line);
+    flex: none;
+  }
+
+  .title {
+    margin: 0;
+    font-weight: 200;
+    font-size: clamp(2.5rem, 6vw, 3.75rem);
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    text-transform: lowercase;
+  }
+
+  .titlewrap { display: flex; flex-direction: column; gap: 0.5rem; }
+  .rule { display: flex; align-items: center; gap: 0.6rem; }
+
+  .stage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+  }
+
+  .stage svg {
+    width: 100%;
+    max-width: 760px;
+    height: auto;
+    overflow: visible;
+  }
+
+  /* structure: ink outline, no fill */
+  .container-box { fill: none; stroke: var(--ink); stroke-width: 1.25; }
+  /* internal dividers: quieter than the outer boundary */
+  .divider { stroke: var(--line); stroke-width: 1.25; }
+  /* the ONE filled element */
+  .accent-fill { fill: var(--accent); }
+  /* registration crosshairs */
+  .reg { stroke: var(--muted); stroke-width: 1; }
+
+  .cell-label {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    fill: var(--muted);
+    text-anchor: middle;
+  }
+  /* flip to ink for labels sitting on the accent fill */
+  .cell-label.on-accent { fill: var(--ink); }
+
+  .dim-line { stroke: var(--ink); stroke-width: 1; }
+  .dim-tick { stroke: var(--ink); stroke-width: 1; }
+  .dim-label {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    fill: var(--muted);
+    text-anchor: middle;
+    text-transform: uppercase;
+  }
+
+  footer { display: flex; justify-content: center; }
+
+  .caption {
+    max-width: 38ch;
+    text-align: center;
+    font-size: 0.95rem;
+    font-weight: 300;
+    line-height: 1.5;
+    color: var(--ink);
+    text-wrap: balance;
+  }
+</style>
+
+<body>
+  <header>
+    <div class="num">NN</div>
+  </header>
+
+  <div class="titlewrap" style="margin-top:-2rem;">
+    <div class="rule"><span class="swatch"></span><h1 class="title">lowercase title</h1></div>
+  </div>
+
+  <div class="stage">
+    <!--
+      Draw the diagram here. viewBox stays "0 0 760 300". The composition itself
+      is free (grid, path, stack — whatever the concept is), but keep the apparatus:
+
+      1. Structure = .container-box (ink outline, no fill).
+      2. Internal dividers = .divider (hairline).
+      3. Exactly ONE element = .accent-fill — the thing this slide is about.
+      4. Registration crosshairs (.reg) ~14px outside each corner of the diagram's
+         bounding box. Example for a box spanning (x1,y1)-(x2,y2):
+           <g class="reg">
+             <path d="M{x1-14},{y1-14} v14 M{x1-21},{y1-7} h14" />
+             <path d="M{x2},{y1-14} v14 M{x2+7},{y1-7} h14" />
+             <path d="M{x1-14},{y2} v14 M{x1-21},{y2+7} h14" />
+             <path d="M{x2},{y2} v14 M{x2+7},{y2+7} h14" />
+           </g>
+      5. One dimension line under (or beside) the bounding box, with a .dim-label
+         stating a TRUE count about the diagram — "N parts · 1 accent" etc.
+    -->
+    <svg viewBox="0 0 760 300" role="img" aria-label="REPLACE ME">
+    </svg>
+  </div>
+
+  <footer>
+    <p class="caption">One sentence. State the rule, not the picture.</p>
+  </footer>
+</body>

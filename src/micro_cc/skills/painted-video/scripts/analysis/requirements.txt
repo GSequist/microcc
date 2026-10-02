@@ -1,0 +1,7 @@
+numpy
+scipy
+librosa
+soundfile
+mlx-whisper   # Apple Silicon; swap for openai-whisper elsewhere
+demucs
+torchaudio

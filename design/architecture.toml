@@ -1,0 +1,235 @@
+version = 1
+# Import roots for the src-layout package.
+source_roots = ["src"]
+
+# --- The malleable-harness self-reload / self-heal boundaries ---------------
+# Declared here because the guarantees are semantic (turn boundaries, bounded
+# recovery, durability across a process replacement) and no import graph
+# expresses them. See notes/self_reload.md for the design.
+
+[[contract]]
+id = "self-reload-restarts-only-at-idle"
+statement = "A self-reload relaunch happens only when the app is idle, with no in-flight turn, no browser session owning the conversation, and no live subagent — never mid-turn."
+anchors = ["src/micro_cc/start_live_tui_.py::MicroTui._maybe_self_reload"]
+assumptions = [
+  "A restart re-execs the whole process; anything in flight in the old process is lost.",
+  "messages.jsonl is the durable conversation boundary and is flushed before execv.",
+]
+questions = [
+  "Walk a change detected while a tool call is streaming, while /gui is active, and while a subagent is live — none may restart.",
+  "Walk a change detected while the app is idle — it must restart and the conversation must resume from disk.",
+]
+scenarios = ["self-reload-properties"]
+
+[[contract]]
+id = "self-reload-detects-source-change"
+statement = "A change to the harness's own .py source on disk is detected from a (mtime_ns, size) manifest, ignoring __pycache__ and non-source files; an unchanged tree yields no change."
+anchors = ["src/micro_cc/utils/self_reload_.py::build_manifest"]
+assumptions = ["Only a source checkout has files that change under the running process; a pip install is a no-op."]
+questions = ["Walk an edit, an add, a remove, and a no-op touch — only the first three are changes."]
+scenarios = ["self-reload-properties"]
+
+[[contract]]
+id = "boot-failure-recovery-is-bounded"
+statement = "If the app fails to reach a running UI, the supervisor reinstalls the published wheel and relaunches, at most MAX_BOOT_ATTEMPTS consecutive times; a successful boot clears the counter and a crash after boot never triggers a reinstall."
+anchors = ["src/micro_cc/self_heal_.py::main"]
+assumptions = [
+  "The supervisor is a separate process from the app, so a broken app module surfaces as a caught boot failure, not an ImportError killing the supervisor.",
+  "note_boot_ok() is the real 'reached a running UI' signal, called from start_live_tui_.start().",
+]
+questions = [
+  "Walk N consecutive boot failures — exactly N reinstalls then stop, no loop.",
+  "Walk boot-then-later-crash — no reinstall, non-zero exit.",
+  "Walk a boot that succeeds after the counter was raised — counter cleared.",
+]
+scenarios = ["self-reload-properties"]
+
+[[contract]]
+id = "unsent-prompt-survives-relaunch"
+statement = "The unsent prompt is stashed to a sidecar before a self-reload execv and restored exactly once, in the process that comes up after the restart."
+anchors = ["src/micro_cc/utils/self_reload_.py::take_pending_prompt"]
+assumptions = ["The sidecar lives beside messages.jsonl in the project's own storage dir."]
+questions = ["Walk a stashed prompt: restored once, then gone (never resurfacing on a later boot)."]
+scenarios = ["self-reload-properties"]
+
+[[contract]]
+id = "schedule-specs-parse-like-cc"
+statement = "Interval ('20m', 'every 5 minutes') and 5-field cron specs parse to a next-fire time with standard cron field syntax and dom/dow-OR semantics; invalid specs are rejected, not silently accepted."
+anchors = ["src/micro_cc/tools/monitor_schedule_.py::parse_cron"]
+assumptions = ["Times are local; the 1-minute floor applies to interval specs."]
+questions = ["Walk an edit of the field expansion, the dow=7 alias, and the pinned-date next-run."]
+scenarios = ["schedule-properties"]
+
+[[contract]]
+id = "schedule-fires-once-and-ages-out"
+statement = "A one-shot schedule fires once then is deleted; a recurring schedule reschedules from now; a recurring schedule past its max age fires a final time then is deleted. Nothing fires without an interactive listener, and a stored-but-unfired schedule is never lost."
+anchors = ["src/micro_cc/tools/monitor_schedule_runtime.py::tick"]
+assumptions = ["The store is the project's own storage dir beside messages.jsonl; firing is a push via the same wake callback a monitor watch uses."]
+questions = ["Walk a one-shot fire, a recurring fire, an aged-out fire, and a tick with no listener."]
+scenarios = ["schedule-properties"]
+
+# --- Semantic edges the language cannot express -----------------------------
+
+[[link]]
+from = "src/micro_cc/start_live_tui_.py::MicroTui._restart_self"
+to = "src/micro_cc/utils/self_reload_.py::exec_relaunch"
+kind = "must-precede"
+why = "stop() must restore the terminal before exec_relaunch replaces the process image."
+
+[[link]]
+from = "src/micro_cc/start_live_tui_.py::MicroTui._poll_schedule_tick"
+to = "src/micro_cc/tools/monitor_schedule_runtime.py::tick"
+kind = "drives"
+why = "The TUI's poll loop is the only caller that turns a due schedule into a turn."
+
+[[link]]
+from = "src/micro_cc/self_heal_.py::main"
+to = "src/micro_cc/start_live_tui_.py::start_"
+kind = "guards"
+why = "The supervisor's whole purpose is to catch a failure of the app it launches."
+
+# --- Executable observation -------------------------------------------------
+
+[[scenario]]
+id = "schedule-properties"
+command = ["{python}", "tests/test_schedule.py"]
+timeout = 30
+inputs = ["tests/test_schedule.py"]
+scope = "Pure schedule-store logic against temp dirs: parsing, jitter bounds, fire lifecycle, and the no-listener gate. The wake callback is a test list; no real ~/.micro-cc state, no network, no process."
+
+[[scenario]]
+id = "self-reload-properties"
+command = ["{python}", "tests/test_self_reload.py"]
+timeout = 30
+inputs = ["tests/test_self_reload.py"]
+scope = "The manifest/diff and prompt-stash logic run for real against temp dirs; the supervisor's start_/_reinstall/execv boundaries are faked (no network, no real ~/.micro-cc state, no process replacement)."
+
+# --- Subagent lifecycle + bounded tools --------------------------------------
+# A subagent is a separate OS process (microcc-headless) the boss spawns via
+# bash_. These guarantees cross that process boundary, so no import graph shows
+# them. See tests/test_subagent_lifecycle.py.
+
+[[contract]]
+id = "subagent-spawn-verdict-is-synchronous"
+statement = "A microcc-headless spawned from a boss's bash_ detaches and returns STARTED (with the pid of the long-lived child that registered itself) or REFUSED before the bash_ call returns; a refused spawn never starts a run and never leaves a tracker entry. Cron/terminal invocations (no MICROCC_CALLER_PROJECT_DIR) keep the blocking contract and real exit status."
+anchors = ["src/micro_cc/start_headless_.py::_spawn_detached", "src/micro_cc/start_headless_.py::start_headless_"]
+assumptions = [
+  "bash_ stamps MICROCC_CALLER_PROJECT_DIR on every subprocess it launches.",
+  "The child is fork+exec'd with start_new_session, so bash_'s timeout killpg and survivor scan never reach it; the tracker pid is the one handle on it.",
+]
+questions = [
+  "Walk a spawn while the cap is full: REFUSED with exit 2, no entry, nothing running.",
+  "Walk a spawn on a starved host that registers after SPAWN_VERDICT_TIMEOUT: UNCONFIRMED, left running, entry present.",
+  "Walk a child that crashes on import: parent gets EOF, reports FAILED with the log tail.",
+]
+scenarios = ["subagent-lifecycle"]
+
+[[contract]]
+id = "subagent-cap-enforced-under-lock"
+statement = "At most settings max_subagents subagents of one boss are RUNNING with a live pid at once; the count and the registering write happen under the tracker's flock, so simultaneous spawns cannot all pass. Dead-pid and pid-less placeholder entries never consume a slot."
+anchors = ["src/micro_cc/utils/subagent_tracker_.py::add_tracked"]
+assumptions = ["All registrations of one boss go through the same tracked_subagents.lock on one host."]
+questions = ["Walk 6 processes registering at once with cap 2: exactly 2 succeed."]
+scenarios = ["subagent-lifecycle"]
+
+[[contract]]
+id = "subagent-sigterm-leaves-clean-state"
+statement = "The first SIGTERM/SIGINT to a CLI headless run stops it gracefully: in-flight and backgrounded bash_ process groups are killed, pending tasks are cancelled (bounded), and the transcript ends valid (no unanswered tool_use) with STATUS: FAILED naming what was running; a second signal exits immediately."
+anchors = ["src/micro_cc/start_headless_.py::run_headless", "src/micro_cc/start_headless_.py::_finalize_killed", "src/micro_cc/start_headless_.py::_run_cli"]
+assumptions = [
+  "claude_loop swallows CancelledError and ends with a done event; run_headless learns about the kill from kill_state, not from the exception.",
+  "claude_loop flushes the assistant tool_use before its tools run and answers every open call when cancelled, so a mid-tool kill leaves a valid transcript; a hard kill is repaired at load.",
+]
+questions = [
+  "Walk a kill mid-bash_: shell group dead, transcript valid, summary 'while running bash_'.",
+  "Walk a kill during a model call: summary 'while waiting on the model'.",
+  "Walk a kill inside the tool_result yield window where the tool_use is already stored: tail is answered.",
+]
+scenarios = ["subagent-lifecycle"]
+
+[[contract]]
+id = "sync-tools-are-bounded"
+statement = "No sync tool can freeze the event loop or hang a turn: sync tools run on daemon threads under SYNC_TOOL_TIMEOUT, glob_/grep_ stop at their own deadline/caps with an explicit note telling the model how to get the complete answer with bash_, and read_ never opens a non-regular file. An abandoned tool thread never blocks process exit."
+anchors = ["src/micro_cc/execute_tool.py::execute_tool_call", "src/micro_cc/tools/file_tools_.py::glob_", "src/micro_cc/tools/file_tools_.py::grep_", "src/micro_cc/tools/file_tools_.py::read_"]
+assumptions = ["Sync tools don't depend on running on the event loop thread (verified: no loop calls in tools/*; browser_ is async)."]
+questions = [
+  "Walk a zero-match glob over a huge tree: the deadline still fires (per-directory check).",
+  "Walk a symlink cycle under **: terminates.",
+]
+scenarios = ["subagent-lifecycle"]
+
+[[contract]]
+id = "repair-keeps-disk-alignment"
+statement = "Load-time repair of an unanswered tool_use never shifts the positions of messages already on disk, so the append high-water mark (local _persisted_len, Postgres COUNT) stays correct and reloading never duplicates messages."
+anchors = ["src/micro_cc/utils/msg_normalize_.py::repair_dangling_tool_use"]
+assumptions = ["store_msgs appends msgs[known:] where known is the pre-repair on-disk count."]
+questions = ["Walk three reload+store cycles of a mid-history dangling tool_use: line count unchanged."]
+scenarios = ["subagent-lifecycle"]
+
+[[link]]
+from = "src/micro_cc/tools/monitor_.py::_activity"
+to = "src/micro_cc/start_headless_.py::_write_activity"
+kind = "reads-state-written-by"
+why = "monitor_ check's activity line reads activity.json written by the subagent process; the transcript can't show an in-flight tool."
+
+[[link]]
+from = "src/micro_cc/start_live_tui_.py::MicroTui._poll_subagents_tick"
+to = "src/micro_cc/start_headless_.py::_finalize_killed"
+kind = "parses-output-of"
+why = "The poller turns the STATUS: FAILED line a killed run writes into the boss's checkpoint wakeup."
+
+[[scenario]]
+id = "subagent-lifecycle"
+command = ["{python}", "tests/test_subagent_lifecycle.py"]
+timeout = 180
+inputs = ["tests/test_subagent_lifecycle.py"]
+scope = "Real processes (detached spawn parent/child, 6 concurrent registrants, SIGTERM), real bash_ process groups, real file tools on temp trees, real msg_store on a temp HOME. The model is a local fake chat-completions SSE server; all provider keys pinned empty so no real credentials or network are used."
+
+# --- use_tool_ dispatcher ----------------------------------------------------
+# Discovered tools no longer enter the API `tools` array; see notes/use-tool-dispatcher-plan.md.
+
+[[contract]]
+id = "tools-array-is-stable-across-add-and-restart"
+statement = "The API tools array sent to the model is byte-identical across a search_tools add, across a fresh claude_loop call (restart) and across model turns; a discovered tool's schema reaches the model only as text in a tool result. A use_tool_ call dispatches, gates (approval/ask_user/batching) and renders on its INNER name, is validated against the catalog schema, and bad args yield an is_error result carrying that schema. The transcript stores the literal use_tool_ block."
+anchors = ["src/micro_cc/claude_loop_.py::claude_loop", "src/micro_cc/tools/search_tool_.py::search_tools", "src/micro_cc/tools/use_tool_.py::resolve_call"]
+assumptions = [
+  "Catalog tools need no prior add. MCP servers a transcript added are found from the search_tools add calls still present in the trimmed transcript, not from process state, so they re-resolve after a restart.",
+  "mcp_routing starts empty each claude_loop call and is rebuilt lazily from the transcript's adds; MCP resolution is client-side only.",
+]
+questions = [
+  "Walk add then use_tool_ then a fresh claude_loop call: tools array bytes identical at every model call.",
+  "Walk a use_tool_ call to a catalog tool that was never added: valid args run it, invalid args return an is_error result with the schema.",
+  "Walk a stored use_tool_ block through normalize/reconstruct and the TUI/webui history renderers: literal in storage, inner name on screen.",
+]
+scenarios = ["use-tool-dispatcher"]
+
+[[scenario]]
+id = "use-tool-dispatcher"
+command = ["{python}", "tests/test_use_tool_dispatcher.py"]
+timeout = 60
+inputs = ["tests/test_use_tool_dispatcher.py"]
+scope = "Real claude_loop, search_tools, resolve_call, OAuth stealth rename and history renderers. The model is a scripted fake; MCP resolution/calls, checkpoint/memory/token-stats storage and the weather catalog tool are mocked. No network, no credentials, no real ~/.micro-cc writes."
+
+# --- write-ahead tool calls ---------------------------------------------------
+# See notes/durability-plan.md, stage 0.
+
+[[contract]]
+id = "tool-use-is-flushed-before-tools-run"
+statement = "The assistant tool_use message is appended and flushed before any tool of the turn runs. However the turn ends (denial, question cancel, task cancel, generator close, exception) every tool_use gets a tool_result: finished tools keep their real result, a started one is marked interrupted, an unstarted one is marked not run. One failing tool in a parallel batch does not discard its siblings' results."
+anchors = ["src/micro_cc/claude_loop_.py::claude_loop", "src/micro_cc/claude_loop_.py::_unanswered_results"]
+assumptions = [
+  "A hard kill still leaves a dangling tool_use on disk; repair_dangling_tool_use answers it at load.",
+  "store_msgs is append-only by position and an appended message is never mutated, so the early append and the later results message do not disturb _persisted_len, the Postgres COUNT insert or checkpoint as_of_index.",
+]
+questions = [
+  "Walk cancel during a serial run of three mutating tools: first result kept, second interrupted, third not run, transcript valid.",
+  "Walk aclose() at the first tool_call event (webui stop): GeneratorExit runs the finally and the results are flushed without yielding.",
+]
+scenarios = ["write-ahead-tool-calls"]
+
+[[scenario]]
+id = "write-ahead-tool-calls"
+command = ["{python}", "tests/test_write_ahead.py"]
+timeout = 60
+inputs = ["tests/test_write_ahead.py", "tests/test_use_tool_dispatcher.py"]
+scope = "Real claude_loop and search_tools with fake catalog tools (quick, boom, hang). The model is scripted and store_msgs is recorded, so nothing touches ~/.micro-cc. No network, no credentials."

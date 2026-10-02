@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "micro-cc"
+version = "0.2.101"
+description = "Harness that gives frontier models full system access — shell, filesystem, browser, MCP — running directly on the metal."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {file = "LICENSE"}
+authors = [{name = "George Salapa"}]
+classifiers = ["License :: OSI Approved :: MIT License"]
+
+[project.urls]
+Homepage = "https://github.com/GSequist/micro-cc"
+Issues = "https://github.com/GSequist/micro-cc/issues"
+
+dependencies = [
+    "anthropic>=0.125.0",
+    "anyio>=4.0",
+    "beautifulsoup4>=4.14",
+    "fastapi>=0.135",
+    "google-search-results>=2.4",
+    "httpx>=0.28",
+    "httpx-sse>=0.4",
+    "jsonschema>=4.0",
+    "lxml>=6.0",
+    "mammoth>=1.11",
+    "markdown-it-py>=4.0",
+    "markdownify>=1.2",
+    "mcp>=1.26",
+    "numpy>=2.4",
+    "openai>=2.16",
+    "paper-docx>=0.2.1",
+    "paper-pptx>=0.2.1",
+    "paper-xlsx>=0.2.2",
+    "pathvalidate>=3.3",
+    "pdfminer.six>=20260107",
+    "pillow>=12.0",
+    "playwright>=1.58",
+    "prompt_toolkit>=3.0",
+    "puremagic>=1.30",
+    "PyAutoGUI>=0.9",
+    "pydantic>=2.12",
+    "pydantic-settings>=2.13",
+    "pyperclip>=1.9",
+    "python-dotenv>=1.2",
+    "requests>=2.32",
+    "rich>=14.0",
+    "uvicorn>=0.42",
+    "xlsxwriter>=3.2",
+    "youtube-transcript-api>=1.2",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2"]
+
+[project.scripts]
+# The interactive entry point goes through the supervisor (self_heal_.main),
+# not start_live_tui_ directly: the harness is plain source the model can edit,
+# so a bad self-edit can stop the app booting — and the only process that could
+# report that is the one that won't start. self_heal_ catches a boot failure,
+# reinstalls the published wheel over the broken tree and retries, bounded.
+# headless stays direct — it's a one-shot run, not a long-lived UI to supervise.
+microcc = "micro_cc.self_heal_:main"
+microcc-headless = "micro_cc.start_headless_:start_headless_"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["*pyarmor_runtime*", "build_obf*"]
+
+[tool.setuptools.package-data]
+"micro_cc.skills" = ["**/*.md", "**/scripts/*", "**/canvas-fonts/*"]
+# Built by `npm run build` in frontend/ (see publish.sh) — the wheel ships the
+# compiled GUI, never the TSX sources, so installing needs no node.
+"micro_cc.webui" = ["dist/index.html", "dist/assets/*"]
