@@ -93,11 +93,8 @@ jobs:
 
   windows-autoinstall:
     # no distro on the runner: install.ps1 must set WSL up itself, then micro-cc
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
-    runs-on: ${{ matrix.os }}
+    # windows-2022 has no WSL kernel (wsl --install fails with 0x8000ffff); 2025 is the closest runner to a real PC
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
       - name: diagnostics

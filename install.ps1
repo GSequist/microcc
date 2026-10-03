@@ -28,6 +28,7 @@ function Install-Wsl {
     if ($admin) { wsl --install -d Ubuntu --no-launch | Out-Host; $code = $LASTEXITCODE }
     else { $code = (Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList "-NoProfile", "-Command", "wsl --install -d Ubuntu --no-launch").ExitCode }
     Write-Host "wsl --install exited with code $code"
+    $script:installCode = $code
     return $true
 }
 
@@ -49,7 +50,11 @@ if (-not $distro) {
         exit 1
     }
     if (-not (Initialize-Ubuntu)) {
-        Write-Host "WSL is installed but needs a reboot to finish. Restart Windows, then run this command again."
+        if ($script:installCode -ne 0) {
+            Write-Host "WSL setup failed (code $($script:installCode)). Update Windows, make sure virtualization is on in the BIOS, or see https://aka.ms/wsl, then run this again."
+        } else {
+            Write-Host "WSL is installed but needs a reboot to finish. Restart Windows, then run this command again."
+        }
         exit 1
     }
     $distro = "Ubuntu"
