@@ -87,3 +87,4 @@ jobs:
           Write-Host $out
           if ($code -eq 0) { throw "expected non-zero exit; out=$out" }
           if ($out -notmatch "WSL") { throw "expected WSL guidance; code=$code out=$out" }
+          $global:LASTEXITCODE = 0
