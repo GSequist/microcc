@@ -81,10 +81,32 @@ jobs:
       - uses: actions/checkout@v4
       - name: install.ps1 must refuse cleanly
         shell: pwsh
+        env:
+          MICROCC_WSL_INSTALL: "0"
         run: |
           $out = (pwsh -NoProfile -File ./install.ps1 2>&1 | Out-String)
           $code = $LASTEXITCODE
           Write-Host $out
           if ($code -eq 0) { throw "expected non-zero exit; out=$out" }
           if ($out -notmatch "WSL") { throw "expected WSL guidance; code=$code out=$out" }
+          $global:LASTEXITCODE = 0
+
+  windows-autoinstall:
+    # no distro on the runner: install.ps1 must set WSL up itself, then micro-cc
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.ps1 sets up WSL and micro-cc
+        shell: pwsh
+        env:
+          MICROCC_WSL_INSTALL: "1"
+        run: |
+          ./install.ps1
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "install.ps1 exited $code" }
+      - name: verify inside WSL
+        shell: pwsh
+        run: |
+          wsl -d Ubuntu -e sh -c 'export PATH=$HOME/.local/bin:$PATH; command -v microcc'
+          if ($LASTEXITCODE -ne 0) { throw "microcc not found in WSL" }
           $global:LASTEXITCODE = 0
