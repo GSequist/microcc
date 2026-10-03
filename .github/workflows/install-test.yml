@@ -1,0 +1,88 @@
+name: install-test
+
+on:
+  push:
+    paths: [install.sh, install.ps1, pyproject.toml, .github/workflows/install-test.yml]
+  schedule:
+    - cron: "17 5 * * *"   # nightly: catches astral.sh / PyPI drift
+  workflow_dispatch:
+
+env:
+  RAW: https://raw.githubusercontent.com/GSequist/micro-cc/main
+
+jobs:
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # scrubbed env: no brew, no uv, no user python on PATH, fresh HOME
+      - name: install (clean env)
+        run: |
+          H="$(mktemp -d)"
+          if [ "${{ github.event_name }}" = schedule ]; then
+            env -i HOME="$H" PATH=/usr/bin:/bin:/usr/sbin:/sbin sh -c "curl -fsSL $RAW/install.sh | sh"
+          else
+            env -i HOME="$H" PATH=/usr/bin:/bin:/usr/sbin:/sbin sh ./install.sh
+          fi
+          echo "H=$H" >> "$GITHUB_ENV"
+      - name: verify
+        run: |
+          export PATH="$H/.local/bin:/usr/bin:/bin"
+          command -v microcc
+          "$(HOME=$H uv tool dir)/micro-cc/bin/python" -c "import micro_cc, sys; print(sys.version)"
+
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "ubuntu:22.04", "debian:12-slim", "fedora:41", "alpine:3.20"]
+    container: ${{ matrix.image }}
+    steps:
+      # bare images ship without curl; install it the way a fresh WSL distro user would
+      - name: curl + ca-certs
+        run: |
+          if command -v apt-get >/dev/null; then apt-get update && apt-get install -y curl ca-certificates
+          elif command -v dnf >/dev/null; then dnf install -y curl
+          else apk add --no-cache curl ca-certificates bash; fi
+      - name: install via real URL
+        run: curl -fsSL $RAW/install.sh | sh
+      - name: verify
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v microcc
+          "$(uv tool dir)/micro-cc/bin/python" -c "import micro_cc"
+
+  windows-wsl:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Vampire/setup-wsl@v5
+        with:
+          distribution: Ubuntu-24.04
+      - name: run install.ps1
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "schedule") { irm "$env:RAW/install.ps1" | iex } else { ./install.ps1 }
+      - name: verify inside WSL
+        shell: wsl-bash {0}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v microcc
+
+  windows-no-wsl:
+    # runner has wsl.exe but no distro: the script must fail loudly with guidance
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.ps1 must refuse cleanly
+        shell: pwsh
+        run: |
+          $out = & ./install.ps1 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -eq 0) { throw "expected non-zero exit" }
+          if ($out -notmatch "WSL") { throw "expected WSL guidance" }
