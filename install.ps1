@@ -12,7 +12,7 @@ function Get-Distro {
     foreach ($n in $names) {
         $n = "$n".Trim()
         if (-not $n -or $n -match '^docker-desktop') { continue }
-        wsl -d $n -e true 2>$null
+        wsl -d $n -e true 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) { return $n }
     }
     return $null
@@ -25,19 +25,20 @@ function Install-Wsl {
         if ($a -notmatch '^[yY]') { return $false }
     }
     $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if ($admin) { wsl --install -d Ubuntu --no-launch }
-    else { Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile", "-Command", "wsl --install -d Ubuntu --no-launch" }
+    if ($admin) { wsl --install -d Ubuntu --no-launch | Out-Host; $code = $LASTEXITCODE }
+    else { $code = (Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList "-NoProfile", "-Command", "wsl --install -d Ubuntu --no-launch").ExitCode }
+    Write-Host "wsl --install exited with code $code"
     return $true
 }
 
 # A fresh Ubuntu would stop to ask for a username on first launch; create one and make it the default.
 function Initialize-Ubuntu {
-    wsl -d Ubuntu -u root -e true 2>$null
+    wsl -d Ubuntu -u root -e true 2>$null | Out-Host
     if ($LASTEXITCODE -ne 0) { return $false }
     $u = ($env:USERNAME.ToLower() -replace '[^a-z0-9_]', '')
     if (-not $u) { $u = "user" } elseif ($u -match '^\d') { $u = "u$u" }
-    wsl -d Ubuntu -u root -e sh -c "id -u $u >/dev/null 2>&1 || useradd -m -s /bin/bash $u; printf '[user]\ndefault=$u\n' > /etc/wsl.conf"
-    wsl --terminate Ubuntu
+    wsl -d Ubuntu -u root -e sh -c "id -u $u >/dev/null 2>&1 || useradd -m -s /bin/bash $u; printf '[user]\ndefault=$u\n' > /etc/wsl.conf" | Out-Host
+    wsl --terminate Ubuntu | Out-Host
     return $true
 }
 

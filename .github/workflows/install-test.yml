@@ -93,9 +93,21 @@ jobs:
 
   windows-autoinstall:
     # no distro on the runner: install.ps1 must set WSL up itself, then micro-cc
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: diagnostics
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          (Get-CimInstance Win32_OperatingSystem).Caption
+          wsl --status | Out-Host
+          wsl --list --online | Out-Host
+          $global:LASTEXITCODE = 0
       - name: install.ps1 sets up WSL and micro-cc
         shell: pwsh
         env:
