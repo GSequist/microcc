@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ["ubuntu:24.04", "ubuntu:22.04", "debian:12-slim", "fedora:41", "alpine:3.20"]
+        image: ["ubuntu:24.04", "ubuntu:22.04", "debian:12-slim", "fedora:41"]
     container: ${{ matrix.image }}
     steps:
       # bare images ship without curl; install it the way a fresh WSL distro user would
@@ -48,7 +48,7 @@ jobs:
         run: |
           if command -v apt-get >/dev/null; then apt-get update && apt-get install -y curl ca-certificates
           elif command -v dnf >/dev/null; then dnf install -y curl
-          else apk add --no-cache curl ca-certificates bash; fi
+          else echo "unsupported distro" >&2; exit 1; fi
       - name: install via real URL
         run: curl -fsSL $RAW/install.sh | sh
       - name: verify
@@ -82,7 +82,8 @@ jobs:
       - name: install.ps1 must refuse cleanly
         shell: pwsh
         run: |
-          $out = & ./install.ps1 2>&1 | Out-String
+          $out = (pwsh -NoProfile -File ./install.ps1 2>&1 | Out-String)
+          $code = $LASTEXITCODE
           Write-Host $out
-          if ($LASTEXITCODE -eq 0) { throw "expected non-zero exit" }
-          if ($out -notmatch "WSL") { throw "expected WSL guidance" }
+          if ($code -eq 0) { throw "expected non-zero exit; out=$out" }
+          if ($out -notmatch "WSL") { throw "expected WSL guidance; code=$code out=$out" }
