@@ -19,10 +19,10 @@ A terminal harness that gives frontier models full system access: shell, filesys
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GSequist/micro-cc/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/GSequist/microcc/main/install.sh | sh
 ```
 
-macOS, Linux and WSL (Windows: `irm https://raw.githubusercontent.com/GSequist/micro-cc/main/install.ps1 | iex`, which installs inside WSL). Or `pip install micro-cc`.
+macOS, Linux and WSL (Windows: `irm https://raw.githubusercontent.com/GSequist/microcc/main/install.ps1 | iex`, which installs inside WSL). Or `pip install micro-cc`.
 
 ## Use
 

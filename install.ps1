@@ -1,6 +1,6 @@
 # micro-cc's bash_ tool needs a POSIX shell, so on Windows this installs inside WSL, setting WSL up first if needed.
 # MICROCC_WSL_INSTALL=1 sets WSL up without asking, =0 never does.
-$Raw = "https://raw.githubusercontent.com/GSequist/micro-cc/main/install.sh"
+$Raw = "https://raw.githubusercontent.com/GSequist/microcc/main/install.sh"
 
 # First usable non-Docker distro, or $null. wsl.exe prints UTF-16, hence the encoding swap.
 function Get-Distro {

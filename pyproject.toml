@@ -13,8 +13,8 @@ authors = [{name = "George Salapa"}]
 classifiers = ["License :: OSI Approved :: MIT License"]
 
 [project.urls]
-Homepage = "https://github.com/GSequist/micro-cc"
-Issues = "https://github.com/GSequist/micro-cc/issues"
+Homepage = "https://github.com/GSequist/microcc"
+Issues = "https://github.com/GSequist/microcc/issues"
 
 dependencies = [
     "anthropic>=0.125.0",

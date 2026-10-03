@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  RAW: https://raw.githubusercontent.com/GSequist/micro-cc/main
+  RAW: https://raw.githubusercontent.com/GSequist/microcc/main
 
 jobs:
   mac:
