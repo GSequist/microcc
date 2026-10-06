@@ -22,7 +22,13 @@ A terminal harness that gives frontier models full system access: shell, filesys
 curl -fsSL https://raw.githubusercontent.com/GSequist/microcc/main/install.sh | sh
 ```
 
-macOS, Linux and WSL (Windows: `irm https://raw.githubusercontent.com/GSequist/microcc/main/install.ps1 | iex`, which installs inside WSL). Or `pip install micro-cc`.
+macOS, Linux and WSL. On Windows, run this in PowerShell (it installs inside WSL):
+
+```powershell
+irm https://raw.githubusercontent.com/GSequist/microcc/main/install.ps1 | iex
+```
+
+Or `pip install micro-cc`.
 
 ## Use
 
@@ -34,4 +40,4 @@ Type `/login` on first run, `/` for commands. `microcc-headless` runs a single p
 
 ## License
 
-MIT. Third-party attributions in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT. Third-party attributions in [THIRD_PARTY_NOTICES.md](https://github.com/GSequist/microcc/blob/main/THIRD_PARTY_NOTICES.md).
