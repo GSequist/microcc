@@ -514,7 +514,7 @@ async def l_model_call(
     # anthropic.py's header path is — cheap to include, and matches this
     # same extra_body pass-through the thinking/output_config fields above
     # already rely on to reach Bedrock through the proxy.
-    betas = anthropic_beta_headers(alias)
+    betas = anthropic_beta_headers(alias, server_fallback=False)
     if betas:
         api_params.setdefault("extra_body", {})["anthropic_beta"] = betas
 

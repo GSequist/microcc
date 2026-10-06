@@ -1,11 +1,4 @@
-"""Native-renderer sibling of screen_cmds_.py — same SLASH_COMMANDS/
-PREFIX_COMMANDS shape, same command names, same underlying behavior.
-screen_cmds_.py itself is untouched and still backs the old Textual
-start_live_.py path. See start_live_tui_.py's translation-table comment
-block for the touchpoint mapping every function below follows:
-query_one("#x") -> app.x, picker.display=True -> app._open_picker(...),
-picker.add_option(...) -> picker.set_items([PickerItem(...), ...]).
-"""
+"""Native-renderer command handlers (same commands as screen_cmds_.py)."""
 
 import os
 import signal
@@ -25,37 +18,19 @@ from micro_cc.utils.tokenization_simple import erase_token_stats
 from micro_cc.utils.helpers import has_configured_endpoint
 from micro_cc.utils import hidden_prompts, command_registry, settings_store_
 from micro_cc.tui_native.list_picker_ import PickerItem
+from micro_cc.tui_native.glyphs_ import glyph
 from micro_cc.tui_native.detect_images_ import delete_all_kitty_images
 import sys
 
 
 async def cmd_clear(app):
-    # Finalize any in-flight streaming row BEFORE wiping message_list, not
-    # after — this used to run last, which meant an active stream (should
-    # be impossible: slash commands are gated off while _input_mode ==
-    # "query_active", see the terminal-input handler) would get its
-    # finalized row re-added to message_list right after this function had
-    # just emptied it, leaving one stray row behind instead of a genuinely
-    # clean slate. Ordering it first makes "erase everything" actually
-    # mean everything regardless of that gate ever having a gap.
+    # Finalize streaming row BEFORE clearing message_list to prevent stray row re-addition.
     app._finalize_streaming()
     app.message_list.clear()
     app._msg_rows = []
 
-    # /clear only erases THIS project's own conversation — it must not
-    # touch tracked_subagents.json or _tracked_subagents: a subagent is a
-    # separate OS process that may genuinely still be running (or paused
-    # waiting on an answer) regardless of what boss's own transcript says.
-    # Dropping the tracker here would stop boss from ever being woken for
-    # that process's checkpoint — clearing the chat log shouldn't silently
-    # orphan a live background process. So this only resets UI-view state
-    # that's unambiguously about display, not tracking:
-    #   - the message area may still be swapped to a subagent's own
-    #     transcript (enter_subagent_view) instead of boss's — hop back to
-    #     boss's (about to be empty) view rather than leaving you stranded
-    #     looking at someone else's conversation
-    #   - the prompt slot may still be swapped to the bgproc detail picker
-    #     (ctrl+b) — a stale peek at a process list from before the clear
+    # /clear erases chat but not tracked_subagents (separate OS processes may still be running).
+    # Reset UI view state only to avoid orphaning live processes.
     if app._subagent_viewing_target is not None:
         app._subagent_viewing_target = None
         app.root.replace(app.subagent_scroll_view, app.messages_scroll)
@@ -72,11 +47,7 @@ async def cmd_clear(app):
         ss_dir = os.path.join(app._project_dir, ss_folder)
         if os.path.isdir(ss_dir):
             shutil.rmtree(ss_dir)
-    # Kitty images are a compositing layer separate from the text grid —
-    # wiping message_list's MessageRow objects (above) drops this app's own
-    # record of them, but the actual pixels Kitty is still compositing on
-    # screen don't go anywhere on their own. Without this, /clear leaves
-    # any rendered image visually stuck on screen forever.
+    # Kitty images are composited separately; must be cleared explicitly to avoid orphaned pixels.
     sys.stdout.write(delete_all_kitty_images())
     sys.stdout.flush()
     erase_token_stats(app._project_dir)
@@ -90,10 +61,7 @@ async def cmd_model(app):
 
 
 async def cmd_theme(app):
-    """Open the theme picker. The actual switch happens in
-    app._on_theme_picked -> theme_store_.set_preset, which persists the new
-    color set and fires the on_change listeners that repaint the ground and
-    invalidate the render caches."""
+    """Open the theme picker."""
     app._open_picker(app.theme_picker, "_theme_picker_overlay")
     app.prompt.clear()
 
@@ -103,16 +71,16 @@ async def cmd_copy(app):
     for msg in app._msg_rows:
         t = msg["type"]
         if t == "user":
-            lines.append(f"› {msg['content']}")
+            lines.append(f"{glyph('user_prompt')} {msg['content']}")
         elif t == "text":
             lines.append(msg["content"])
         elif t == "thinking":
             lines.append(f"[thinking] {msg['content']}")
         elif t == "tool_call":
             result = msg.get("result") or "⋯"
-            lines.append(f"⟐ {msg['name']} → {result}")
+            lines.append(f"{glyph('tool')} {msg['name']} → {result}")
         elif t == "error":
-            lines.append(f"△ {msg['content']}")
+            lines.append(f"{glyph('error')} {msg['content']}")
     if app._streaming is not None:
         content = app._streaming.get_content()
         if content.strip():
@@ -133,9 +101,7 @@ SUBAGENT_CAP_CHOICES = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16)
 
 
 async def cmd_subagents(app):
-    """Pick the concurrent-subagent cap (settings "max_subagents"). Enforced
-    when a subagent registers (subagent_tracker_.add_tracked); a spawn over
-    the cap is refused straight back to the boss's bash_ call."""
+    """Pick the concurrent-subagent cap (settings "max_subagents")."""
     current = settings_store_.max_subagents()
     choices = sorted(set(SUBAGENT_CAP_CHOICES) | {current})
     default = settings_store_.DEFAULT_MAX_SUBAGENTS
@@ -151,12 +117,10 @@ async def cmd_subagents(app):
 async def cmd_rewind(app):
     msgs = load_msgs(app._project_dir)
     options = app.get_rewind_options(msgs)
-    # id carries the JSONL index — the handler rewinds on that, never on
-    # the label, so two turns starting with the same words stay distinct.
+    # id carries JSONL index so duplicate-label turns stay distinct.
     app.rewind_picker.set_items([
         PickerItem(str(idx), f"{n:>3}. {label}") for n, (idx, label) in enumerate(options, 1)
     ])
-    # Newest turn is the one you usually want back; land the cursor there.
     if options:
         app.rewind_picker.selected_index = len(options) - 1
     app._open_picker(app.rewind_picker, "_rewind_picker_overlay")
@@ -185,20 +149,13 @@ async def cmd_update(app):
 
 
 def _pink() -> str:
-    """The accent color, read live from the active theme set (see
-    theme_store_) — a function rather than a constant so a /theme switch
-    isn't frozen at import time."""
+    """Get accent color from active theme (function so /theme switch takes effect)."""
     from micro_cc.utils import theme_store_
     return theme_store_.get("accent")
 
 
 async def _run_update(app):
-    """Native touchpoints only — see self_update_.run_update for the
-    Textual original this mirrors (app.query_one/app.notify/app._driver).
-    Kitty-keyboard-protocol-push cleanup before os.execv is a real
-    terminal_.py concern (ProcessTerminal negotiates that push) — not
-    wired in here yet since nothing currently drives a ProcessTerminal
-    for the whole app lifetime (Phase 5)."""
+    """Install update and re-exec with fresh module imports."""
     import asyncio
     import sys
     from importlib.metadata import version as _pkg_version
@@ -254,48 +211,20 @@ async def _run_update(app):
     app.request_render()
     await asyncio.sleep(0.8)
 
-    # See self_reload_.exec_relaunch's comment: re-exec via `-m` with the
-    # explicit module name, not sys.argv[0] verbatim — argv[0] is a
-    # pre-reinstall snapshot (console-script shim path, or a `python -m
-    # ...`-resolved absolute file path) and blindly re-running it can
-    # reload the pre-update copy instead of forcing the fresh sys.path
-    # lookup that actually picks up what pip just installed. Shared with the
-    # TUI's own restart-on-self-change path so both land on the same entry
-    # (the supervisor, which still guards this relaunch against a bad boot).
-    #
-    # No stop() here — the interpreter is being replaced wholesale and the
-    # terminal is reset by execv's fresh process; _run_update has always
-    # relaunched this way.
+    # Re-exec via `-m` to force fresh sys.path lookup; sys.argv[0] may be pre-update snapshot.
     from micro_cc.utils.self_reload_ import exec_relaunch
 
     exec_relaunch()
 
 
 async def cmd_reload(app):
-    """Restart the process to pick up changes to the harness's own source.
-
-    Distinct from /update: /update installs a newer published wheel from PyPI
-    and OVERWRITES any local edits, this re-execs the SAME install so a local
-    edit (made by the model, or by the user) actually takes effect. The
-    running process executes the code objects it imported at startup, so an
-    edited claude_loop_.py or tool body is invisible until a fresh process
-    imports it again — true on ANY install (dev checkout, pyenv/brew/pipx/uv,
-    site-packages under WSL2), which is why there is no longer an install-kind
-    gate here: the harness edits its own package dir wherever that lives.
-
-    Explicit on purpose: the auto-detect poll (see start_live_tui_'s
-    _poll_self_change_tick) already restarts at the next idle when it notices a
-    change, but a user who just edited something wants a way to force it now
-    rather than waiting for a turn boundary. _restart_self handles the teardown
-    and stashes the unsent prompt, so nothing in the input is lost.
-    """
+    """Re-exec to pick up source edits; /update installs from PyPI instead."""
+    # Separate from auto-reload to force restart now rather than waiting for next idle.
     app.prompt.clear()
     if app._input_mode != "idle":
         app._flash_status("⏳ busy — esc first", seconds=3)
         return
-    # Reuse the exact gate check the auto-reload uses, so an explicit /reload
-    # never restarts out from under a live subagent or the /gui server, and
-    # says which one is holding it instead of silently doing nothing.
+    # Use same blocker check as auto-reload to avoid restarting under live subagents or GUI.
     blocker = app._self_reload_blocker()
     if blocker:
         app._flash_status(f"↻ can't reload — {blocker} active", seconds=4)
@@ -463,7 +392,7 @@ async def cmd_gui(app):
 
 
 def stop_gui(app):
-    """Tear the server down and give the terminal back. Safe to call twice."""
+    """Tear down GUI server; safe to call twice."""
     shutdown = getattr(app, "_gui_shutdown", None)
     if shutdown is None:
         return False

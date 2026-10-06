@@ -1,16 +1,4 @@
-"""Native-renderer sibling of etype_handler_.py — same ETYPES dispatch
-table, same 10 event types, same state transitions. Nothing about WHEN
-something gets stored/mounted/finalized changes here, only which line
-touches a widget. etype_handler_.py itself is untouched and still
-backs the old Textual start_live_.py path.
-
-`container` (passed in from MicroTui.do_query) is a tui_native.stack_.
-VStack, not a Textual widget — every `await container.mount(row)` became
-`container.add(row)` (sync, no await), and every `app.query_one(...)`
-became a plain attribute on MicroTui (app.prompt, app.set_focus(...)).
-See start_live_tui_.py's translation table comment block for the full
-touchpoint list this mirrors.
-"""
+"""Native-renderer event type handlers; same event types and state transitions."""
 
 import asyncio
 
@@ -73,13 +61,7 @@ async def handle_tool_result(app, event, container, tool_call_rows, approval_row
         app._scroll_to_bottom()
 
 
-# Reveal cadence for text/thinking deltas — same trick as webui/bridge.py's
-# reveal(): pace the OUTPUT inline with a sleep between slices, rather than
-# buffering and draining on a separate timer. Because this coroutine is what
-# the `async for event in claude_loop(...)` loop in do_query awaits, pulling
-# the next event off claude_loop is itself held back until the current
-# delta finishes trickling out — the pacing throttles the source, so there's
-# never a backlog to burst-flush later (see StreamingRow's docstring).
+# Pace text/thinking deltas with sleep between slices; throttles source to prevent backlog.
 _FRAME = 0.012
 _CHARS_PER_TICK = 6
 
@@ -177,20 +159,13 @@ async def handle_question_asked(app, event, container, tool_call_rows, approval_
 
     answered["answered"] = app._pending_result
     app._pending_input = None
-    # Reset _input_mode BEFORE _hide_ask_ui: the bars' repaint paths
-    # (_static_hint_text / _update_status_bar) no-op while the mode is
-    # "question_asked", so restoring them is only unblocked once the mode has
-    # left that state. Doing it after would leave both bars blank for the rest
-    # of the turn.
+    # Reset _input_mode BEFORE _hide_ask_ui to unblock bar repainting.
     app._input_mode = "query_active"
     app._hide_ask_ui()
 
 
 async def handle_cache_invalidate(app, event, container, tool_call_rows, approval_rows):
-    """Flash a short, honest reason — never a guess beyond what's actually
-    observable (see detect_cache_miss's docstring): a model switch, an idle
-    gap past Anthropic's TTL, or, absent either, a bare "cache miss" rather
-    than a fabricated cause."""
+    """Flash cache miss reason: model switch, idle gap, or bare cache miss."""
     if event.get("model_changed"):
         reason = "model switch"
     elif event.get("changed_segments"):
@@ -202,8 +177,7 @@ async def handle_cache_invalidate(app, event, container, tool_call_rows, approva
 
     tokens = f"{event.get('missed_tokens', 0):,}"
     label = f"cache miss ({reason})" if reason else "cache miss"
-    # TextLine's markup vocabulary is [red] and [#rrggbb] hex only — no
-    # [yellow] — so this uses the theme's error token directly.
+    # TextLine markup only supports [red] and [#rrggbb], so use theme's error token.
     app._flash_status(f"[{theme_store_.get('error')}]⚠ {label}: {tokens} tokens re-billed[/{theme_store_.get('error')}]", seconds=5)
 
 

@@ -40,12 +40,7 @@ class CellPixels(NamedTuple):
 
 
 def get_cell_dimensions() -> CellPixels:
-    """Terminal cell size in pixels, needed to convert an image's pixel
-    dimensions into a column/row count. TIOCGWINSZ (same ioctl SIGWINCH
-    resize handling already reads for rows/cols — see terminal_.py) also
-    reports the window size in pixels on most terminals; a few report 0
-    for the pixel fields, so fall back to a plausible default rather than
-    dividing by zero."""
+    """Get terminal cell size in pixels; fall back to common default if unavailable."""
     try:
         rows, cols, xpixels, ypixels = struct.unpack(
             "HHHH", fcntl.ioctl(1, termios.TIOCGWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
@@ -70,34 +65,14 @@ _next_image_id = 0
 
 
 def allocate_image_id() -> int:
-    """Kitty needs a small unique integer per transmitted image (the `i=`
-    param) to reference it in later placement/delete commands. A plain
-    incrementing counter is enough for v1 — nothing here reuses ids
-    across rows or re-transmits without a fresh id."""
+    """Allocate unique image ID for Kitty graphics protocol."""
     global _next_image_id
     _next_image_id += 1
     return _next_image_id
 
 
 def encode_kitty(base64_data: str, columns: int, rows: int, image_id: int) -> str:
-    """f=100 (real PNG file bytes) encodes the image in compressed format,
-    which is more efficient than f=32 (raw RGBA) that would need s=/v=
-    parameters and produce larger output. message_row_.Image PNG-encodes
-    via Pillow to match this encoding.
-
-    Delete-before-transmit is safe here regardless of exact `d=i` delete
-    semantics (whether it frees the underlying image data or only the
-    placement) because the full payload gets sent again immediately after.
-    No placement-reuse tricks — simply cache once per width and re-transmit
-    the entire image when resizing.
-
-    C=1 sets Kitty's cursor-movement policy after placement. Default is to
-    move the cursor itself once the image is drawn; we set moveCursor: false
-    (C=1) because do_render owns cursor placement entirely via explicit
-    positioning before every write. Two things independently moving the
-    cursor after this sequence executes desyncs every write that follows —
-    the image fills the whole screen with text scattered over it, banner
-    gone."""
+    """Encode image in Kitty graphics protocol (f=100 PNG, C=1 no cursor movement)."""
     delete = f"\x1b_Ga=d,d=i,i={image_id}\x1b\\"
     params = f"a=T,f=100,q=2,C=1,c={columns},r={rows},i={image_id}"
     if len(base64_data) <= 4096:
@@ -106,18 +81,12 @@ def encode_kitty(base64_data: str, columns: int, rows: int, image_id: int) -> st
 
 
 def delete_all_kitty_images() -> str:
-    """Delete all image placements and underlying pixel data (d=A + q=2).
-    /clear needs this: it wipes MessageRow/message_list (the text-grid data
-    model) but the images those rows placed are a separate compositing layer
-    Kitty keeps independently — without this they'd stay visually painted on
-    screen, with nothing left in this app's state to reference them anymore."""
+    """Delete all image placements and pixel data (d=A + q=2)."""
     return "\x1b_Ga=d,d=A,q=2\x1b\\"
 
 
 def _chunk_and_wrap(base64_data: str, params: str) -> str:
-    """Kitty caps a single escape sequence's payload at 4096 base64 bytes.
-    Per the protocol spec: the first chunk carries the full param set plus
-    m=1, every following chunk carries only m=1 (m=0 on the last one)."""
+    """Split large payload into 4096-byte chunks with Kitty protocol framing."""
     chunks = [base64_data[i:i + 4096] for i in range(0, len(base64_data), 4096)]
     seq = ""
     for i, chunk in enumerate(chunks):
@@ -131,25 +100,14 @@ def image_fallback(dims: ImageDimensions) -> str:
     return f"[Image: {dims.width}x{dims.height}]"
 
 
-# --- Cropping a partially-scrolled image line -----------
-# Needed because a Kitty image's escape sequence lives on only the FIRST of
-# its `r` reserved rows — the rest are blank padding so the row count lines
-# up for layout. ScrollView.get_scrolled_lines slices full_lines[top:top+viewport_height]
-# like any other text; if `top` falls strictly inside an image's row span,
-# the escape-sequence line (the only one that actually carries the placement
-# command) is excluded even though some of the image's trailing blank rows
-# are still technically in range — nothing gets sent to Kitty, the image
-# just doesn't render at all. This recomputes the placement to show only
-# the visible source rows instead of all-or-nothing.
+# --- Cropping a partially-scrolled image line ----
+# When scroll top falls inside an image's row span, recompute placement to show visible slice only.
 
 _kitty_image_metadata: dict[int, tuple[int, int]] = {}   # image_id -> (width_px, height_px)
 
 
 def register_kitty_image_metadata(image_id: int, width_px: int, height_px: int) -> None:
-    """Called from message_row_.Image.render() every time it builds a
-    placement — crop_kitty_image_line needs the SOURCE pixel dimensions
-    to compute y=/h=, and those aren't recoverable from the escape
-    sequence text itself (only c=/r=, the target CELL size, are)."""
+    """Register image pixel dimensions for crop_kitty_image_line; not in escape sequence."""
     _kitty_image_metadata[image_id] = (width_px, height_px)
     if len(_kitty_image_metadata) > 1000:
         del _kitty_image_metadata[next(iter(_kitty_image_metadata))]
@@ -163,17 +121,7 @@ def _parse_kitty_params(controls: str) -> dict[str, int]:
 
 
 def _iter_kitty_segments(line: str):
-    """Yield (start, end, controls_str) for each \\x1b_G...\\x1b\\\\ control
-    block in `line`. `end` is the index right after the closing \\x1b\\\\.
-    A payload-carrying segment (a=T's first chunk) has controls up to its
-    first ';'; a control-only segment (the a=d delete prefix every line
-    here starts with — see encode_kitty) has no ';' at all, so its
-    controls run all the way to the terminator itself. Finding just the
-    line's first ';' globally (the earlier, wrong approach) breaks on
-    exactly this shape: the delete prefix has no ';' of its own, so a
-    naive scan for the first ';' anywhere in the line lands inside the
-    NEXT segment's payload, merging two segments' controls into one
-    garbled string."""
+    """Yield (start, end, controls_str) for each Kitty graphic protocol segment."""
     i = 0
     while True:
         start = line.find("\x1b_G", i)
@@ -189,9 +137,7 @@ def _iter_kitty_segments(line: str):
 
 
 def find_kitty_image_spans(lines: list[str]) -> list[tuple[int, int]]:
-    """[(start_index, row_count), ...] for each Kitty image block in
-    `lines` — the placement segment's own r= is the row count, found by
-    walking segments (see _iter_kitty_segments) past the delete prefix."""
+    """Find image placements: [(start_index, row_count), ...] for each block."""
     spans = []
     for idx, line in enumerate(lines):
         if "\x1b_G" not in line:
@@ -205,11 +151,7 @@ def find_kitty_image_spans(lines: list[str]) -> list[tuple[int, int]]:
 
 
 def crop_kitty_image_line(line: str, hidden_rows: int, visible_rows: int) -> str:
-    """Crop image placement to visible window. hidden_rows = how many of the
-    image's own rows are above the current window's top; visible_rows =
-    how many of its rows actually fall inside the window. Rewrites the
-    placement segment's y=/h=/r= to show only that slice of source pixels,
-    leaving the delete prefix and the payload itself untouched."""
+    """Rewrite image placement y=/h=/r= to show visible slice of source pixels."""
     for start, end, controls_str in _iter_kitty_segments(line):
         params = _parse_kitty_params(controls_str)
         if "r" not in params or "i" not in params:

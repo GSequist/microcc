@@ -1,24 +1,4 @@
-"""Buffers raw stdin bytes and detects when a CSI/OSC/DCS/APC escape
-sequence is complete before handing it onward. Without this, a sequence
-that arrives split across multiple os.read() calls (e.g. an SGR mouse
-event delivered as "\x1b[<" then "35;20;5m") gets misread as garbage
-individual keystrokes instead of one event — the desync bug class this
-whole native-TUI rewrite exists to fix.
-
-Detects when escape sequences are complete before handing them onward,
-implementing a completeness-detection state machine that buffers bytes until
-a sequence is recognized as finished. The delivery mechanism is pull-based
-rather than push-based with background timers, so `feed()` and
-`complete_sequences()` each check whether
-the pending-sequence deadline has already elapsed by wall clock and flush if so.
-`feed()` treats an already-elapsed deadline as the timer firing before this
-call arrived; `complete_sequences()` performs the same check with no new input,
-which makes it safe for the read loop to poll every select() tick and still
-observe a timeout-driven flush with no bytes arriving.
-
-Inspired by designs from OpenTUI (https://github.com/sst/opentui),
-MIT License.
-"""
+"""Buffer stdin bytes and detect complete escape sequences before passing onward."""
 
 import re
 import time
@@ -36,10 +16,7 @@ _KITTY_PRINTABLE_RE = re.compile(r"^\x1b\[(\d+)(?::\d*)?(?::\d+)?u$")
 
 @dataclass(frozen=True)
 class Paste:
-    """A completed bracketed-paste block, yielded by complete_sequences()
-    alongside plain str key sequences. Kept as its own type (rather than
-    a plain str) so a consumer can tell "200 chars of pasted text" apart
-    from "200 chars of individual keystrokes" with an isinstance check."""
+    """Bracketed-paste block; distinguishable from keystrokes via isinstance."""
     text: str
 
 
@@ -54,10 +31,7 @@ def _is_complete_csi_sequence(data: str) -> str:
     if not (0x40 <= last_code <= 0x7E):
         return "incomplete"
     if payload.startswith("<"):
-        # SGR mouse sequences (ESC[<B;X;Ym) need three ; separated numeric
-        # fields before the terminal M/m — a lone trailing M/m byte is not
-        # by itself proof the sequence is done (a numeric field could still
-        # be mid-flight), so check the full shape.
+        # SGR mouse: verify full shape; lone M/m suffix isn't enough proof.
         if _CSI_MOUSE_RE.match(payload):
             return "complete"
         if last_char in ("M", "m"):
@@ -96,8 +70,7 @@ def _is_complete_sequence(data: str) -> str:  # "complete" | "incomplete" | "not
     after_esc = data[1:]
     if after_esc.startswith("["):
         if after_esc.startswith("[M"):
-            # Old-style (non-SGR) mouse reporting: ESC[M + 3 raw bytes,
-            # always exactly 6 bytes total, no terminator byte to look for.
+            # Old-style mouse: exactly 6 bytes total, no terminator.
             return "complete" if len(data) >= 6 else "incomplete"
         return _is_complete_csi_sequence(data)
     if after_esc.startswith("]"):
@@ -137,14 +110,8 @@ def _extract_complete_sequences(buffer: str) -> tuple[list[str], str]:
             status = _is_complete_sequence(candidate)
             if status == "complete":
                 if candidate == ESC * 2:
-                    # WezTerm with enable_kitty_keyboard sends the Escape
-                    # keypress as a raw ESC and the release as a full Kitty
-                    # CSI-u sequence, concatenated: "\x1b\x1b[27;...u". Left
-                    # alone, "\x1b\x1b" reads as a complete meta-key
-                    # sequence, leaving "[27;...u" to be typed as plain
-                    # text. If what follows would start a new escape
-                    # sequence, emit only the first ESC and restart from
-                    # the second.
+                    # WezTerm concatenates Escape keypress (raw ESC) with release (CSI-u).
+                    # If next char starts a new sequence, split them.
                     next_char = remaining[seq_end] if seq_end < len(remaining) else None
                     if next_char in ("[", "]", "O", "P", "_"):
                         sequences.append(ESC)
@@ -181,21 +148,13 @@ class StdinBuffer:
         self._process_str(self._decode(data))
 
     def complete_sequences(self):
-        """Drain and yield every sequence/paste completed so far. Safe to
-        call on every tick of a select() poll loop even with no new
-        input — that's what lets a timeout-only flush (a lone ESC that
-        never completes into anything, or an incomplete sequence past its
-        deadline) surface with no further feed() call."""
+        """Yield completed sequences/pastes; safe to call on every poll tick."""
         self._maybe_flush_expired()
         while self._queue:
             yield self._queue.pop(0)
 
     def flush(self) -> list[str]:
-        """Force out whatever's currently buffered, as a single chunk,
-        without running it back through the Kitty-duplicate check or
-        queueing it for complete_sequences(). For callers that want the
-        raw leftover directly (shutdown, tests) rather than through the
-        normal delivery path."""
+        """Return buffered content as-is without queueing or deduplication."""
         self._deadline = None
         if not self._buffer:
             return []
@@ -222,9 +181,7 @@ class StdinBuffer:
     def _decode(self, data: str | bytes) -> str:
         if isinstance(data, (bytes, bytearray)):
             if len(data) == 1 and data[0] > 127:
-                # High-bit-set single byte (legacy 8-bit meta encoding) ->
-                # ESC + the same char with the high bit cleared, so it
-                # parses the same as a "meta key" escape sequence.
+                # High-bit-set single byte (legacy 8-bit meta encoding) -> ESC + char.
                 return ESC + chr(data[0] - 128)
             return bytes(data).decode("utf-8", errors="replace")
         return data
@@ -245,10 +202,7 @@ class StdinBuffer:
         start_index = self._buffer.find(BRACKETED_PASTE_START)
         if start_index != -1:
             if start_index > 0:
-                # Any incomplete escape sequence directly abutting the
-                # paste marker is dropped here, not held for later. Not
-                # expected in practice: nothing sends a half-finished CSI
-                # immediately before a paste marker.
+                # Incomplete escape abutting paste marker is dropped.
                 before_paste = self._buffer[:start_index]
                 sequences, _ = _extract_complete_sequences(before_paste)
                 for seq in sequences:
@@ -284,10 +238,7 @@ class StdinBuffer:
             self._process_str(remaining)
 
     def _emit_data(self, sequence: str) -> None:
-        # Kitty's CSI-u protocol reports both a printable-key press and a
-        # release; for an unmodified printable key, the release re-sends
-        # the same codepoint as a raw character right after. Drop that
-        # raw duplicate so a plain keystroke doesn't get typed twice.
+        # Kitty CSI-u duplicates unmodified printable keys on release; drop duplicates.
         raw_codepoint = ord(sequence) if len(sequence) == 1 else None
         if raw_codepoint is not None and raw_codepoint == self._pending_kitty_codepoint:
             self._pending_kitty_codepoint = None

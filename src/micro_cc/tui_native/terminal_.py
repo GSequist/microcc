@@ -1,20 +1,4 @@
-"""Terminal driver for raw mode enter/exit, SIGWINCH-driven resize, bracketed
-paste, Kitty keyboard protocol negotiation, and low-level write primitives
-(cursor, clear, title, OSC 9;4 progress).
-
-Windows is out of scope (this repo is macOS + Linux only).
-
-The read loop owns the single StdinBuffer instance and `select()`/`os.read()`
-loop, calling `StdinBuffer.complete_sequences()` once per tick. ProcessTerminal.
-feed_stdin() is the seam: the read loop hands each already-segmented sequence
-from that generator to `feed_stdin()` first, and only continues on to
-`keys_.parse_key()` / the focused component when it returns False (not consumed
-as part of Kitty negotiation).
-
-setKittyProtocolActive()/is_kitty_protocol_active() state lives in keys_.py
-(parse_key/matches_key read it to decide legacy-vs-Kitty decoding) and is
-reused here.
-"""
+"""Terminal driver for raw mode, SIGWINCH resize, bracketed paste, Kitty protocol, and output primitives."""
 
 import math
 import os
@@ -36,15 +20,7 @@ from micro_cc.tui_native.keys_ import set_kitty_protocol_active
 BRACKETED_PASTE_ENABLE = "\x1b[?2004h"
 BRACKETED_PASTE_DISABLE = "\x1b[?2004l"
 
-# Never enabled anywhere before this — without it the terminal simply
-# never sends mouse bytes at all, which is the actual reason click-to-
-# expand (and drag-select) looked broken: nothing was wrong with the
-# dispatch logic, no mouse event ever arrived to dispatch. 1000 = basic
-# click tracking, 1002 = also report motion while a button is held (needed
-# for drag-select; 1003 would report ALL motion, unneeded and noisy),
-# 1006 = SGR extended coordinates — alt_screen_.TuiAltScreen.
-# parse_sgr_mouse_event() and stdin_buffer_'s completeness detection both
-# assume this exact "\x1b[<...M/m" shape, not the legacy limited-range one.
+# 1000=click, 1002=motion, 1006=SGR format. Must enable to receive mouse bytes at all.
 MOUSE_TRACKING_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
 MOUSE_TRACKING_DISABLE = "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
 
@@ -73,9 +49,7 @@ KeyboardProtocolNegotiation = tuple[str, int | None]
 
 
 def _terminal_size() -> tuple[int, int]:
-    """Same call as TuiAltScreen._terminal_size in alt_screen_.py — kept
-    as a free function here rather than imported since that one is bound
-    to a TuiAltScreen instance, not reusable standalone."""
+    """Get terminal width and height; kept as free function for standalone use."""
     size = shutil.get_terminal_size(fallback=(80, 24))
     return size.columns, size.lines
 
@@ -108,10 +82,7 @@ def normalize_apple_terminal_input(data: str, is_apple_terminal: bool, is_shift_
 
 
 def resolve_escape_timeout_ms(env: dict | None = None) -> int:
-    """How long to wait for the rest of an escape sequence before
-    dispatching a lone ESC as the Escape key. Legacy Alt+key input is ESC
-    plus another byte, so high-latency transports need a longer
-    reassembly window."""
+    """How long to wait for escape sequence reassembly; longer for high-latency SSH."""
     if env is None:
         env = os.environ
     raw = env.get("PI_TUI_ESC_TIMEOUT")
@@ -128,17 +99,12 @@ def resolve_escape_timeout_ms(env: dict | None = None) -> int:
 
 
 def _is_shift_pressed() -> bool:
-    """terminal.ts asks native-modifiers.ts's isNativeModifierPressed()
-    here — a native addon polling live OS keyboard-modifier state, with
-    no stdlib equivalent. Not ported: unverified, always False, which
-    makes forward_input_sequence's Apple Terminal Shift+Enter rewrite
-    inert until that native hook exists in Python too."""
+    """Native OS keyboard-modifier polling; currently unverified."""
     return False
 
 
 class Terminal(Protocol):
-    """Minimal terminal interface for the native TUI — Python mirror of
-    terminal.ts's exported `Terminal` interface."""
+    """Minimal terminal interface for the native TUI."""
 
     def start(self, on_input: OnInput, on_resize: OnResize) -> None: ...
     def stop(self) -> None: ...
@@ -210,8 +176,7 @@ class ProcessTerminal:
 
         if hasattr(signal, "SIGWINCH"):
             signal.signal(signal.SIGWINCH, self._on_sigwinch)
-            # Refresh terminal dimensions immediately — they may be stale
-            # after suspend/resume (SIGWINCH is lost while stopped).
+            # Refresh dimensions immediately; may be stale after suspend/resume.
             os.kill(os.getpid(), signal.SIGWINCH)
 
         self._query_and_enable_kitty_protocol()
@@ -237,11 +202,7 @@ class ProcessTerminal:
             signal.signal(signal.SIGWINCH, signal.SIG_DFL)
         self._resize_handler = None
 
-        # process.stdin.pause() has no equivalent here: this class never
-        # owned an active read loop in the first place (see module
-        # docstring) — whichever loop is reading fd 0 is responsible for
-        # stopping before/around this call.
-
+        # No stdin.pause() equivalent; read loop ownership is external.
         if self._saved_termios is not None:
             try:
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._saved_termios)
@@ -250,10 +211,7 @@ class ProcessTerminal:
             self._saved_termios = None
 
     def drain_input(self, max_ms: int = 1000, idle_ms: int = 50) -> None:
-        """Drain stdin before exiting to prevent Kitty key release events
-        from leaking to the parent shell over slow SSH connections.
-        Blocking/synchronous (there is no event-driven stdin stream to
-        subscribe to here) — call right before process exit."""
+        """Drain stdin before exit to prevent Kitty release events leaking to parent shell."""
         should_disable_kitty = self._keyboard_protocol_pushed or self._kitty_protocol_active
         self._clear_keyboard_protocol_negotiation_buffer()
         if should_disable_kitty:
@@ -287,17 +245,8 @@ class ProcessTerminal:
         finally:
             self._input_handler = previous_handler
 
-    # --- Kitty keyboard protocol negotiation --------------------------
-    #
-    # Query terminal for Kitty keyboard protocol support and enable it if
-    # available. Kitty's progressive enhancement detection requires
-    # requesting the desired flags before querying them. The trailing DA
-    # query is a sentinel supported by terminals that do not know Kitty
-    # keyboard protocol; receiving DA before a Kitty response enables
-    # modifyOtherKeys fallback without a startup timeout.
-    #
-    # Requested flags: 1 = disambiguate escape codes, 2 = report event
-    # types (press/repeat/release), 4 = report alternate keys.
+    # --- Kitty keyboard protocol negotiation ---
+    # Query support; the trailing DA reply is the sentinel for non-Kitty terminals.
 
     def _query_and_enable_kitty_protocol(self) -> None:
         self._keyboard_protocol_pushed = True
@@ -305,11 +254,7 @@ class ProcessTerminal:
         self.write(KITTY_KEYBOARD_PROTOCOL_QUERY)
 
     def feed_stdin(self, sequence: str) -> bool:
-        """Entry point for one already-segmented input sequence (see
-        module docstring for who is expected to call this and with what).
-        Returns True if the sequence was consumed as part of Kitty
-        protocol negotiation (caller should not process it further),
-        False if it was forwarded to the on_input handler."""
+        """Entry point for one segmented input sequence. True if consumed by protocol negotiation."""
         negotiation = self._read_keyboard_protocol_negotiation_sequence(sequence)
         if negotiation == "pending":
             self._schedule_keyboard_protocol_negotiation_buffer_flush()

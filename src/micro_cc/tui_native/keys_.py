@@ -1,28 +1,4 @@
-"""Terminal keyboard-escape-sequence parsing covering both legacy terminal
-sequences and the Kitty keyboard protocol
-(https://sw.kovidgoyal.net/kitty/keyboard-protocol/). Reference:
-https://github.com/sst/opentui/blob/7da92b4088aebfe27b9f691c04163a48821e49fd/packages/core/src/lib/parse.keypress.ts
-
-Symbol keys are also supported, however some ctrl+symbol combos overlap
-with ASCII codes, e.g. ctrl+[ = ESC. Those can still be used for ctrl+shift
-combos (see rawCtrlChar's docstring below).
-
-Key-id string format: lowercase, "+"-joined, modifiers sorted alphabetically
-(alt, ctrl, shift, super) before the base key, e.g. "alt+shift+left",
-"ctrl+j", "shift+enter". This matches what micro-cc produces via Textual's
-_xterm_parser.py. Confirmed by "alt+shift+left"/"alt+shift+right" already
-used in utils/keybindings.py, and by ctrl+pageup/ctrl+pagedown/ctrl+home/
-ctrl+end in start_live_.py — lowercase "pageup"/"pagedown". matches_key()'s
-input keyId parsing is order-independent (it splits on "+" and checks
-membership), so this only affects parse_key()'s output and format_parsed_key().
-
-API:
-- matches_key(data, key_id) - Check if input matches a key identifier
-- parse_key(data) - Parse input and return the key identifier
-- Key - Namespace of key-identifier constants/helpers
-- set_kitty_protocol_active(active) - Set global Kitty protocol state
-- is_kitty_protocol_active() - Query global Kitty protocol state
-"""
+"""Parse terminal keyboard sequences: Kitty keyboard protocol and legacy escape sequences."""
 
 from __future__ import annotations
 
@@ -31,16 +7,13 @@ import re
 from types import SimpleNamespace
 from typing import NamedTuple
 
-# =============================================================================
-# Global Kitty Protocol State
-# =============================================================================
+# --- Global Kitty Protocol State ---
 
 _kitty_protocol_active = False
 
 
 def set_kitty_protocol_active(active: bool) -> None:
-    """Called after detecting protocol support (e.g. from a terminal
-    capability query response)."""
+    """Set after detecting Kitty protocol support (e.g. from a capability query response)."""
     global _kitty_protocol_active
     _kitty_protocol_active = active
 
@@ -49,9 +22,7 @@ def is_kitty_protocol_active() -> bool:
     return _kitty_protocol_active
 
 
-# =============================================================================
-# Key Identifier Helpers
-# =============================================================================
+# --- Key Identifier Helpers ---
 
 
 def _mod(*mods: str):
@@ -95,9 +66,7 @@ Key = SimpleNamespace(
     shift=_mod("shift"),
     alt=_mod("alt"),
     super=_mod("super"),
-    # Combined modifiers. Only one order per combo is kept here since
-    # matches_key() parses key_id order-independently — no need to carry
-    # both "ctrl+shift" and "shift+ctrl" as separate entries.
+    # One order per combo is enough: matches_key() parses key_id order-independently.
     ctrl_shift=_mod("ctrl", "shift"),
     ctrl_alt=_mod("ctrl", "alt"),
     ctrl_super=_mod("ctrl", "super"),
@@ -109,9 +78,7 @@ Key = SimpleNamespace(
     ctrl_shift_super=_mod("ctrl", "shift", "super"),
 )
 
-# =============================================================================
-# Constants
-# =============================================================================
+# --- Constants ---
 
 SYMBOL_KEYS = frozenset(
     "`-=[]\\;',./!@#$%^&*()_+|~{}:<>?"
@@ -184,10 +151,7 @@ def normalize_shifted_letter_identity_codepoint(codepoint: int, modifier: int) -
 
 
 def _is_known_symbol_codepoint(cp: int) -> bool:
-    """SYMBOL_KEYS.has(String.fromCharCode(cp)) in TS never raises — JS
-    coerces any int to UTF-16 via ToUint16. Python's chr() raises on
-    negative/out-of-range input (arrow/functional codepoints are negative
-    sentinels, never real symbols), so guard the range first."""
+    """Check if codepoint is a known symbol; guard range since chr() raises on negative/OOB."""
     return 0 <= cp <= 0x10FFFF and chr(cp) in SYMBOL_KEYS
 
 
@@ -321,9 +285,7 @@ def matches_legacy_modifier_sequence(data: str, key: str, modifier: int) -> bool
     return False
 
 
-# =============================================================================
-# Kitty Protocol Parsing
-# =============================================================================
+# --- Kitty Protocol Parsing ---
 
 # Event types from Kitty keyboard protocol (flag 2): "press"/"repeat"/"release"
 
@@ -341,27 +303,20 @@ class ParsedModifyOtherKeysSequence(NamedTuple):
     modifier: int
 
 
-# Written by parse_kitty_sequence() but not consumed (isKeyRelease/
-# isKeyRepeat below match directly on the raw string instead) — kept for
-# reference but not actively used.
+# Written by parse_kitty_sequence() but not actively used; kept for reference.
 _last_event_type = "press"
 
 
 def is_key_release(data: str) -> bool:
-    """Only meaningful when Kitty keyboard protocol with flag 2 is active."""
-    # Don't treat bracketed paste content as key release, even if it contains
-    # patterns like ":3F" (e.g., bluetooth MAC addresses like "90:62:3F:A5").
-    # Terminal.ts re-wraps paste content with bracketed paste markers before
-    # passing to TUI, so pasted data will always contain \x1b[200~.
+    """Check for key release with Kitty protocol flag 2 (release events contain :3)."""
+    # Bracketed paste markers prevent false positives on MAC addresses, etc.
     if "\x1b[200~" in data:
         return False
-    # Quick check: release events with flag 2 contain ":3"
-    # Format: \x1b[<codepoint>;<modifier>:3u
     return any(s in data for s in (":3u", ":3~", ":3A", ":3B", ":3C", ":3D", ":3H", ":3F"))
 
 
 def is_key_repeat(data: str) -> bool:
-    """Only meaningful when Kitty keyboard protocol with flag 2 is active."""
+    """Check for key repeat with Kitty protocol flag 2 (repeat events contain :2)."""
     if "\x1b[200~" in data:
         return False
     return any(s in data for s in (":2u", ":2~", ":2A", ":2B", ":2C", ":2D", ":2H", ":2F"))
@@ -377,16 +332,7 @@ def _parse_event_type(event_type_str: str | None) -> str:
     return "press"
 
 
-# CSI u format with alternate keys (flag 4):
-#   \x1b[<codepoint>u
-#   \x1b[<codepoint>;<mod>u
-#   \x1b[<codepoint>;<mod>:<event>u
-#   \x1b[<codepoint>:<shifted>;<mod>u
-#   \x1b[<codepoint>:<shifted>:<base>;<mod>u
-#   \x1b[<codepoint>::<base>;<mod>u (no shifted key, only base)
-#
-# With flag 2, event type is appended after modifier colon: 1=press, 2=repeat, 3=release
-# With flag 4, alternate keys are appended after codepoint with colons
+# CSI-u: \x1b[<codepoint>[:<shifted>[:<base>]][;<mod>[:<event>]]u (flag 2: event type, flag 4: alternates)
 _CSI_U_RE = re.compile(r"^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$")
 
 # Arrow keys with modifier: \x1b[1;<mod>A/B/C/D or \x1b[1;<mod>:<event>A/B/C/D
@@ -470,18 +416,8 @@ def matches_kitty_sequence(data: str, expected_codepoint: int, expected_modifier
     if normalized_codepoint == normalized_expected_codepoint:
         return True
 
-    # Alternate match: use base layout key for non-Latin keyboard layouts.
-    # This allows Ctrl+С (Cyrillic) to match Ctrl+c (Latin) when terminal
-    # reports the base layout key (the key in standard PC-101 layout).
-    #
-    # Only fall back to base layout key when the codepoint is NOT already a
-    # recognized Latin letter (a-z) or symbol (e.g., /, -, [, ;, etc.). When
-    # the codepoint is a recognized key, it is authoritative regardless of
-    # physical key position. This prevents remapped layouts (Dvorak, Colemak,
-    # xremap, etc.) from causing false matches: both letters and symbols move
-    # to different physical positions, so Ctrl+K could falsely match Ctrl+V
-    # (letter remapping) and Ctrl+/ could falsely match Ctrl+[ (symbol
-    # remapping) if the base layout key were always considered.
+    # Use base layout key for non-Latin layouts (e.g., Cyrillic) but only for
+    # unrecognized codepoints; recognized Latin letters/symbols are authoritative.
     if parsed.base_layout_key is not None and parsed.base_layout_key == expected_codepoint:
         cp = normalized_codepoint
         is_latin_letter = 97 <= cp <= 122
@@ -501,9 +437,7 @@ def parse_modify_other_keys_sequence(data: str) -> ParsedModifyOtherKeysSequence
 
 
 def matches_modify_other_keys(data: str, expected_keycode: int, expected_modifier: int) -> bool:
-    """Match xterm modifyOtherKeys format: CSI 27 ; modifiers ; keycode ~.
-    Used by terminals when Kitty protocol is not enabled. Modifier values
-    are 1-indexed: 2=shift, 3=alt, 5=ctrl, etc."""
+    """Match xterm modifyOtherKeys format (CSI 27; modifiers; keycode ~)."""
     parsed = parse_modify_other_keys_sequence(data)
     if not parsed:
         return False
@@ -516,14 +450,7 @@ def is_windows_terminal_session() -> bool:
 
 
 def matches_raw_backspace(data: str, expected_modifier: int) -> bool:
-    """Raw 0x08 (BS) is ambiguous in legacy terminals.
-
-    - Windows Terminal uses it for Ctrl+Backspace.
-    - Some legacy terminals and tmux setups send it for plain Backspace.
-
-    Prefer explicit Kitty / CSI-u / modifyOtherKeys sequences whenever they
-    are available. Fall back to a Windows Terminal heuristic only for raw
-    BS bytes."""
+    """Match raw backspace; 0x08 is ambiguous (Windows Terminal uses it for Ctrl+BS)."""
     if data == "\x7f":
         return expected_modifier == 0
     if data != "\x08":
@@ -533,19 +460,11 @@ def matches_raw_backspace(data: str, expected_modifier: int) -> bool:
     return expected_modifier == 0
 
 
-# =============================================================================
-# Generic Key Matching
-# =============================================================================
+# --- Generic Key Matching ---
 
 
 def raw_ctrl_char(key: str) -> str | None:
-    """Get the control character for a key. Uses the universal formula:
-    code & 0x1f (mask to lower 5 bits).
-
-    Works for:
-    - Letters a-z -> 1-26
-    - Symbols [\\]_ -> 27, 28, 29, 31
-    - Also maps - to same as _ (same physical key on US keyboards)"""
+    """Get control char using code & 0x1f formula; handles a-z and [\\]_."""
     char = key.lower()
     code = ord(char)
     if (97 <= code <= 122) or char in ("[", "\\", "]", "_"):
@@ -605,21 +524,7 @@ def parse_key_id(key_id: str) -> dict | None:
 
 
 def matches_key(data: str, key_id: str) -> bool:
-    """Match input data against a key identifier string.
-
-    Supported key identifiers:
-    - Single keys: "escape", "tab", "enter", "backspace", "delete", "home", "end", "space"
-    - Arrow keys: "up", "down", "left", "right"
-    - Ctrl combinations: "ctrl+c", "ctrl+z", etc.
-    - Shift combinations: "shift+tab", "shift+enter"
-    - Alt combinations: "alt+enter", "alt+backspace"
-    - Super combinations: "super+k", "super+enter"
-    - Combined modifiers: "ctrl+shift+p", "alt+ctrl+x", "ctrl+super+k"
-
-    key_id parsing is case-insensitive and order-independent (split on
-    "+", membership-checked) — only parse_key()'s output has a fixed
-    modifier order.
-    """
+    """Match input data against a key identifier (case/order-insensitive)."""
     parsed = parse_key_id(key_id)
     if not parsed:
         return False
@@ -683,9 +588,7 @@ def matches_key(data: str, key_id: str) -> bool:
             # xterm modifyOtherKeys format (fallback when Kitty protocol not enabled)
             if matches_modify_other_keys(data, CODEPOINTS["enter"], MODIFIERS["shift"]):
                 return True
-            # When Kitty protocol is active, legacy sequences are custom terminal mappings
-            # \x1b\r = Kitty's "map shift+enter send_text all \e\r"
-            # \n = Ghostty's "keybind = shift+enter=text:\n"
+            # With Kitty protocol active, legacy sequences are custom terminal mappings.
             if _kitty_protocol_active:
                 return data == "\x1b\r" or data == "\n"
             return False
@@ -723,9 +626,7 @@ def matches_key(data: str, key_id: str) -> bool:
                 data, CODEPOINTS["backspace"], MODIFIERS["alt"]
             )
         if modifier == MODIFIERS["ctrl"]:
-            # Legacy raw 0x08 is ambiguous: it can be Ctrl+Backspace on Windows
-            # Terminal or plain Backspace on other terminals, while also
-            # overlapping with Ctrl+H.
+            # Raw 0x08 is ambiguous between Ctrl+Backspace and Backspace.
             if matches_raw_backspace(data, MODIFIERS["ctrl"]):
                 return True
             return matches_kitty_sequence(data, CODEPOINTS["backspace"], MODIFIERS["ctrl"]) or matches_modify_other_keys(
@@ -879,9 +780,7 @@ def matches_key(data: str, key_id: str) -> bool:
         is_digit = is_digit_key(key)
 
         if modifier == MODIFIERS["ctrl"] + MODIFIERS["alt"] and not _kitty_protocol_active and raw_ctrl:
-            # Legacy: ctrl+alt+key is ESC followed by the control character.
-            # If that legacy form does not match, continue so CSI-u and
-            # modifyOtherKeys sequences from tmux can still be recognized.
+            # Legacy ctrl+alt+key is ESC + control char; else continue so CSI-u/modifyOtherKeys from tmux match.
             if data == f"\x1b{raw_ctrl}":
                 return True
 
@@ -923,20 +822,14 @@ def matches_key(data: str, key_id: str) -> bool:
     return False
 
 
-# =============================================================================
-# parse_key
-# =============================================================================
+# --- parse_key ---
 
 
 def format_parsed_key(codepoint: int, modifier: int, base_layout_key: int | None = None) -> str | None:
     normalized_codepoint = normalize_kitty_functional_codepoint(codepoint)
     identity_codepoint = normalize_shifted_letter_identity_codepoint(normalized_codepoint, modifier)
 
-    # Use base layout key only when codepoint is not a recognized Latin
-    # letter (a-z), digit (0-9), or symbol (/, -, [, ;, etc.). For those,
-    # the codepoint is authoritative regardless of physical key position.
-    # This prevents remapped layouts (Dvorak, Colemak, xremap, etc.) from
-    # reporting the wrong key name based on the QWERTY physical position.
+    # Use base layout key only for unrecognized codepoints; Latin letters/digits/symbols are authoritative.
     is_latin_letter = 97 <= identity_codepoint <= 122
     is_digit = 48 <= identity_codepoint <= 57
     is_known_symbol = _is_known_symbol_codepoint(identity_codepoint)
@@ -989,8 +882,7 @@ def format_parsed_key(codepoint: int, modifier: int, base_layout_key: int | None
 
 
 def parse_key(data: str) -> str | None:
-    """Parse input data and return the key identifier if recognized, else
-    None."""
+    """Parse input data and return the key identifier if recognized."""
     kitty = parse_kitty_sequence(data)
     if kitty:
         return format_parsed_key(kitty.codepoint, kitty.modifier, kitty.base_layout_key)
@@ -999,10 +891,7 @@ def parse_key(data: str) -> str | None:
     if modify_other_keys:
         return format_parsed_key(modify_other_keys.codepoint, modify_other_keys.modifier)
 
-    # Mode-aware legacy sequences.
-    # When Kitty protocol is active, ambiguous sequences are interpreted as custom terminal mappings:
-    # - \x1b\r = shift+enter (Kitty mapping), not alt+enter
-    # - \n = shift+enter (Ghostty mapping)
+    # With Kitty protocol, \x1b\r and \n are shift+enter (custom terminal mappings), not alt+enter.
     if _kitty_protocol_active:
         if data == "\x1b\r" or data == "\n":
             return "shift+enter"
@@ -1020,10 +909,7 @@ def parse_key(data: str) -> str | None:
         return "ctrl+]"
     if data == "\x1f":
         return "ctrl+-"
-    # Using alphabetical order ("alt+ctrl+X") for internal consistency with
-    # format_key_name_with_modifiers()'s alphabetical modifier order (which
-    # every other ctrl+alt combo in this file goes through). See module
-    # docstring.
+    # Alphabetical modifier order (alt+ctrl) for consistency with format_key_name_with_modifiers().
     if data == "\x1b\x1b":
         return "alt+ctrl+["
     if data == "\x1b\x1c":
@@ -1094,26 +980,13 @@ def parse_key(data: str) -> str | None:
     return None
 
 
-# =============================================================================
-# Kitty CSI-u Printable Decoding
-# =============================================================================
+# --- Kitty CSI-u Printable Decoding ---
 
 _KITTY_PRINTABLE_ALLOWED_MODIFIERS = MODIFIERS["shift"] | LOCK_MASK
 
 
 def decode_kitty_printable(data: str) -> str | None:
-    """Decode a Kitty CSI-u sequence into a printable character, if
-    applicable.
-
-    When Kitty keyboard protocol flag 1 (disambiguate) is active, terminals
-    send CSI-u sequences for all keys, including plain printable
-    characters. This function extracts the printable character from such
-    sequences.
-
-    Only accepts plain or Shift-modified keys. Rejects Ctrl, Alt, and
-    unsupported modifier combinations (those are handled by keybinding
-    matching instead). Prefers the shifted keycode when Shift is held and
-    a shifted key is reported."""
+    """Extract printable char from Kitty CSI-u sequence; only plain or Shift-modified keys."""
     m = _CSI_U_RE.match(data)
     if not m:
         return None
@@ -1125,9 +998,7 @@ def decode_kitty_printable(data: str) -> str | None:
     # Modifiers are 1-indexed in CSI-u; normalize to our bitmask.
     modifier = mod_value - 1
 
-    # Only accept printable CSI-u input for plain or Shift-modified text
-    # keys. Reject unsupported modifier bits (e.g. Super/Meta) to avoid
-    # inserting characters from modifier-only terminal events.
+    # Accept only plain or Shift-modified text keys; reject other modifier combinations.
     if (modifier & ~_KITTY_PRINTABLE_ALLOWED_MODIFIERS) != 0:
         return None
     if modifier & (MODIFIERS["alt"] | MODIFIERS["ctrl"]):

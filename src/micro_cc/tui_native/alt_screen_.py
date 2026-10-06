@@ -16,9 +16,7 @@ from micro_cc.tui_native.text_utils_ import (
 
 
 class Component(Protocol):
-    """Anything with these two methods can sit in the widget tree.
-    render(width) returns its content as a list of lines. invalidate()
-    clears any cached render state so the next render is computed fresh."""
+    """Widget tree node with render(width) and invalidate() methods."""
     def render(self, width: int) -> list[str]: ...
     def invalidate(self) -> None: ...
 
@@ -26,17 +24,8 @@ class Component(Protocol):
 BEGIN_SYNCHRONIZED_OUTPUT = "\x1b[?2026h"  # one atomic terminal paint starts
 END_SYNCHRONIZED_OUTPUT = "\x1b[?2026l"    # ...and ends here
 
-# The alt screen also sets the terminal's own DEFAULT background/foreground
-# (OSC 11/10) from the active theme set. Doing it here rather than painting a
-# background per rendered line is what themes the whole UI with no renderer
-# changes: every span that doesn't set its own bgcolor (body text, padding,
-# dividers) inherits this default, and every widget that DOES set one keeps
-# working. OSC 111/110 on exit restore the user's own terminal profile — the
-# alt screen already restores its contents.
-#
-# Both sequences are FUNCTIONS, not constants: a /theme switch has to be able
-# to re-emit them mid-session (see reapply_default_colors below), so binding
-# them once at import would freeze the ground for the process's whole life.
+# Alt screen sets terminal default colors (OSC 11/10) from active theme.
+# Both are FUNCTIONS to support live theme switches (see reapply_default_colors).
 def _enter() -> str:
     from micro_cc.utils import theme_store_
     return (
@@ -52,8 +41,7 @@ def _exit() -> str:
 
 
 def default_colors_sequence() -> str:
-    """Just the OSC 11/10 pair, no alt-screen switch — what a live theme
-    change re-emits to repaint the ground under an already-running UI."""
+    """Return OSC 11/10 color sequence for live theme changes."""
     from micro_cc.utils import theme_store_
     return (
         f"\x1b]11;{theme_store_.get('bg')}\x07"
@@ -64,9 +52,7 @@ def default_colors_sequence() -> str:
 ENTER_ALT_SCREEN = _enter()
 EXIT_ALT_SCREEN = _exit()
 
-# A focused component emits this at the exact spot in its own render()
-# output where the hardware cursor should land. extract_cursor_position
-# finds it, strips it, and returns (row, col).
+# Marker emitted by focused components; extract_cursor_position finds and strips it.
 CURSOR_MARKER = "\x1b_pi:c\x07"
 
 # Leading OSC 133 shell-integration markers (prompt/output-start/end) some
@@ -77,9 +63,7 @@ SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
 
 def render_layout_frame(root: Component, width: int, height: int) -> list[str]:
-    """Render root at exactly `height` rows. If root supports render_in
-    (real height-aware layout, e.g. VStack), use it. Otherwise render
-    plain and pad/truncate to height."""
+    """Render root at exactly height rows, using render_in() if available."""
     render_in = getattr(root, "render_in", None)
     if render_in is not None:
         return render_in(width, height)
@@ -99,14 +83,7 @@ _KITTY_ID_RE = re.compile(r"(?:^|,)i=(\d+)(?:,|$)")
 
 
 def extract_kitty_image_ids(screen: list[str]) -> set[int]:
-    """Which Kitty image ids are actually present in this composed frame.
-    Every image line's first control sequence carries i= — either the
-    delete-before-transmit prefix or the transmit's own first chunk (see
-    detect_images_.encode_kitty) — so finding just the first `\\x1b_G...;`
-    on a line is enough, no need to scan every chunk of a multi-chunk
-    transmission. str.find, not regex-over-the-whole-line, for the same
-    reason extract_ansi_code was rewritten: a manual/heavier scan here
-    would cost real time on a line that can be hundreds of KB."""
+    """Return set of Kitty image IDs present in the composed frame."""
     ids = set()
     for line in screen:
         start = line.find("\x1b_G")
@@ -122,9 +99,7 @@ def extract_kitty_image_ids(screen: list[str]) -> set[int]:
 
 
 def composite_tui_line(base_line: str, overlay_line: str, start_col: int, overlay_width: int, total_width: int) -> str:
-    """Stitch overlay_line into base_line at column start_col, keeping
-    whatever of base_line survives before/after it. Used by both flashes
-    and overlays to paint a fixed-position patch onto an existing line."""
+    """Stitch overlay_line into base_line at start_col, preserving before/after content."""
     after_start = start_col + overlay_width
     before, before_width, after, after_width = extract_segments(
         base_line, start_col, after_start, total_width - after_start, True,
@@ -151,23 +126,14 @@ def composite_tui_line(base_line: str, overlay_line: str, start_col: int, overla
 
 @dataclass
 class SearchMatch:
-    """One occurrence of the search query. row/columns are in the scroll
-    view's content coordinates, not screen coordinates — screen position
-    is recomputed every frame from scroll_top + on-screen offset."""
+    """One search query occurrence in content coordinates, not screen coordinates."""
     row: int
     start_col: int
     end_col: int
 
 
 def composite_overlays(screen: list[str], width: int, height: int, overlay_stack: "list[OverlayEntry]") -> list[str]:
-    """Stack every visible overlay onto `screen`, lowest focus_order first
-    so newer overlays paint over older ones. Each overlay may want to sit
-    lower than `screen` currently has lines for (e.g. anchored near the
-    bottom of a short screen); rather than clip those, grow a scratch
-    copy tall enough to hold every overlay at its real row, composite
-    into that, then keep only the bottom `height` rows of it — so a
-    too-low anchor slides the overlay up onto real screen rows instead
-    of getting cut off."""
+    """Stack visible overlays onto screen; grow height to prevent cutoff at bottom anchors."""
     visible = [e for e in overlay_stack if not e.hidden]
     if not visible:
         return screen
@@ -181,6 +147,7 @@ def composite_overlays(screen: list[str], width: int, height: int, overlay_stack
             overlay_lines = overlay_lines[:max_height]
         _, row, col, _ = entry.layout(width, height, len(overlay_lines))
         rendered.append((overlay_lines, row, col, w))
+        entry.last_rect = (row, col, w, len(overlay_lines))
         min_lines_needed = max(min_lines_needed, row + len(overlay_lines))
 
     working_height = max(len(result), height, min_lines_needed)
@@ -198,23 +165,17 @@ def composite_overlays(screen: list[str], width: int, height: int, overlay_stack
 
 
 def clip_overwide_line(line: str, width: int) -> str:
-    """Truncate a line to `width` columns. Known gap: visible_width counts
-    1 cell per character, no wide-CJK/combining-mark table yet — fine for
-    ASCII, wrong once double-width glyphs actually appear on screen."""
+    """Truncate line to width columns."""
     return slice_by_column(line, 0, width) if visible_width(line) > width else line
 
 
 def apply_line_resets(line: str) -> str:
-    """Stop one line's color/style from bleeding into the next line the
-    terminal happens to reuse."""
+    """Append reset sequence to stop color/style bleeding to next line."""
     return line + SEGMENT_RESET
 
 
 # --- Flashes -----------------------------------------------------------
-# A transient inverse-video banner ("Copied!") composited over the bottom
-# of the screen for a fixed duration. flash() records a wall-clock expiry;
-# expire(), called once per do_render(), sweeps anything past it — no
-# timer thread needed since this renderer already redraws every frame.
+# Transient inverse-video banners; expire() removes anything past wall-clock expiry.
 import time as _time
 
 
@@ -265,14 +226,7 @@ def composite_flashes(screen: list[str], width: int, height: int, flashes: AltSc
 
 
 # --- Overlays ------------------------------------------------------------
-# Floating boxes (popups, pickers) positioned over the base screen at an
-# anchor (corner/edge/center) plus optional explicit row/col/offset.
-# Missing piece, tracked, not built: when overlay N closes, keyboard focus
-# should return to whatever was focused before it opened, walking back
-# through a whole stack of overlays if several are open. hide()/show()
-# here only toggle render-visibility. Needed once keystroke routing to a
-# focused component exists (Phase 4/5) and more than one overlay can be
-# open at once — neither is true yet.
+# Floating boxes (popups, pickers) positioned via anchor + offset. TODO: focus stack.
 def _parse_size_value(value, reference: int):
     if value is None:
         return None
@@ -321,16 +275,10 @@ class OverlayEntry:
         self.pre_focus = pre_focus
         self.hidden = False
         self.focus_order = focus_order
+        self.last_rect = None  # (row, col, width, height) on screen after the last composite
 
     def layout(self, term_width: int, term_height: int, overlay_height: int = 0) -> tuple[int, int, int, int | None]:
-        """Returns (width, row, col, max_height) for this overlay against
-        the given terminal size. Width and max_height don't depend on
-        overlay_height (only row/col placement does — a bottom/right
-        anchored box needs to know its own height before it can know
-        where its top edge lands), so composite_overlays calls this
-        twice: once with overlay_height=0 just to learn width/max_height,
-        renders the component at that width, then calls again with the
-        real rendered height to get the final row/col."""
+        """Return (width, row, col, max_height); width/max_height ignore overlay_height."""
         return self._layout(overlay_height, term_width, term_height)
 
     def _layout(self, overlay_height: int, term_width: int, term_height: int):
@@ -409,16 +357,7 @@ class OverlayHandle:
 
 
 # --- Selection ---------------------------------------------------------
-# Port of the character/word/line drag-select machinery in
-# tui-alt-screen.ts: getSelectionBounds, getSelectionColumns,
-# applySelectionHighlight, getWordSelection, getLineSelection, plus the
-# button-press/drag/release state machine (handleSelectionMouseEvent).
-#
-# A press outside the primary ScrollView selects against the composited
-# screen (self.previous_screen) in screen rows. A press inside it selects in
-# CONTENT rows (scroll_top + row-in-viewport), so the range survives
-# scrolling (wheel or drag auto-scroll) and copy reads the full content, not
-# just the painted window.
+# Press outside ScrollView selects composited screen rows; inside selects content rows.
 _WORD_RE = re.compile(r"\w+|[^\w\s]+|\s+", re.UNICODE)
 
 
@@ -451,13 +390,7 @@ class TuiAltScreen:
         self.previous_screen: list[str] = []
         self.previous_width = 0
         self.previous_height = 0
-        # Kitty images are a compositing layer independent of the text
-        # grid (see message_row_.Image) — a placement stays visually on
-        # screen forever unless something explicitly deletes it, scrolling
-        # it out of the diffed screen does NOT remove it. Track which image
-        # ids are visible in this frame and evict anything no longer part of
-        # the current frame. This avoids showing stale image placements from
-        # previous renders.
+        # Kitty image placements persist until explicitly deleted; evict ids no longer in the frame.
         self._visible_kitty_image_ids: set[int] = set()
 
         self.flashes = AltScreenFlashContainer()
@@ -478,10 +411,7 @@ class TuiAltScreen:
         self._last_autoscroll = 0.0
         self._content_cache: list[str] | None = None
 
-        # The scroll view search highlighting/navigation operates on.
-        # Whoever builds the actual widget tree hands this in explicitly
-        # (set_primary_scroll_view) — this class has no way to guess which
-        # of possibly several ScrollViews the user means by "search".
+        # Scroll view that search operates on, handed in via set_primary_scroll_view.
         self.primary_scroll_view = None
         self.search_query: str = ""
         self.search_matches: list[SearchMatch] = []
@@ -493,9 +423,7 @@ class TuiAltScreen:
 
     # --- overlays ---------------------------------------------------
     def invalidate_overlays(self) -> None:
-        """Drop every open overlay's cached render — what a live theme switch
-        calls so pickers/panels repaint in the new color set instead of
-        serving lines built with the old one."""
+        """Clear cached renders for live theme switches."""
         for entry in self.overlay_stack:
             try:
                 entry.component.invalidate()
@@ -523,11 +451,7 @@ class TuiAltScreen:
 
     # --- search ---------------------------------------------------------
     def set_primary_scroll_view(self, scroll_view) -> None:
-        """Register which ScrollView "search" operates on. Must be the
-        same object instance passed to the VStack that ends up as
-        self.root (directly, or nested inside another VStack) — this is
-        how apply_search_highlights finds it on screen again via
-        root.find_offset(scroll_view)."""
+        """Register ScrollView for search; must be same instance in root VStack."""
         self.primary_scroll_view = scroll_view
 
     def set_search_query(self, query: str) -> None:
@@ -546,13 +470,7 @@ class TuiAltScreen:
             self.search_selected = (self.search_selected - 1) % len(self.search_matches)
 
     def _refresh_search_matches(self, width: int) -> None:
-        """Re-scan the primary scroll view's full content for the current
-        query. Runs once per frame (from do_render, only while a query is
-        set) rather than once when the query changes, on purpose: content
-        streaming in during an open search should turn up new matches
-        without the user having to retype anything. Case-insensitive
-        plain-text substring search — no fuzzy matching, no regex; add
-        those later behind the same query string if wanted."""
+        """Rescan content each frame for current query; runs while query is set."""
         sv = self.primary_scroll_view
         query = self.search_query.strip()
         previous_selected = (
@@ -616,7 +534,7 @@ class TuiAltScreen:
 
     # --- selection: text lookups over the last composited screen ------
     def _scroll_region(self):
-        """(scroll_view, screen_offset, viewport_height) of the primary scroll view, or None."""
+        """Return (scroll_view, offset, height) tuple or None."""
         sv = self.primary_scroll_view
         if sv is None or not hasattr(self.root, "find_offset"):
             return None
@@ -637,10 +555,7 @@ class TuiAltScreen:
         return lines[row] if 0 <= row < len(lines) else ""
 
     def autoscroll_tick(self) -> bool:
-        """Called every frame by the app's render loop: while a drag is parked
-        on the viewport's top/bottom edge, scroll one line and extend the
-        selection to the newly revealed edge row (motion events stop when the
-        mouse sits still, so this can't be event-driven). True if it scrolled."""
+        """Called each frame; scroll and extend selection while drag is parked at edge. True if scrolled."""
         if not (self.selection_press_active and self.selection_in_content and self.drag_edge):
             return False
         now = _time.monotonic()
@@ -769,20 +684,7 @@ class TuiAltScreen:
         return [transform(row, line) for row, line in enumerate(screen)]
 
     def copy_selection_to_clipboard(self) -> str | None:
-        """Writes the selected plain text to the system clipboard (None if
-        nothing is selected). pyperclip first — it shells out to pbcopy on
-        macOS, which actually lands in the real clipboard regardless of
-        any terminal setting — OSC 52 only as a fallback for pyperclip-less
-        environments (a real remote terminal over SSH). OSC 52 alone used
-        to be the only path here, which is why the "Copied!" flash used to
-        fire unconditionally: Terminal.app doesn't implement OSC 52 at all,
-        and iTerm2 ships it disabled by default (Preferences > General >
-        Selection > "Applications in terminal may access clipboard"), so
-        on both the escape sequence was accepted and silently dropped —
-        nothing to detect failure from, hence the always-on flash. Mirrors
-        MicroTui.copy_to_clipboard's same pyperclip-then-OSC52 order in
-        start_live_tui_.py, which never had this bug because it checks
-        whether pyperclip actually landed before claiming success."""
+        """Write selected text to clipboard; try pyperclip first, fall back to OSC 52."""
         sel = self.get_selection_bounds()
         if not sel:
             return None
@@ -804,11 +706,7 @@ class TuiAltScreen:
             pyperclip.copy(text)
             landed = True
         except Exception as e:
-            # No disk log to stash this in (shipped product — see
-            # start_live_tui_.py's background-noise handling), so the
-            # only way to ever find out *why* pyperclip failed on a given
-            # machine is to put the real exception in front of the user
-            # right here instead of silently falling back to OSC 52.
+            # Show error to user since we can't log it.
             pyperclip_error = f"{type(e).__name__}: {e}"
         if not landed:
             try:
@@ -832,6 +730,14 @@ class TuiAltScreen:
             return None
         button, x, y, kind = int(m.group(1)), int(m.group(2)) - 1, int(m.group(3)) - 1, m.group(4)
         return {"button": button, "x": x, "y": y, "release": kind == "m"}
+
+    def overlay_hit(self, x: int, y: int):
+        """Topmost visible overlay under screen (x, y) -> (component, row local to it), else None."""
+        for entry in sorted((e for e in self.overlay_stack if not e.hidden and e.last_rect), key=lambda e: -e.focus_order):
+            row, col, w, h = entry.last_rect
+            if row <= y < row + h and col <= x < col + w:
+                return entry.component, y - row
+        return None
 
     def _content_point(self, region, point: SelectionPoint) -> SelectionPoint:
         """Screen point -> content-row point, clamped into the viewport."""
@@ -888,8 +794,7 @@ class TuiAltScreen:
         self.selection_focus = rng[1] if rng else point
 
     def extract_cursor_position(self, screen: list[str], height: int):
-        """Find CURSOR_MARKER in the bottom `height` rows, strip it from
-        `screen` in place, and return (row, col). None if not found."""
+        """Find and strip CURSOR_MARKER from bottom rows, return (row, col) or None."""
         viewport_top = max(0, len(screen) - height)
         for row in range(len(screen) - 1, viewport_top - 1, -1):
             idx = screen[row].find(CURSOR_MARKER)
@@ -910,16 +815,7 @@ class TuiAltScreen:
             self._refresh_search_matches(width)
             screen = self.apply_search_highlights(screen)
         screen = composite_overlays(screen, width, height, self.overlay_stack)
-        # Everything downstream (apply_selection, composite_flashes,
-        # extract_cursor_position, and the row-write loop below) assumes
-        # screen has EXACTLY `height` rows. render_layout_frame is supposed
-        # to guarantee that already, but a layout-math edge case (e.g. a
-        # VStack's grow/shrink distribution not fully resolving) can leave
-        # it a row short — and only truncating the too-long case here left
-        # that short case to blow up as an uncaught IndexError several
-        # layers down instead of being silently corrected here, where the
-        # actual invariant is meant to hold. See last_render_crash.log's
-        # IndexError at the row-write loop for the bug this fixes.
+        # Enforce invariant: screen must be exactly height rows. Layout edge cases can short it.
         if len(screen) > height:
             screen = screen[len(screen) - height:]
         elif len(screen) < height:
@@ -929,11 +825,7 @@ class TuiAltScreen:
         cursor_pos = self.extract_cursor_position(screen, height)
         screen = [clip_overwide_line(apply_line_resets(line), width) for line in screen]
 
-        # Anything tracked as visible last frame that isn't in this frame's
-        # visible set has scrolled out of the viewport (or the row it was
-        # on now holds something else) — Kitty won't drop it on its own,
-        # so tell it to explicitly. See extract_kitty_image_ids's docstring
-        # and TuiAltScreen.__init__'s _visible_kitty_image_ids comment.
+        # Evict Kitty images scrolled out of viewport; Kitty won't drop them automatically.
         current_kitty_image_ids = extract_kitty_image_ids(screen)
         evicted_kitty_image_ids = self._visible_kitty_image_ids - current_kitty_image_ids
         self._visible_kitty_image_ids = current_kitty_image_ids

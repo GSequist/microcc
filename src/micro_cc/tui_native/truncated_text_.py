@@ -1,9 +1,4 @@
-"""Single-line truncation-with-ellipsis component. Provides unpadded
-truncation with a default "..." ellipsis. Reuses text_utils_.py's
-slice_by_column for ANSI-aware slicing rather than re-deriving it — same
-width-1-per-char caveat documented in that module's docstring (no grapheme
-segmentation).
-"""
+"""Single-line truncation-with-ellipsis component using ANSI-aware slice_by_column."""
 
 from micro_cc.tui_native.text_utils_ import slice_by_column, visible_width
 
@@ -11,10 +6,7 @@ RESET = "\x1b[0m"
 
 
 def truncate_to_width(text: str, max_width: int, ellipsis: str = "...") -> str:
-    """Unpadded truncation: if text fits, return it untouched (ANSI and
-    all); otherwise clip to max_width - len(ellipsis) visible columns and
-    append the ellipsis, with a reset code before and after it so it never
-    inherits — or leaks — the clipped text's styling."""
+    """Clip to max_width with an ellipsis (reset codes around it); fitting text is untouched."""
     if max_width <= 0 or not text:
         return ""
     if visible_width(text) <= max_width:
@@ -30,9 +22,7 @@ def truncate_to_width(text: str, max_width: int, ellipsis: str = "...") -> str:
 
 
 class TruncatedText:
-    """Component protocol (render/invalidate). Always renders exactly one
-    content line (plus padding_y blank lines above/below), stopping at the
-    first newline and truncating with an ellipsis if it doesn't fit."""
+    """Renders one content line (plus padding_y blank lines), truncated with an ellipsis."""
 
     def __init__(self, text: str = "", padding_x: int = 0, padding_y: int = 0):
         self.text = text

@@ -12,20 +12,14 @@ import webbrowser
 
 import httpx
 
-# Public OAuth client id for Anthropic's official Claude Code CLI login
-# flow. Not a secret — OAuth "public client" pattern, RFC 8252 — the
-# per-login secret is the PKCE verifier generated fresh below, never this
-# fixed id.
+# Public OAuth client id (not a secret; RFC 8252 PKCE verifier is the secret).
 _CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
 _TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 _CALLBACK_PORT = 53692
 _REDIRECT_URI = f"http://localhost:{_CALLBACK_PORT}/callback"
 _SCOPE = "org:create_api_key user:profile user:inference"
-# How long to wait on the loopback socket for the browser redirect before
-# giving up — otherwise a closed tab / abandoned login hangs the worker
-# (and the TUI's exclusive worker slot) forever.
-_CALLBACK_TIMEOUT_S = 300
+_CALLBACK_TIMEOUT_S = 300  # Timeout on loopback socket; prevents hanging on closed tab.
 
 
 def discover_claude_code_token() -> str | None:
@@ -39,14 +33,12 @@ def discover_claude_code_token() -> str | None:
 
 
 def is_oauth_token(token: str) -> bool:
-    # sk-ant-oat*/cc- prefixes → OAuth; sk-ant-api* → real API key.
+    # OAuth tokens: sk-ant-oat*/cc-; API keys: sk-ant-api*.
     return token.startswith(("sk-ant-oat", "cc-"))
 
 
 def _generate_pkce() -> tuple[str, str]:
-    """RFC 7636. verifier is the actual per-login secret (32 random bytes,
-    generated fresh every attempt, never shipped anywhere); challenge is its
-    SHA-256 hash, the only part sent before the token exchange."""
+    """Generate RFC 7636 PKCE verifier and challenge (SHA-256 hash)."""
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
     challenge = base64.urlsafe_b64encode(
         hashlib.sha256(verifier.encode()).digest()
@@ -71,19 +63,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 
 
 def _wait_for_callback(cancel_event: threading.Event) -> dict | None:
-    """Blocking (real blocking socket I/O, not a coroutine) — run this via
-    asyncio.to_thread, not awaited directly.
-
-    Polls handle_request() in short (1s) increments instead of one blocking
-    call with the full timeout — asyncio Task cancellation only stops the
-    coroutine that's AWAITING this thread, it can't interrupt a blocking
-    socket call already running inside the thread itself. Without polling,
-    cancelling the caller (e.g. Esc in the TUI) would abandon the await but
-    leave this thread holding the port for up to _CALLBACK_TIMEOUT_S
-    regardless — exactly what left a stale listener on _CALLBACK_PORT after
-    an escaped login attempt, breaking the next one. Checking cancel_event
-    every ~1s bounds how long that abandonment can last, and server_close()
-    in `finally` guarantees the port is freed on every exit path."""
+    """Blocking HTTP server on loopback; poll cancel_event to allow early exit."""
     server = http.server.HTTPServer(("127.0.0.1", _CALLBACK_PORT), _CallbackHandler)
     server.timeout = 1  # poll interval, not the overall deadline
     server.result = None
@@ -101,14 +81,7 @@ def _wait_for_callback(cancel_event: threading.Event) -> dict | None:
 
 
 async def oauth_login_flow(cancel_event: threading.Event | None = None) -> str:
-    """Fallback OAuth flow: only runs if discover_claude_code_token() found
-    nothing. Uses the same client id, param names, and reuse of the PKCE
-    verifier as the OAuth `state` that Anthropic's own official CLI does,
-    rather than improvising a shape that might silently be rejected by
-    Anthropic's endpoint.
-
-    cancel_event: set it from the caller to abort the wait early (see
-    _wait_for_callback) — a caller that never cancels can just omit it."""
+    """OAuth flow matching Anthropic's official CLI; uses PKCE verifier as state."""
     if cancel_event is None:
         cancel_event = threading.Event()
     verifier, challenge = _generate_pkce()

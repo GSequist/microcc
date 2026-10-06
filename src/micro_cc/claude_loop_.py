@@ -39,6 +39,7 @@ from micro_cc.utils.msg_store_ import load_summary, load_checkpoint, compact_che
 from micro_cc.utils.tokenization_simple import token_cutter, token_stats, save_token_stats, detect_cache_miss, record_prompt_segments
 from micro_cc.utils.claude_md_loader import load_claude_md_file
 from micro_cc.utils.helpers import get_endpoint
+from micro_cc.utils.tool_safety_ import READ_ONLY_TOOLS, read_only_by_input
 
 
 load_dotenv(os.path.expanduser("~/.micro-cc/.env"))
@@ -52,7 +53,7 @@ GATEABLE_TOOLS = [
 ASK_USER_QUESTION_TOOL = ["ask_user_question_tool_"]
 
 def _unanswered_results(blocks, calls, results, started):
-    """Answer every call of a cut-short turn: real results kept, the rest marked not run or interrupted."""
+    """Answer all tool calls in cut-short turn; mark unstarted/incomplete as errors."""
     out = []
     for tb in blocks:
         name = calls[tb.id][0]
@@ -70,29 +71,19 @@ def _unanswered_results(blocks, calls, results, started):
     return out
 
 
-# Write tools must serialize; reads are safe in parallel. Unlisted names count as unsafe.
-_CONCURRENCY_SAFE_TOOLS = {
-    "read_", "glob_", "grep_",
-    "read_skill", "list_skills", "list_mcps",
-}
+_CONCURRENCY_SAFE_TOOLS = set(READ_ONLY_TOOLS)  # Write tools serialize; reads parallel
 
 
 def _is_concurrency_safe(name: str, tool_input: dict) -> bool:
-    if name in _CONCURRENCY_SAFE_TOOLS:
-        return True
-    if name == "memory_":
-        return tool_input.get("action") in ("get", "list")
-    if name == "search_tools":
-        return tool_input.get("action") == "discover"
-    return False
+    return name in _CONCURRENCY_SAFE_TOOLS or read_only_by_input(name, tool_input)
 
 
 class _SpinGuard:
-    """Detects thinking stall via repeated low-content lines in sliding window."""
+    """Detect thinking stall from repeated low-content lines."""
 
-    WINDOW = 40         # lines tracked in the sliding window
-    MIN_LINES = 30      # don't judge until this many lines have gone by
-    MAX_DISTINCT = 6    # ...and this few distinct among the last WINDOW
+    WINDOW = 40         # sliding window size
+    MIN_LINES = 30      # minimum lines before judging
+    MAX_DISTINCT = 6    # max distinct lines to trigger
 
     def __init__(self):
         from collections import deque
@@ -103,14 +94,14 @@ class _SpinGuard:
 
     @staticmethod
     def _split(text: str):
-        """Cut at first newline; return (line, rest) or (None, text)."""
+        """Split at first newline; return (line, rest) or (None, text)."""
         i = text.find("\n")
         if i == -1:
             return None, text
         return text[:i], text[i + 1:]
 
     def feed(self, chunk: str) -> bool:
-        """Return True if stall detected; caller should stop stream."""
+        """Return True if stall detected."""
         self._tail += chunk
         while True:
             line, self._tail = self._split(self._tail)
@@ -127,12 +118,11 @@ class _SpinGuard:
                 self.tripped = True
                 return True
         if len(self._tail) > 1_000_000:
-            self._tail = ""   # pathological single line — never the pattern
+            self._tail = ""  # pathological single line
         return False
 
 
-# Injected when _SpinGuard trips
-_SPIN_NUDGE = (
+_SPIN_NUDGE = (  # Injected when _SpinGuard trips
     "<system-reminder>\nYour thinking stalled: it degenerated into a run of "
     "very short lines (\"Go.\", \"Now.\", \"Let me write.\") with no tool call, "
     "so the turn was cut. Do not re-plan in thinking. Pick the single next "
@@ -143,7 +133,7 @@ _SPIN_NUDGE = (
 
 
 def _partition_tool_batches(ordered_blocks):
-    """Group tool calls: safe ones parallel, unsafe ones serial."""
+    """Group tool calls by concurrency safety (safe parallel, unsafe serial)."""
     batches = []
     for tb, is_mcp in ordered_blocks:
         name, args = resolve_call(tb)
@@ -155,7 +145,7 @@ def _partition_tool_batches(ordered_blocks):
     return batches
 
 def _loaded_names(msgs) -> set:
-    """Extract tool/MCP names from search_tools add calls in history."""
+    """Extract loaded tool/MCP names from search_tools add calls."""
     loaded = set()
     for msg in msgs:
         content = msg.get("content")
@@ -170,7 +160,7 @@ def _loaded_names(msgs) -> set:
 
 
 def _arg_error(schema: dict, args: dict) -> str | None:
-    """Validate args against schema; return first error or None."""
+    """Validate args against schema; return error message or None."""
     input_schema = schema.get("input_schema") or {}
     try:
         cls = validators.validator_for(input_schema)
@@ -195,7 +185,7 @@ async def claude_loop(
     surface="headless",
     encoded_image=None,
 ):
-    """Main agent loop: calls model, executes tools, appends results to msgs."""
+    """Execute agent loop: call model, execute tools, append results to msgs."""
 
     dangerous = DEFAULT_DANGEROUS if dangerous_tools is None else set(dangerous_tools)
     ask_user = ASK_USER_QUESTION_TOOL
@@ -204,8 +194,7 @@ async def claude_loop(
     skills_summary = get_skill_summary(project_dir)
     claude_md_content = load_claude_md_file(project_dir)
     mcp_catalog = get_effective_mcp_catalog(project_dir)
-    # micro_cc's own source dir (not project_dir): this file sits directly in the package dir.
-    package_dir = os.path.dirname(os.path.abspath(__file__))
+    package_dir = os.path.dirname(os.path.abspath(__file__))  # micro_cc source dir
 
     default_tools = [
         bash_,
@@ -240,8 +229,7 @@ async def claude_loop(
 
     yield {"type": "status", "message": "", "msgs": msgs}
 
-    # Built per call, never appended to msgs: a stored copy would replay a stale date/CLAUDE.md on resume.
-    claude_md_section = f"\n\n<project-instructions>\n{claude_md_content}\n</project-instructions>" if claude_md_content else ""
+    claude_md_section = f"\n\n<project-instructions>\n{claude_md_content}\n</project-instructions>" if claude_md_content else ""  # Built per call, never stored
 
     orchestration_line = (
         "- Multi-subagent orchestration: read_skill('graph-orchestration') to "
@@ -258,7 +246,7 @@ async def claude_loop(
 - You are running LOCALLY on the user's machine (on the metal), NOT a remote server
 - You have direct access to the local filesystem, Desktop, Documents, etc.
 - Project directory: {project_dir}
-- Your own source code lives at: {package_dir} (not project_dir) — plain, editable .py. You can change the harness itself: edit it and the running process restarts into your change (auto at the next idle turn, or /reload to force it now); the conversation persists across the restart.
+- Your own source code lives at: {package_dir} (not project_dir) — plain, editable .py. You can change the harness itself: edit it and the running process restarts into your change (auto at the next idle turn, or /reload to force it now); the conversation persists across the restart. Before changing the harness, read the customizing-micro-cc skill: it says which changes belong in ~/.micro-cc (they survive updates) and which edit core (overwritten by the next /update).
 - Date: {datetime.datetime.now().strftime("%B %d, %Y")}
 
 ## Core Tools (always available)
@@ -360,15 +348,12 @@ whole conversation history, including compacted turns.
 
     while True:
         checkpoint = load_checkpoint(project_dir)
-        # /rewind can leave msgs shorter than as_of_index: treat that as no checkpoint.
-        if checkpoint and checkpoint["as_of_index"] > len(msgs):
+        if checkpoint and checkpoint["as_of_index"] > len(msgs):  # /rewind case
             checkpoint = None
 
-        # Fire-and-forget: this turn still truncates via token_cutter, a new checkpoint applies next turn.
-        asyncio.create_task(compact_checkpoint(project_dir, msgs, len(msgs), model))
+        asyncio.create_task(compact_checkpoint(project_dir, msgs, len(msgs), model))  # Fire-and-forget task
 
-        # Volatile status rides in ONE trailing _ephemeral user message, after every cache anchor.
-        status_sections = []
+        status_sections = []  # Volatile status in ONE _ephemeral user message
 
         from micro_cc.tools.file_tools_ import format_external_changes
         file_changes = format_external_changes()
@@ -380,14 +365,12 @@ whole conversation history, including compacted turns.
         if proc_info:
             status_sections.append(f"<process-status>\n{proc_info}\n</process-status>")
 
-        # Old-format summary only; with a checkpoint its text already rides inside trimmed_rest.
-        if not checkpoint:
+        if not checkpoint:  # Old-format summary only
             conversation_summary = load_summary(project_dir)
             if conversation_summary:
                 status_sections.append(f"<conversation-summary>\n{conversation_summary}\n</conversation-summary>")
 
-        # Mid-turn memory_ edits surface as a tail delta; the frozen manifest block is not rebuilt.
-        current_manifest = _build_memory_manifest()
+        current_manifest = _build_memory_manifest()  # Mid-turn edits surfaced as delta
         if current_manifest is not None and current_manifest != _last_shown_manifest:
             status_sections.append(
                 "<memory-manifest-update>\nMemory changed since this turn started "
@@ -412,8 +395,7 @@ whole conversation history, including compacted turns.
             )
         else:
             trimmed_rest = token_cutter(msgs, max_tokens)
-        # Cache order: system, memory manifest, transcript, ephemeral status last.
-        trimmed_loop_msgs = (
+        trimmed_loop_msgs = (  # Cache: system, memory, transcript, ephemeral
             [system_prompt_msg]
             + ([memory_manifest_msg] if memory_manifest_msg else [])
             + trimmed_rest
@@ -457,14 +439,12 @@ whole conversation history, including compacted turns.
                     response = event["response"]
                     api_usage = event.get("usage", {})
 
-            # Drop the partial turn (nothing was persisted); the nudge is _ephemeral so it stays out of the cache anchor.
-            if spin_tripped:
+            if spin_tripped:  # Drop partial turn; nudge stays out of cache
                 msgs.append({"role": "user", "content": _SPIN_NUDGE, "_ephemeral": True})
                 yield {"type": "error", "message": "thinking stalled (short-line loop) — turn cut and model re-prompted"}
                 continue
 
-            # Call detect_cache_miss before token_stats['input'] is overwritten below.
-            cache_miss = None
+            cache_miss = None  # Detect before token_stats overwritten
             if api_usage.get("input"):
                 cache_miss = detect_cache_miss(api_usage, model)
                 token_stats["input"] = api_usage["input"]
@@ -491,11 +471,9 @@ whole conversation history, including compacted turns.
             ]
 
             if tool_use_blocks:
-                # Streamed args that failed to parse never execute: they get an is_error result.
-                malformed_by_id = {tb.id: tb.parse_error for tb in tool_use_blocks if tb.parse_error}
+                malformed_by_id = {tb.id: tb.parse_error for tb in tool_use_blocks if tb.parse_error}  # Failed parses get is_error
 
-                # Everything below keys on the INNER call; the transcript keeps the literal use_tool_ block.
-                calls = {tb.id: resolve_call(tb) for tb in tool_use_blocks}
+                calls = {tb.id: resolve_call(tb) for tb in tool_use_blocks}  # Keys on inner call; literal in transcript
 
                 content_blocks = []
                 if thinking_block:
@@ -800,6 +778,8 @@ whole conversation history, including compacted turns.
 
                 msgs.append({"role": "user", "content": tool_result_blocks})
                 pending = None
+                # Results are durable before the next model call, not after it.
+                store_msgs(project_dir, msgs)
 
                 # The one safe point to splice plain user messages between tool rounds.
                 yield {"type": "turn_boundary"}

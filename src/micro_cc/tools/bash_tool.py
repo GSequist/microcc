@@ -18,7 +18,7 @@ _SHELL = shutil.which("bash") or "/bin/bash"
 
 # Secrets stripped from every bash_ subprocess env. Built-ins cover microcc's
 # own; MICROCC_BASH_ENV_DENYLIST (comma-separated) adds an embedding app's own.
-_DENIED_ENV = {"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "MICRO_CC_POSTGRES_URL"}
+_DENIED_ENV = {"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "MICRO_CC_POSTGRES_URL", "MICRO_CC_MIRROR_POSTGRES_URL"}
 
 
 def _bash_env() -> dict:

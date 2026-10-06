@@ -1,17 +1,4 @@
-"""Single-select list picker. Layer 1 only (see chat): a dumb, reusable
-component with plain callback attributes, no async/Future inside it —
-whatever opens one wires on_select/on_cancel to its own cleanup and
-resolves its own asyncio.Future/whatever at the call site. Covers every
-current single-choice picker (slash, at, model, rewind, login) and the
-single-choice branch of an ask_user_question stage — all of them are
-"list of {label, description}, pick one".
-
-Item shape mirrors tools/ask_user_tool.py's AskOption exactly
-(label + description, both plain strings) so a question's options can be
-handed to this directly with no reshaping — value defaults to label
-when nothing else makes sense as a stable id (that's also exactly what
-the current Textual pickers do: Option(label, id=label)).
-"""
+"""Single-select list picker with label/description items."""
 
 from dataclasses import dataclass, field
 
@@ -23,11 +10,7 @@ PRIMARY_COLUMN_GAP = 2
 MIN_DESCRIPTION_WIDTH = 10
 DEFAULT_PRIMARY_MIN = 12
 DEFAULT_PRIMARY_MAX = 32
-# One long description must not be able to blow the whole panel past the
-# terminal height on its own (see start_live_tui_'s ask-question overflow —
-# alt_screen_.render's "keep last `height` rows" fallback then eats the
-# question text and the panel's own top rows). Capping per-item growth here
-# is what makes a bounded max_visible in the caller actually bound the total.
+# Cap per-item lines to bound total panel height; prevents long descriptions from blowing past terminal.
 MAX_DESC_LINES = 3
 
 
@@ -50,10 +33,7 @@ def _truncate(text: str, max_width: int, ellipsis: str = "\u2026") -> str:
 
 
 def _wrap_text_capped(text: str, width: int, max_lines: int) -> list[str]:
-    """_wrap_text, but hard-capped at `max_lines` — the last shown line gets
-    ellipsized if that drops real content, so a single pathologically long
-    description reads as truncated rather than silently eating the rest of
-    the panel's height."""
+    """Wrap text capped at max_lines with ellipsis to indicate truncation."""
     lines = _wrap_text(text, width)
     if len(lines) <= max_lines:
         return lines
@@ -66,9 +46,7 @@ def _wrap_text_capped(text: str, width: int, max_lines: int) -> list[str]:
 
 
 def _wrap_text(text: str, width: int) -> list[str]:
-    """Greedy word-wrap to `width` columns \u2014 a single word wider than
-    `width` on its own (a long path, a URL) gets hard-broken at the
-    column boundary instead of overflowing."""
+    """Greedy word-wrap with hard-break for words wider than width."""
     if width <= 0 or not text:
         return [""]
     lines: list[str] = []
@@ -91,8 +69,7 @@ def _wrap_text(text: str, width: int) -> list[str]:
 
 
 def wrap_in_border(lines: list[str], width: int) -> list[str]:
-    """Minimal single-line border shared by every picker overlay \u2014 thin
-    rounded corners, one space of padding, nothing ornamental."""
+    """Add minimal single-line border with rounded corners and padding."""
     inner_width = max(1, width - 2)
     top = "\u256d" + "\u2500" * inner_width + "\u256e"
     bottom = "\u2570" + "\u2500" * inner_width + "\u256f"
@@ -105,12 +82,7 @@ def wrap_in_border(lines: list[str], width: int) -> list[str]:
 
 
 class ListPicker:
-    """Component protocol (render/invalidate) plus handle_key. Up/down
-    clamp at the ends (no wraparound — that jumped straight from the
-    first item to the last, or vice versa, and read as a bug rather than
-    a feature). Shows a scrolling window of max_visible items centered on
-    the selection, with a "(n/total)" indicator once there are more items
-    than fit."""
+    """Scrolling single-select picker with up/down clamping and centered window."""
 
     def __init__(self, items: list[PickerItem] | None = None, max_visible: int = DEFAULT_MAX_VISIBLE,
                  primary_min: int = DEFAULT_PRIMARY_MIN, primary_max: int = DEFAULT_PRIMARY_MAX,
@@ -122,15 +94,12 @@ class ListPicker:
         self.primary_min = max(1, min(primary_min, primary_max))
         self.primary_max = max(1, max(primary_min, primary_max))
         self.theme = theme or default_theme()
-        # Per-item description wrap cap. Was the module constant MAX_DESC_LINES
-        # baked in directly, which ellipsized any hint past 3 lines even when
-        # the terminal had plenty of room — callers with a real height
-        # budget (e.g. the ask-question panel) can now size this to the
-        # actual available space instead.
+        # Per-item description wrap cap; allows callers to size based on available space.
         self.max_desc_lines = max(1, max_desc_lines)
         self._all_items: list[PickerItem] = list(items or [])
         self.items: list[PickerItem] = list(self._all_items)
         self.selected_index = 0
+        self._hit_rows: list[tuple[int, int, int]] = []  # (first_row, last_row, item index) inside the border
 
     # --- content -----------------------------------------------------
     def set_items(self, items: list[PickerItem]) -> None:
@@ -139,8 +108,7 @@ class ListPicker:
         self.selected_index = 0
 
     def set_filter(self, text: str) -> None:
-        """Prefix match on label, case-insensitive — same rule the real
-        _update_slash_picker uses today. Resets selection to the top."""
+        """Prefix match on label (case-insensitive); reset selection to top."""
         needle = text.lower()
         self.items = [it for it in self._all_items if it.label.lower().startswith(needle)] if needle else list(self._all_items)
         self.selected_index = 0
@@ -183,11 +151,18 @@ class ListPicker:
         if self.on_cancel is not None:
             self.on_cancel()
 
+    def click_row(self, row: int) -> bool:
+        """Select and confirm item at row; 0 is top border."""
+        for first, last, idx in self._hit_rows:
+            if first <= row <= last:
+                self.selected_index = idx
+                self._notify_change()
+                self.confirm()
+                return True
+        return False
+
     def handle_key(self, key: str) -> bool:
-        """key is a normalized name: 'up' / 'down' / 'enter' / 'escape'.
-        Returns True if this picker consumed it. Anything else (typed
-        characters) is the caller's own filter-text-box's business, not
-        this component's — the picker and search box are separate concerns."""
+        """Handle up/down/enter/escape; return True if consumed."""
         if key == "up":
             self.move_up()
         elif key == "down":
@@ -210,11 +185,14 @@ class ListPicker:
             return wrap_in_border([self.theme.no_match("  No matches")], width)
 
         lines: list[str] = []
+        self._hit_rows = []
         primary_width = self._primary_column_width()
         start = max(0, min(self.selected_index - self.max_visible // 2, len(self.items) - self.max_visible))
         end = min(start + self.max_visible, len(self.items))
         for i in range(start, end):
-            lines.extend(self._render_item(self.items[i], i == self.selected_index, inner_width, primary_width))
+            item_lines = self._render_item(self.items[i], i == self.selected_index, inner_width, primary_width)
+            self._hit_rows.append((len(lines) + 1, len(lines) + len(item_lines), i))
+            lines.extend(item_lines)
         if start > 0 or end < len(self.items):
             lines.append(self.theme.scroll_info(_truncate(f"  ({self.selected_index + 1}/{len(self.items)})", max(1, inner_width - 2))))
         return wrap_in_border(lines, width)
@@ -224,14 +202,7 @@ class ListPicker:
         return max(self.primary_min, min(widest, self.primary_max))
 
     def _render_item(self, item: PickerItem, is_selected: bool, width: int, primary_width: int) -> list[str]:
-        """One item -> one or more rendered lines. Label/description used
-        to always get truncated with an ellipsis to force a single line \u2014
-        now that pickers are as wide as their container (see
-        MicroTui._open_picker), that truncation was throwing away real
-        content on every long option for no reason. Still tries the
-        single-line two-column layout first (the common case for short
-        items); only wraps onto extra lines when label+description
-        genuinely don't both fit at the available width."""
+        """Render item as 1+ lines; try two-column layout, fall back to wrapped description."""
         prefix = "\u2192 " if is_selected else "  "
         prefix_w = visible_width(prefix)
         indent = " " * prefix_w
@@ -248,10 +219,7 @@ class ListPicker:
                     if is_selected:
                         return [style(f"{prefix}{item.label}{pad}{desc}")]
                     return [f"{prefix}{item.label}{pad}{self.theme.description(desc)}"]
-            # Narrow width, or the two-column single-line layout didn't fit
-            # both label and description: fall back to label then wrapped
-            # description below it — never just drop the description, a
-            # narrow terminal is exactly when the user needs it spelled out.
+            # Narrow width or two-column didn't fit: show label then wrapped description below.
             lines = [style(f"{prefix}{item.label}")]
             for wline in _wrap_text_capped(desc, max(1, width - prefix_w), self.max_desc_lines):
                 lines.append(style(f"{indent}{wline}") if is_selected else f"{indent}{self.theme.description(wline)}")

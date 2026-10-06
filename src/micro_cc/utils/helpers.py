@@ -9,21 +9,11 @@ import sys
 import warnings
 
 
-############################################################################################################
-
 load_dotenv(os.path.expanduser("~/.micro-cc/.env"))
 load_dotenv()
 
-############################################################################################################
-
 def get_endpoint() -> str:
-    """Infer endpoint from env vars. Ollama > Anthropic > Foundry > LiteLLM >
-    OpenRouter > OpenAI (explicit local/proxy wins over a bare API key).
-
-    OpenAI is deliberately last, not just unconfigured-fallback: a bare API
-    key must never outrank an explicit local/proxy endpoint, and a stale key
-    from a past login should not silently become the backend.
-    """
+    """Infer endpoint from env vars (proxies before bare keys)."""
     if os.getenv("OLLAMA_BASE_URL"):
         return "Ollama"
     if os.getenv("ANTHROPIC_OAUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY"):
@@ -54,16 +44,11 @@ def has_configured_endpoint() -> bool:
 ############################################################################################################
 
 _ROUTING_KEYS = ["OLLAMA_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "FOUNDRY_BASE_URL", "FOUNDRY_API_KEY", "LITELLM_BASE_URL", "LITELLM_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_BASE_URL", "OPENAI_API_KEY"]
-# OPENAI_API_KEY used to be exempt from the wipe because search_tool_'s
-# embeddings client shared it under every other provider. Tool discovery is
-# embedding-free now, so it's an ordinary routing var: a /login to another
-# provider clears it like every other provider's own keys.
+# OPENAI_API_KEY is an ordinary routing var now (tool discovery is embedding-free), cleared on /login.
 
 
 def apply_login(values: dict):
-    """Recreate ~/.micro-cc/.env from `values` — /login always sends the
-    full field set for the chosen provider, so each login replaces the file
-    instead of accumulating stale keys from a previous provider."""
+    """Recreate ~/.micro-cc/.env with new provider keys."""
     for key in _ROUTING_KEYS:
         os.environ.pop(key, None)  # clear this session's env, not just the file
     os.environ.update(values)
@@ -75,13 +60,7 @@ def apply_login(values: dict):
 
 
 def apply_project_keys(project_dir: str, values: dict):
-    """Append /keys-collected secrets to {project_dir}/.env — additive,
-    unlike apply_login's full-file replace, since these accumulate across
-    unrelated services instead of describing one provider config.
-
-    Deliberately does NOT touch this process's os.environ: these are
-    bash_-only secrets, sourced fresh off disk on every bash_ call (see
-    tools/bash_tool.py) rather than inherited by the long-running app."""
+    """Append secrets to project .env (sourced fresh per bash call)."""
     values = {k: v for k, v in values.items() if v}
     if not values:
         return
@@ -104,9 +83,7 @@ def apply_project_keys(project_dir: str, values: dict):
 
 
 def project_hash(project_dir: str) -> str:
-    """Stable short hash for a project path — keys per-project storage dirs
-    (message history under ~/.micro-cc, tool-result scratch under /tmp)
-    without leaking the raw path into a folder name."""
+    """Stable hash for project path (doesn't leak path in folder names)."""
     normalized = os.path.abspath(os.path.expanduser(project_dir))
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
@@ -122,12 +99,7 @@ _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
 
 def _extract_one_leading_image_path(text: str):
-    """Single-path detection — leading token of `text` if it's a quoted path
-    (spaces in the filename) or a plain/backslash-escaped whitespace-delimited
-    one, AND it resolves to an existing image file. Returns (remaining_text,
-    path) on match, else (text, None) unchanged. Building block for
-    extract_image_paths' multi-file loop below — not called directly
-    elsewhere."""
+    """Extract quoted/escaped leading image path from text."""
     stripped = text.strip()
     if not stripped:
         return text, None
@@ -139,18 +111,7 @@ def _extract_one_leading_image_path(text: str):
             return text, None
         candidate, remainder = stripped[1:end], stripped[end + 1:].strip()
     else:
-        # Unquoted path with a backslash-escaped space (`My\ Screenshot.png`)
-        # — what Terminal.app/iTerm2 actually insert for a dragged-in file
-        # whose name has spaces, as opposed to wrapping the whole path in
-        # quotes. A plain str.split(None, 1) would wrongly split mid-name.
-        #
-        # Only ASCII space/tab count as a delimiter here, not `.isspace()`'s
-        # full Unicode set — macOS screenshot filenames ("Screenshot ... at
-        # 12.52.53 AM.png") contain a narrow no-break space (U+202F) between
-        # the time and AM/PM, which the terminal does NOT backslash-escape
-        # (only literal 0x20 spaces get escaped), so `.isspace()` was
-        # breaking the candidate mid-filename right before that character.
-        i, n, raw = 0, len(stripped), []
+        i, n, raw = 0, len(stripped), []  # Parse backslash-escaped spaces only
         while i < n:
             if stripped[i] == "\\" and i + 1 < n and stripped[i + 1] == " ":
                 raw.append(" ")
@@ -169,14 +130,7 @@ def _extract_one_leading_image_path(text: str):
 
 
 def extract_image_paths(text: str):
-    """Detect one or more dropped/typed image file paths leading `text` —
-    what dragging file(s) in from Finder/Explorer inserts into a terminal
-    (paste events are text-only; there's no such thing as raw clipboard
-    image bytes reaching a TUI). Multiple dragged files land as multiple
-    quoted/backslash-escaped paths back-to-back, so this consumes leading
-    paths one at a time until the front of what's left isn't one. Returns
-    (remaining_text, [image_paths]) — paths is [] (and remaining_text is the
-    original text, untouched) when nothing at the front is an image file."""
+    """Extract leading image paths; return (remaining_text, paths)."""
     paths = []
     remaining = text
     while True:
@@ -193,25 +147,7 @@ _HISTORY_IMAGE_MAX_BASE64_BYTES = int(4.5 * 1024 * 1024)   # headroom under Anth
 
 
 def resize_image_for_history_(base64_data: str) -> str:
-    """Bound an image's actual pixel size and encoded byte size before it
-    enters msgs/messages.jsonl (claude_loop_.py's tool_result_blocks) —
-    the API request payload and the conversation's persisted history,
-    not the TUI's own display copy (message_row_.Image resizes
-    separately, purely for terminal rendering).
-
-    Without this, a native-resolution screenshot (sanitize_and_encode_image_
-    only converts format, never caps size) lands in messages.jsonl at
-    several MB, and tokenization_simple._approx_tokens' char-count
-    heuristic (len(json.dumps(content)) // 3) then counts that raw base64
-    string as if it were dense text — one unresized screenshot can
-    register as over a million "tokens", blowing the trim budget and
-    triggering checkpoint-fold/summarize on what's otherwise a tiny
-    conversation. Confirmed directly: an 8MB messages.jsonl with two
-    3.6MB lines drove tokens.json's trimmed count to 2,691,997 in a
-    17-message session.
-
-    Uses a 2000px longer-side cap, then a quality/size step-down loop until
-    under the byte budget or a floor is hit, balancing quality and file size."""
+    """Resize image to fit pixel/byte limits for history."""
     raw_bytes = base64.b64decode(base64_data)
     with Image.open(io.BytesIO(raw_bytes)) as img:
         with warnings.catch_warnings():
@@ -228,10 +164,7 @@ def resize_image_for_history_(base64_data: str) -> str:
             encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
             if len(encoded) <= _HISTORY_IMAGE_MAX_BASE64_BYTES:
                 return encoded
-        # Still over budget at the lowest quality tried — shrink dimensions
-        # further and take whatever that produces, rather than looping
-        # indefinitely chasing an exact byte target.
-        img = img.resize((img.width // 2, img.height // 2), Image.LANCZOS)
+        img = img.resize((img.width // 2, img.height // 2), Image.LANCZOS)  # Over budget: shrink and accept
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=40)
         return base64.b64encode(buffer.getvalue()).decode("ascii")
@@ -253,21 +186,14 @@ def sanitize_and_encode_image_(img_data):
                     buffer = io.BytesIO()
                     img.save(buffer, format="JPEG")
                     return base64.b64encode(buffer.getvalue()).decode("utf-8")
-    except Exception:
-        # Callers already filter out None (a failed image is silently
-        # dropped from the batch) — no print(): this can run inside a
-        # TUI's alt screen, where a bare print() lands wherever the
-        # cursor happens to be instead of anywhere the user would see it.
+    except Exception:  # Silent drop: can run in alt screen
         return None
 
 #################################
 
 
 def ollama_daemon_up(base_url: str = None) -> bool:
-    """Cheap reachability probe — just "is anything answering /api/tags",
-    no opinion on which models are pulled. Split out from check_ollama so
-    callers can tell "daemon is down" (fixable by launching it) apart from
-    "daemon is up but misconfigured" (needs a real /login fix)."""
+    """Check if Ollama daemon is responding."""
     import urllib.request
 
     base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -280,10 +206,7 @@ def ollama_daemon_up(base_url: str = None) -> bool:
 
 
 def start_ollama_daemon(timeout: float = 10.0) -> bool:
-    """Launch the Ollama daemon via `brew services start ollama` and poll
-    until it answers or `timeout` elapses. Blocking — run off the event
-    loop (e.g. asyncio.to_thread) when called from the TUI.
-    """
+    """Start Ollama via brew and wait until ready."""
     import subprocess
     import time
 
@@ -304,12 +227,7 @@ def start_ollama_daemon(timeout: float = 10.0) -> bool:
 
 
 def check_ollama(model: str, base_url: str = None) -> str:
-    """Validate Ollama daemon reachable and model pulled.
-
-    Non-fatal — called from inside /login while the TUI is already running,
-    so it returns a message instead of printing+sys.exit like a CLI preflight
-    would. Empty string means OK.
-    """
+    """Validate Ollama daemon and model (empty string = ok)."""
     import urllib.request
     import json as _json
 
@@ -337,8 +255,7 @@ def check_ollama(model: str, base_url: str = None) -> str:
 
 
 def check_openrouter(model: str, base_url: str = None) -> str:
-    """Validate a model slug against OpenRouter's public /models listing,
-    same non-fatal /login preflight as check_ollama. Empty string means OK."""
+    """Validate model on OpenRouter (empty string = ok)."""
     import urllib.request
     import json as _json
 
@@ -360,45 +277,17 @@ def check_openrouter(model: str, base_url: str = None) -> str:
     return ""
 
 
-# token_cutter's max_tokens only bounds conversation history — the system
-# prompt, tool schemas (tools=... on the model call), and per-loop dynamic
-# context (file-changes/process-status/summary/memory-manifest) all ride on
-# top of it, uncounted (see claude_loop_.py). ~2.3K tokens for the default
-# tool set alone, before MCP/discovered tools or a big CLAUDE.md are added —
-# 6K leaves headroom for those without eating into history budget.
-OLLAMA_PROMPT_RESERVE = 6000
+OLLAMA_PROMPT_RESERVE = 6000  # History only; system, tools, context uncounted
 OLLAMA_MIN_TRIM_BUDGET = 2000
 
 
 def compute_ollama_trim_budget(num_ctx: int, max_output: int) -> int:
-    """Derive token_cutter's history budget from the model's real context
-    window, so a small OLLAMA_NUM_CTX can't get handed a trim budget that
-    overflows it — num_ctx must cover trim_budget + OLLAMA_PROMPT_RESERVE +
-    max_output. Floors at OLLAMA_MIN_TRIM_BUDGET so a tiny num_ctx still
-    gets a usable (if tight) budget instead of going negative."""
+    """Compute history budget from context window with safety floors."""
     return max(OLLAMA_MIN_TRIM_BUDGET, num_ctx - max_output - OLLAMA_PROMPT_RESERVE)
 
 
 def effective_trim_budget(model: str) -> int:
-    """Real token budget for whatever's actively running right now — same
-    escape hatch and Ollama handling as start_live_._initial_trim_budget,
-    exposed here so non-UI callers (e.g. msg_store_'s compaction sizing)
-    can get it too without importing start_live_.
-
-    Ollama models aren't in the registry, so trim_budget_for's
-    context_window lookup would just floor to DEFAULT_TRIM_BUDGET and
-    ignore the real (often much smaller) local context window — derive
-    from OLLAMA_NUM_CTX/OLLAMA_MAX_OUTPUT instead. Every other endpoint
-    uses the model's registered context_window via trim_budget_for.
-
-    Must pass the resolved backend through to trim_budget_for — a bare
-    trim_budget_for(model) leaves backend=None, and a free-text OpenRouter
-    model (never in MODELS, so context_window lookup misses) then falls
-    through to trim_budget_for's generic DEFAULT_TRIM_BUDGET (100_000)
-    instead of BACKEND_DEFAULT_TRIM_BUDGET["openrouter"] (1_000_000) —
-    this is what caused compaction to floor at 100k despite the 1M
-    context_window declared in registry.py.
-    """
+    """Get active model's trim budget (respects OLLAMA_NUM_CTX)."""
     override = os.getenv("MICRO_CC_TRIM_BUDGET")
     if override:
         return int(override)

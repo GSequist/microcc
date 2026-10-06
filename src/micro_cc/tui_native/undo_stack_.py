@@ -1,10 +1,4 @@
-"""Generic undo stack with clone-on-push semantics. Stores deep copies of
-state snapshots, so later in-place mutation of the caller's live state can't
-retroactively corrupt a snapshot already sitting on the stack. Popped snapshots
-are handed back as-is (no re-copy needed — they're already detached from
-whatever pushed them).
-
-Implemented as a stateful class managing the stack."""
+"""Generic undo stack that deep-copies snapshots on push to isolate them from later mutation."""
 
 import copy
 from typing import Generic, TypeVar

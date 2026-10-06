@@ -1,41 +1,11 @@
-"""Bodies for the slash commands that work by prompting the model.
-
-/setup, /new-skill, /new-mcp, /headless and /batch don't drive bespoke
-pickers — they push a hidden <system-reminder> turn telling the model to
-read/edit config, interview the user and write the file itself (/headless
-and /batch instead just explain the corresponding CLI). /skills and /mcp
-are the read-only counterparts — same mechanism, but the model inspects
-what's actually on disk and reports back instead of creating anything. The
-TUI (screens/screen_cmds_.py) and the GUI (webui/server.py) both need the
-exact same text, so it lives here rather than inline in either surface.
-
-Each body below is injected ALONE, as a one-shot hidden turn for whichever
-single slash command the user actually typed (see build() at the bottom) —
-never alongside any other body. If a body names another command by name,
-either (a) keep the referencing sentence fully self-contained — a bare "and
-there's also /X for that" pointer is fine, since the model isn't claiming
-to know /X's contents — or (b) inline the specific fact being relied on
-(a term, a flag, a mechanism) rather than assuming the model already
-learned it from /X's own hidden turn, which it never saw unless the user
-happened to type /X earlier in this same conversation.
-"""
+"""Prompt bodies for slash commands that inject hidden system-reminder turns."""
 
 import os
 
 import micro_cc
 from micro_cc.models.registry import MODEL_OPTIONS
 
-# Absolute base for every "read this file" pointer below, resolved once
-# from wherever micro_cc is ACTUALLY installed for this process (editable
-# dev install vs a real pip install) — the same technique
-# `python3 -c "import micro_cc, os; print(os.path.dirname(micro_cc.__file__))"`
-# uses. A bare relative hint like "src/micro_cc/foo.py" is meaningless to a
-# model running against an arbitrary user project_dir (not the micro-cc
-# repo) — it has no cwd relationship to that path at all. The observed
-# failure mode from leaving these relative: the model reached for
-# `find / -name foo.py` to compensate, which reliably blows past bash_'s
-# 120s timeout on a real disk. Interpolating the real absolute path here
-# means read_ just works, no search required.
+# Absolute base for file pointers — model would timeout searching if left relative.
 _PKG_DIR = os.path.dirname(os.path.abspath(micro_cc.__file__))
 
 SETUP = (
@@ -44,7 +14,10 @@ SETUP = (
     "  - settings.json — {model, dangerous: [tool names gated behind "
     "approval], tokens_budget}\n"
     "  - statusline.sh — controls the status bar shown under the "
-    "input; it's self-documenting, read its header comments before "
+    "input. It may not exist: then the builtin default runs from "
+    "~/.micro-cc/cache/statusline.default.sh (harness-owned, rewritten each "
+    "boot, never edit it). To customize, copy that to ~/.micro-cc/statusline.sh "
+    "(chmod +x) and edit the copy. It's self-documenting, read its header comments before "
     "changing it - you can add new things like for example len(memories) "
     "styling it - keep same minimal style as current statusline.sh\n"
     "  - theme.json — {name, colors: {<token>: \"#rrggbb\", ...}} — every "
@@ -88,6 +61,10 @@ SETUP = (
     "X', 'add a tool that does Y', 'change how you plan', 'wake me in 20 "
     "minutes' (monitor_ has a schedule action) — you can implement it in "
     "the source and it will take effect. Say so plainly and concretely. "
+    "Prefer a mod over a source edit: anything on screen beyond the status "
+    "bar text, a slash command or a key binding goes in "
+    "~/.micro-cc/mods/<name>/mod.py (read the customizing-micro-cc skill "
+    "first). Mods survive /update; source edits don't. "
     "Only touch the harness's own source when the user actually asks for a "
     "behavior change; for their project's files, that's just normal work.\n"
 )
@@ -505,7 +482,7 @@ PROMPT_BODIES = {
 
 
 def build(name: str, extra: str = "") -> str:
-    """Wrap a body into the hidden turn that actually gets sent."""
+    """Wrap a prompt body into the hidden system-reminder turn."""
     return (
         "<system-reminder>\n"
         + PROMPT_BODIES[name]

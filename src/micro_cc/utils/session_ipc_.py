@@ -1,13 +1,5 @@
-"""Direct process-to-process messaging between live micro-cc sessions.
-
-Each running TUI binds a Unix domain socket at
-~/.micro-cc/projects/{name}_{hash}/session.sock (same storage dir msg_store_
-already keys by project_dir). message_session_ (tools/message_session_.py)
-connects to a target project's socket and hands it a JSON payload directly —
-no polling, no on-disk inbox. If the socket isn't there, that session simply
-isn't running right now; there is no offline delivery, same as the real
-feature this mirrors.
-"""
+"""Direct messaging between live sessions via Unix domain sockets.
+No polling, no offline delivery — socket must exist for active session."""
 
 import asyncio
 import json
@@ -35,9 +27,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def list_peers(exclude_project_dir: str | None = None) -> list[dict]:
-    """Live TUI sessions registered in ~/.micro-cc/sessions/<pid>.json (what
-    start_listener writes), minus `exclude_project_dir` (the caller). Entries
-    whose pid is dead or whose socket is gone are swept."""
+    """List live sessions excluding exclude_project_dir; clean up stale entries."""
     me = os.path.abspath(os.path.expanduser(exclude_project_dir)) if exclude_project_dir else None
     peers = []
     for f in _registry_dir().glob("*.json"):
@@ -59,16 +49,7 @@ def socket_path(project_dir: str) -> Path:
 
 
 async def start_listener(project_dir: str, on_message):
-    """Bind this project's socket. `on_message(from_dir, text)` is called
-    for each inbound message, on the same asyncio loop as the caller —
-    Textual apps already run their own loop, so this attaches straight into
-    it and the callback can touch app/widget state directly.
-
-    A leftover socket file from an unclean previous exit makes bind() raise
-    "address already in use" — remove it first, it can't belong to a still
-    -running listener (that process would have removed it, and two live
-    TUIs on the same project_dir isn't a supported setup regardless).
-    """
+    """Bind Unix socket for this project; call on_message on each inbound message."""
     path = socket_path(project_dir)
     if path.exists():
         path.unlink()
@@ -106,9 +87,7 @@ def stop_listener(project_dir: str, server) -> None:
 
 
 async def send_message(target_project_dir: str, from_dir: str, message: str) -> str:
-    """Deliver `message` to the live session at target_project_dir. Returns
-    a short status string meant to go straight back to the calling model as
-    the tool result."""
+    """Deliver message to target session; return status string."""
     path = socket_path(target_project_dir)
     if not path.exists():
         return f"no live session at {target_project_dir} — it must be open in another terminal to receive messages"

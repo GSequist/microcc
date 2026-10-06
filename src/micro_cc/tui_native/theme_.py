@@ -1,8 +1,4 @@
-"""Styling as plain functions, not a stylesheet. Replaces microcc-styles.tcss's
-job for anything built in tui_native/: a component takes a Theme (or the
-default one) in its constructor and calls theme.selected_text(s) instead of a
-CSS selector matching it. TCSS has no equivalent here, since Textual's
-cascade/selectors/$vars don't exist once App is gone."""
+"""Styling as plain functions for tui_native components; a Theme replaces CSS selectors."""
 
 from dataclasses import dataclass
 from typing import Callable
@@ -25,22 +21,13 @@ class Theme:
 
 
 def _sgr(hexcode: str) -> str:
-    """#rrggbb -> an SGR foreground sequence. The pickers paint raw ANSI
-    (they return list[str] straight into the frame), so unlike every other
-    consumer they can't hand a hex to Rich — this is the one place a hex has
-    to become escape codes by hand. Parsed once per call site, not per
-    character."""
+    """#rrggbb -> SGR foreground sequence (pickers paint raw ANSI, not Rich)."""
     r, g, b = int(hexcode[1:3], 16), int(hexcode[3:5], 16), int(hexcode[5:7], 16)
     return f"\x1b[38;2;{r};{g};{b}m"
 
 
 def default_theme() -> Theme:
-    """The picker Theme, built from the active color set.
-
-    Everything except `checked` is theme-independent by construction:
-    inverse-video (the selection bar) and dim are terminal attributes that
-    read correctly on either ground. Only the checked-item color is a real
-    color, so it's the only token read here."""
+    """The picker Theme from the active color set; only `checked` is a real color."""
     from micro_cc.utils import theme_store_
     return Theme(
         selected_text=_wrap("\x1b[7m"),        # inverse video — picker cursor row

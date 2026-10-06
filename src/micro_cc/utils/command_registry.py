@@ -1,26 +1,4 @@
-"""Single source of truth for available slash commands.
-
-Both the TUI's autocomplete dropdown (start_live_.py) and the GUI's command
-palette (webui/server.py) read their command list from COMMANDS below
-instead of keeping their own — this is what broke when /headless and /batch
-landed only in the TUI and were missed in the GUI. Add a command here once
-and both surfaces pick it up; screens/screen_cmds_.py asserts its handler
-dicts stay in sync with this list, so a command with no handler (or a
-handler with no registry entry) fails fast at import time instead of
-silently missing from one surface.
-
-This module is metadata only — it does not dispatch anything itself:
-  - "prompt" kind commands push a hidden <system-reminder> turn; the body
-    lives in hidden_prompts.PROMPT_BODIES under the same name.
-  - "action"/"ui"/"tui" kind commands are handled directly by each surface
-    (screens/screen_cmds_.py for the TUI, inline in webui/server.py for the
-    GUI) — kind just tells the GUI whether to run it, handle it client-side,
-    or refuse (tui commands handle secrets and the GUI won't touch those).
-
-`gui=False` marks commands that only make sense inside the TUI itself
-(quitting the process, self-update, handing off to the browser) and are
-omitted from the GUI's command palette.
-"""
+"""Command registry shared by TUI and GUI; gui=False marks TUI-only commands."""
 
 COMMANDS = [
     {"name": "/model", "hint": "switch model", "kind": "ui"},
@@ -46,12 +24,7 @@ COMMANDS = [
         "hint": "orchestrate multiple headless subagents toward a goal — diagram first, then spawn/monitor/adjust",
         "kind": "prompt",
         "takes_args": True,
-        # TUI-only: subagent checkpoint wakeup only reaches the Textual app
-        # (a Textual set_interval, see start_live_.py's _poll_subagents_tick)
-        # — a browser-driven session gets no notification at all if a
-        # subagent finishes/pauses, so starting orchestration from here
-        # would silently promise something it can't deliver.
-        "gui": False,
+        "gui": False,  # TUI-only: subagent checkpoint wakeup is TUI-only (set_interval).
     },
     {
         "name": "/message-session",
@@ -64,11 +37,7 @@ COMMANDS = [
         "hint": "start/resume an autonomous measure-change-keep-or-revert loop against a metric",
         "kind": "prompt",
         "takes_args": True,
-        # TUI-only: the live .auto/log.jsonl status line above the prompt
-        # input only exists in start_live_tui_.py's poller — a browser
-        # session has no ambient display for round-by-round progress, same
-        # reasoning as /graph being TUI-only above.
-        "gui": False,
+        "gui": False,  # TUI-only: .auto/log.jsonl progress only in TUI poller.
     },
     {
         "name": "/doctor",

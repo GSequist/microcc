@@ -1,10 +1,4 @@
-"""Persist oversized tool results to /tmp instead of truncating them.
-
-/tmp (not ~/.micro-cc or project_dir) is deliberate: results here are
-scratch, not durable state. No home-directory clutter, and nothing to clean
-up ourselves — the OS clears /tmp on reboot/container restart. If the model
-never reads the file back, it's gone on its own; no discipline required.
-"""
+"""Persist oversized tool results to /tmp (auto-cleaned on reboot)."""
 import tempfile
 from pathlib import Path
 
@@ -19,9 +13,7 @@ def _tool_results_dir(project_dir: str) -> Path:
 
 
 def persist_and_preview(content: str, tool_use_id: str, project_dir: str, cap: float) -> str:
-    """Caller has already confirmed len(content) > cap. Writes the full
-    content to /tmp and returns a preview + pointer to use as the
-    tool_result content in place of the original."""
+    """Persist content to /tmp; return preview and path pointer."""
     path = _tool_results_dir(project_dir) / f"{tool_use_id}.txt"
     path.write_text(content)
     preview = content[:PREVIEW_CHARS]

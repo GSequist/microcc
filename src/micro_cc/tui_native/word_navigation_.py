@@ -1,12 +1,4 @@
-"""Word navigation for alt+left/alt+right word-jump logic. Implements
-findWordBackward/findWordForward segmentation and cursor movement.
-
-Uses default UAX#29 word-break rules: one segment per CJK ideograph, standard
-breaking for ASCII. Python's stdlib has no equivalent to CJK word-break
-dictionaries (ICU data tables + Viterbi-style segmentation), so default_segment()
-below implements plain default UAX#29 instead. This matches standard behavior
-for ASCII text and degrades gracefully on CJK rather than silently.
-"""
+"""Word navigation with UAX#29 segmentation; default rules, no CJK dictionary."""
 
 from __future__ import annotations
 
@@ -14,32 +6,21 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-# Direct port of utils.ts PUNCTUATION_REGEX. Used both to classify a
-# lone character as punctuation and, within a word-like segment (see
-# default_segment's apostrophe rule), to find ASCII punctuation
-# boundaries a segmenter merged into one word (e.g. "don't").
+# Classify character as punctuation and find punctuation boundaries in merged words.
 PUNCTUATION_REGEX = re.compile(r"[(){}\[\]<>.,;:'\"!?+\-=*/\\|&%^$#@~`]")
 
-# CJK Unified Ideographs + common extension/compat blocks. Deliberately
-# narrow (no Hiragana/Katakana/Hangul) — this only needs to be "reasonable",
-# not exhaustive.
+# CJK Unified Ideographs + common extensions; deliberately narrow (reasonable, not exhaustive).
 _CJK_RANGES = ((0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0xF900, 0xFAFF))
 
 
 def is_whitespace_char(s: str) -> bool:
-    """Port of utils.ts isWhitespaceChar(): true if `s` CONTAINS
-    whitespace anywhere (JS's unanchored /\\s/.test()), not that it's
-    entirely whitespace. Only ever called here on single-character or
-    pure-whitespace-run segments, so the distinction doesn't bite in
-    practice — kept faithful to the source regardless."""
+    """True if s contains whitespace anywhere (not entirely whitespace)."""
     return re.search(r"\s", s) is not None
 
 
 @dataclass
 class Segment:
-    """Stand-in for the fields of Intl.SegmentData that word-navigation.ts
-    actually reads (.segment, .isWordLike) — .index/.input are never
-    used by findWordBackward/findWordForward so they're dropped here."""
+    """Text run plus a flag marking it word-like."""
 
     segment: str
     is_word_like: bool
@@ -55,14 +36,7 @@ def _is_word_char(ch: str) -> bool:
 
 
 def default_segment(text: str) -> list[Segment]:
-    """Default UAX#29 word segmentation, no CJK dictionary (see module
-    docstring). Word runs may absorb a single apostrophe flanked by
-    word characters on both sides ("don't" -> one segment), matching
-    Intl.Segmenter's MidLetter rule as observed against a real Node
-    runtime; every other non-word, non-whitespace character is its own
-    one-character segment, also matching observed Intl.Segmenter output
-    (e.g. "foo...bar" -> three separate "." segments, never one "...").
-    """
+    """Default UAX#29 segmentation; apostrophes absorbed into word runs."""
     segments: list[Segment] = []
     i = 0
     n = len(text)
@@ -101,22 +75,14 @@ def default_segment(text: str) -> list[Segment]:
 
 @dataclass
 class WordNavigationOptions:
-    """When omitted, findWordBackward/findWordForward use default_segment.
-
-    segment: custom segmenter returning Segments for the given text.
-    is_atomic_segment: predicate identifying segments that should be
-    treated as single units (e.g. paste markers)."""
+    """Options: custom segment function and atomic segment predicate."""
 
     segment: Callable[[str], Iterable[Segment]] | None = None
     is_atomic_segment: Callable[[str], bool] | None = None
 
 
 def find_word_backward(text: str, cursor: int, options: WordNavigationOptions | None = None) -> int:
-    """Cursor position after moving one word backward from `cursor` in
-    `text`. Skips trailing whitespace, then stops at the next
-    word/punctuation boundary.
-
-    Pure function — does not mutate any state."""
+    """Move one word backward from cursor; skip trailing whitespace."""
     if cursor <= 0:
         return 0
 
@@ -137,10 +103,7 @@ def find_word_backward(text: str, cursor: int, options: WordNavigationOptions | 
     if is_atomic(last.segment):
         new_cursor -= len(last.segment)
     elif last.is_word_like:
-        # Stop right after the last embedded punctuation mark instead of
-        # jumping over the whole segment — a segmenter may merge e.g.
-        # "don't" into one word-like unit, but the cursor should still
-        # stop at the apostrophe like it would for a plain word boundary.
+        # Stop at embedded punctuation (e.g. apostrophe in "don't").
         matches = list(PUNCTUATION_REGEX.finditer(last.segment))
         if not matches:
             new_cursor -= len(last.segment)
@@ -159,11 +122,7 @@ def find_word_backward(text: str, cursor: int, options: WordNavigationOptions | 
 
 
 def find_word_forward(text: str, cursor: int, options: WordNavigationOptions | None = None) -> int:
-    """Cursor position after moving one word forward from `cursor` in
-    `text`. Skips leading whitespace, then stops at the next
-    word/punctuation boundary.
-
-    Pure function — does not mutate any state."""
+    """Move one word forward from cursor; skip leading whitespace."""
     if cursor >= len(text):
         return len(text)
 
@@ -184,9 +143,7 @@ def find_word_forward(text: str, cursor: int, options: WordNavigationOptions | N
     if is_atomic(current.segment):
         new_cursor += len(current.segment)
     elif current.is_word_like:
-        # Stop right at the first embedded punctuation mark rather than
-        # the end of the segment — mirrors find_word_backward's symmetric
-        # handling of a segmenter-merged unit like "don't".
+        # Stop at first embedded punctuation (mirror of find_word_backward).
         match = PUNCTUATION_REGEX.search(current.segment)
         new_cursor += match.start() if match else len(current.segment)
     else:

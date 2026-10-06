@@ -1,21 +1,4 @@
-"""ScrollView: a component that wraps another component and shows only a
-scrollTop-relative window of its rendered output, with a real state
-machine for "stay pinned to the bottom as content grows" (follow-end /
-sticky scroll) instead of a bare on/off flag.
-
-Layout-model note: a real terminal-UI layout engine keeps content and
-viewport as separate rectangles with independent screen positions, and
-"windowing" happens by translating the content rectangle upward by
-scrollTop and letting a clip rectangle hide whatever falls outside the
-viewport. This module doesn't have that rectangle/clip tree (stack_.py's
-VStack works in flat lists of strings, not positioned boxes), so it gets
-the same *effect* the direct way: render the child's full content, then
-slice out exactly `viewport_height` lines starting at `scroll_top`. Same
-visible result, no rectangle math. Revisit if a future feature needs a
-child positioned at an arbitrary (x, y) independent of stack order (a
-floating widget, non-VStack layout) — that's when the rectangle/clip
-version actually earns its complexity.
-"""
+"""ScrollView wraps a component with windowing and follow-end (sticky-scroll) state."""
 
 from dataclasses import dataclass
 
@@ -65,11 +48,7 @@ class ScrollView:
 
     # --- Component protocol --------------------------------------------
     def render(self, width: int) -> list[str]:
-        """Full, unwindowed content — the same thing update_layout wants
-        as its content_height input. Whoever places this ScrollView inside
-        a fixed-height slot (VStack, currently, via get_scrolled_lines) is
-        responsible for cutting this down to the visible window; render()
-        alone doesn't know its own allocated height."""
+        """Return full, unwindowed content; caller handles windowing via get_scrolled_lines."""
         return self.child.render(width)
 
     def invalidate(self) -> None:
@@ -77,27 +56,13 @@ class ScrollView:
 
     # --- the windowing hook VStack looks for -----------------------------
     def get_scrolled_lines(self, full_lines: list[str], viewport_height: int) -> list[str]:
-        """Called once per frame by whatever allocated this ScrollView a
-        height (VStack._compose looks for this method by name on every
-        child). Updates scroll state for this frame's real numbers, then
-        returns exactly viewport_height lines starting at the resulting
-        scroll_top, padded with empty lines if content is shorter than
-        the viewport."""
+        """Update scroll state and return viewport_height lines starting at scroll_top."""
         self.update_layout(len(full_lines), viewport_height)
         top = self._scroll_top
         window = full_lines[top: top + viewport_height]
         if len(window) < viewport_height:
             window = window + [""] * (viewport_height - len(window))
-        # A Kitty image's escape sequence lives on only the first of its
-        # several reserved rows (see detect_images_.crop_kitty_image_line's
-        # docstring) — a plain slice either includes that line whole or
-        # drops it whole, so scrolling the window's top edge into the
-        # middle of an image made it disappear entirely rather than
-        # partially. Checking `window` here (instead of full_lines) would
-        # defeat the entire fix: the exact case this handles is the escape
-        # sequence line having already scrolled out of the naive slice —
-        # window legitimately has zero "\x1b_G" occurrences in that case
-        # even though some of the image's padding rows are still in it.
+        # Kitty image escape sequence lives on first row only; crop partial windows.
         if any("\x1b_G" in line for line in full_lines):
             for start, row_count in find_kitty_image_spans(full_lines):
                 end = start + row_count
@@ -113,13 +78,7 @@ class ScrollView:
         return window
 
     def find_component_at(self, row: int):
-        """`row` here is viewport-relative (0 = the first visible row on
-        screen) — VStack.find_component_at hands it in exactly that shape
-        for any child it finds this method on. Translate to content-
-        relative (scroll_top + row) before delegating to whatever's
-        wrapped, since that's the coordinate space the child's own offsets
-        were computed in. Out of the viewport (past what update_layout
-        last saw) returns None rather than guessing."""
+        """Find component at viewport-relative row; translate to content-relative."""
         if not (0 <= row < self._viewport_height):
             return None
         content_row = self._scroll_top + row
@@ -129,27 +88,8 @@ class ScrollView:
         return self.child
 
     def update_layout(self, content_height: int, viewport_height: int) -> None:
-        """Recompute scroll_top/following_end for this frame's real
-        content/viewport sizes. Order of operations matters here (this is
-        the actual sticky-scroll fix, not a bare flag):
-          1. Clamp content/viewport to non-negative.
-          2. If we were following the end last frame, snap to the new
-             bottom unconditionally — this is what makes newly streamed-in
-             content keep the view pinned down instead of leaving it stuck
-             wherever the old max_scroll_top used to be.
-          3. Otherwise just re-clamp the existing scroll_top into range
-             (viewport got bigger/smaller, or content shrank).
-          4. If that clamp put us strictly above the new bottom, any
-             earlier "don't re-engage follow" suppression no longer
-             applies — the user scrolling back up and content then
-             shrinking underneath them shouldn't leave a stale suppression
-             flag lying around forever.
-          5. Only *re-arm* follow-end (when it was off) if we're now
-             exactly at the bottom AND nothing explicitly suppressed that
-             (see scroll_to's disable_follow) — landing on the last line by
-             coincidence during a manual scroll shouldn't silently turn
-             sticky-scroll back on underneath the user.
-        """
+        """Recompute scroll_top/following_end; snap to bottom if following, else re-clamp."""
+        # Order of operations: clamp, snap if following, clamp suppression, re-arm on-bottom.
         self._content_height = max(0, content_height)
         self._viewport_height = max(0, viewport_height)
         max_top = self.max_scroll_top
@@ -174,10 +114,7 @@ class ScrollView:
         self._follow_suppressed_at_end = next_suppressed
 
     def scroll_by(self, lines: int) -> int:
-        """Move by `lines` (negative = up), clamped to content bounds.
-        Returns the leftover amount that didn't fit (0 if it all applied)
-        — lets a caller chain the remainder into an outer scrollable
-        region once nested scroll areas exist."""
+        """Move by lines (negative = up); return leftover that didn't fit."""
         requested = int(lines)
         if requested == 0:
             return 0
@@ -192,9 +129,7 @@ class ScrollView:
 
     def scroll_to_start(self) -> None:
         self._scroll_top = 0
-        # Only re-arm follow-end if there's nothing to scroll at all — if
-        # there's real content below the viewport, jumping to the top is
-        # explicitly "I want to read from here", not "resume following".
+        # Re-arm follow-end only if content fits viewport (nothing to scroll).
         self._following_end = self._follow_end and self._content_height <= self._viewport_height
         self._follow_suppressed_at_end = False
 

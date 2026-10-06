@@ -8,8 +8,7 @@ _BADGE_BG = (255, 0, 0, 230)
 _BADGE_TEXT_COLOR = (255, 255, 255)
 _MAX_DRAWN = 50  # max boxes on screenshot (readability)
 
-# Stored element map — overwritten on each annotate_screenshot() call.
-# Maps element number → {click_x, click_y, label, tag}
+# Element map: {number: {click_x, click_y, label, tag}}, reset on each call.
 element_map: dict[int, dict] = {}
 
 
@@ -21,21 +20,13 @@ def _load_font(size=_FONT_SIZE):
 
 
 def annotate_screenshot(img_path: str, elements: list[dict]) -> str:
-    """Draw numbered bounding boxes on a screenshot and store ALL elements in element_map.
-
-    - Top 50 elements get red boxes drawn on the screenshot
-    - ALL elements stored in element_map with native click coordinates
-    - ALL elements included in the returned text index
-
-    Each element dict must have: x, y, width, height, label, tag
-    Optional: click_x, click_y (native coords — if omitted, center of box used)
-    """
+    """Draw numbered boxes on top 50 elements; store all in map, return text index."""
     element_map.clear()
 
     if not elements:
         return ""
 
-    # Store ALL elements in map
+    # Store all elements in map with native click coordinates.
     for i, el in enumerate(elements, 1):
         idx = el.get("index", i)
         cx = el.get("click_x", el["x"] + el["width"] / 2)
@@ -45,7 +36,7 @@ def annotate_screenshot(img_path: str, elements: list[dict]) -> str:
             "label": el.get("label", ""), "tag": el.get("tag", ""),
         }
 
-    # Draw boxes on screenshot for top N only
+    # Draw boxes only for top _MAX_DRAWN elements (readability).
     draw_elements = elements[:_MAX_DRAWN]
 
     img = Image.open(img_path).convert("RGBA")
@@ -77,7 +68,7 @@ def annotate_screenshot(img_path: str, elements: list[dict]) -> str:
 
 
 def _format_index(elements: list[dict]) -> str:
-    """Element index with native click coordinates ready to use."""
+    """Format element index with native click coordinates."""
     lines = []
     for i, el in enumerate(elements, 1):
         idx = el.get("index", i)

@@ -3,16 +3,12 @@ import difflib
 from rich.syntax import Syntax
 from rich.text import Text
 
-# Matches CleanMarkdown's own code-block theme (md_render_.py) — a diff and
-# a plain code block should read as the same visual family.
-# Colors come from the active theme set (utils/theme_store_) — the syntax
-# theme is a Pygments name, the line tints are hex backgrounds.
+# Matches CleanMarkdown's code-block theme; colors come from the active theme set.
 from micro_cc.utils import theme_store_
 
 
 def _format_range(start: int, stop: int) -> str:
-    """Same range format difflib.unified_diff's hunk headers use
-    (start,length — 1-length ranges collapse to just the line number)."""
+    """Unified diff range format: start,length (1-length ranges as line number)."""
     length = stop - start
     beginning = start + 1 if length else start
     return f"{beginning},{length}" if length != 1 else f"{beginning}"
@@ -26,16 +22,7 @@ def _highlighted_lines(code: str, lexer_name: str) -> list[Text]:
 
 
 def build_diff_lines(old: str, new: str, file_path: str = "", context: int = 3) -> list[Text]:
-    """Unified diff, syntax-highlighted per the file's own language (guessed
-    from file_path via Pygments, same as any other code block) rather than
-    generically diff-colored. This provides real code highlighting under a +/-
-    gutter and red/green line tinting, rather than just red-text/green-text.
-
-    old_hi/new_hi are each highlighted ONCE over the full text (not per
-    line) so multi-line constructs a per-line Syntax call would lose
-    context on — a triple-quoted string, a multi-line comment — still
-    tokenize correctly; splitting the result on "\\n" afterwards is free.
-    """
+    """Pygments-highlighted unified diff; old/new are highlighted once so multi-line tokens survive."""
     lexer_name = Syntax.guess_lexer(file_path, code=new or old) if file_path else "text"
     old_lines = old.splitlines()
     new_lines = new.splitlines()

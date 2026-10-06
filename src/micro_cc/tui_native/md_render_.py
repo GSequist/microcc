@@ -1,10 +1,4 @@
-"""
-Customized Rich Markdown rendering.
-
-Subclasses rich.markdown.Markdown to fix:
-- CodeBlock: no full-width background, no padding (was thick panels)
-- Heading h1: left-aligned, not centered
-"""
+"""Customized Rich Markdown: clean code blocks, left-aligned headings."""
 
 from rich.markdown import Markdown, CodeBlock, Heading
 from rich.syntax import Syntax
@@ -17,17 +11,7 @@ from micro_cc.utils import theme_store_
 
 
 def rich_theme() -> Theme:
-    """Rich's built-in markdown styles, rebuilt from the active color set.
-
-    Rich's own defaults were picked against a dark terminal — `markdown.code`
-    is literally cyan-on-black, and the table/bullet accents are pale cyans
-    that vanish on white. So these are overridden from theme_store_ rather
-    than left at Rich's defaults; every value is a hex the file supplies, so
-    editing theme.json restyles the markdown too.
-
-    Built fresh per call (a Theme is cheap, and rendering is cached upstream
-    per width) so a live /theme switch can't keep painting the old set.
-    """
+    """Markdown styles from active color set; rebuilt fresh per call for live /theme switch."""
     c = theme_store_.get
     return Theme({
         "markdown.code": f"bold {c('inline_code')} on {c('code_bg')}",
@@ -46,7 +30,7 @@ def rich_theme() -> Theme:
 
 
 class CleanCodeBlock(CodeBlock):
-    """Code block without full-width background panel."""
+    """Code block without full-width background or padding."""
 
     def __rich_console__(
         self, console: Console, options: ConsoleOptions
@@ -63,7 +47,7 @@ class CleanCodeBlock(CodeBlock):
 
 
 class CleanHeading(Heading):
-    """Heading that's always left-aligned (h1 not centered)."""
+    """Left-aligned heading (h1 not centered)."""
 
     def __rich_console__(
         self, console: Console, options: ConsoleOptions
@@ -74,15 +58,7 @@ class CleanHeading(Heading):
 
 
 class CleanMarkdown(Markdown):
-    """Markdown with clean code blocks, left-aligned headings, and body
-    text pulled back from full-bright default. Markdown.style defaults to
-    "none" (Style.null()), which leaves plain paragraph text with no color
-    override at all — it just inherits the widget's full-intensity `$text`,
-    which is what reads noticeably heavier than cc's assistant replies side
-    by side in the same terminal/font (this was previously misdiagnosed as
-    a terminal-font difference — it isn't, it's this). Only affects spans
-    with no explicit style of their own: headings/emphasis/code keep their
-    own Rich styles layered on top, same as before."""
+    """Markdown with clean code blocks, left-aligned headings, body text dimmed."""
 
     elements = {**Markdown.elements}
     elements["fence"] = CleanCodeBlock
@@ -90,18 +66,14 @@ class CleanMarkdown(Markdown):
     elements["heading_open"] = CleanHeading
 
     def __init__(self, markup: str, **kwargs):
-        # code_theme is a Pygments theme NAME from the active color set — a
-        # palette can't express a syntax theme, so theme.json carries it as
-        # the "syntax" token (e.g. "friendly" for light, "monokai" for dark).
-        # Applies to fenced blocks and inline `code` alike (Rich falls back
-        # to code_theme for inline unless inline_code_theme says otherwise).
+        # code_theme is Pygments theme name from active color set (e.g. "monokai").
         kwargs.setdefault("code_theme", theme_store_.get("syntax"))
         super().__init__(markup, **kwargs)
         self.style = theme_store_.get("fg")
 
 
 class DimMarkdown(CleanMarkdown):
-    """Same as CleanMarkdown but everything renders dim (for thinking)."""
+    """CleanMarkdown with everything rendered dim (for thinking)."""
 
     def __init__(self, markup: str, **kwargs):
         super().__init__(markup, **kwargs)

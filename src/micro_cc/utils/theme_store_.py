@@ -1,25 +1,4 @@
-"""THEME — the color set the whole TUI paints from.
-
-The colors live in ~/.micro-cc/theme.json (or Postgres when
-MICRO_CC_POSTGRES_URL is set, same toggle as settings_store_):
-
-    {"name": "white", "colors": {"bg": "#ffffff", "accent": "#c2185b", ...}}
-
-That file is the single source of truth. The app reads it and paints from
-whatever is in it — edit a hex by hand and the next render picks it up; run
-/theme to swap the whole set for a preset. There is no palette hardcoded in
-this module beyond the seed values below, which exist only to write a valid
-file on first run and to give /theme something to switch between.
-
-Every value is a plain color string (#rrggbb), so it can be handed straight
-to Rich (which takes hex natively) or dropped into an SGR sequence with no
-translation step. Keep it that way: a token that needed interpreting would
-defeat the point of the file being editable.
-
-Consumers must read get(token) at RENDER time, never cache a token in a
-module-level constant at import time — otherwise a live switch keeps
-painting the old palette.
-"""
+"""Color set store from ~/.micro-cc/theme.json, read at render time, not cached at import."""
 
 import json
 import os
@@ -29,8 +8,7 @@ from micro_cc.postgres_store import pg_store_
 
 _THEME_PATH = Path.home() / ".micro-cc" / "theme.json"
 
-# The keys a color set must define. Explicit so a typo in a consumer raises
-# KeyError at the call site instead of painting something invisible.
+# Required tokens — typos raise KeyError instead of painting invisible.
 TOKENS = (
     "bg", "fg", "accent", "warn", "error", "ok", "info", "paused", "running",
     "queued", "code_bg", "code_fg", "inline_code", "link", "link_url",
@@ -39,8 +17,7 @@ TOKENS = (
     "banner_colors", "banner_dim",
 )
 
-# Seed sets. These are written into the file, not read at runtime — see the
-# module docstring. "white" is the default a fresh install lands on.
+# Seed presets; "white" is the default for fresh installs.
 PRESETS = {
     "pitch": {
         "bg": "#000000",
@@ -98,15 +75,11 @@ PRESETS = {
         "diff_add_fg": "#2e7d32",
         "diff_del_fg": "#c62828",
         "syntax": "friendly",
-        # Mid-tone hues: the original pastels were picked against a dark
-        # ground and wash out on white.
         "banner_colors": ["#3d7d5e", "#5b7fc4", "#a86fc4", "#c45f85",
                           "#c47f52", "#3fa89e", "#a89a3f"],
         "banner_dim": "#9a9a9a",
     },
-    # Dieter Rams: an off-white body, warm greys, near-black type, and one warm
-    # accent doing the signalling. Mid-tones rather than true pastels — a real
-    # pastel washes out against a light ground, same note as the "white" set.
+    # Dieter Rams palette: off-white body, warm greys, one accent.
     "rams": {
         "bg": "#F2F0EB",
         "fg": "#2B2A26",
@@ -137,7 +110,7 @@ PRESETS = {
                           "#C2A05E", "#6F9C94", "#A79B62"],
         "banner_dim": "#A9A69D",
     },
-    # the same palette read against a warm near-black instead of off-white
+    # Rams palette on warm near-black.
     "rams dark": {
         "bg": "#1E1E1C",
         "fg": "#DAD7D0",
@@ -190,8 +163,7 @@ def _seed(name: str = DEFAULT_THEME) -> dict:
     return {"name": name, "colors": dict(PRESETS[name])}
 
 
-# Sticky for this process once a corrupt theme.json is reset — same contract
-# and same reason as settings_store_.was_reset_for_corruption.
+# Sticky flag for corrupt theme.json reset detection.
 _was_reset = False
 
 
@@ -200,9 +172,7 @@ def was_reset_for_corruption() -> bool:
 
 
 def _backfill(store: dict) -> dict:
-    """Fill tokens missing from an on-disk store (e.g. saved by an older
-    version of this module) with the matching preset's defaults, so a stale
-    theme.json doesn't KeyError on a newly added token."""
+    """Fill missing tokens with preset defaults to prevent KeyError on stale files."""
     preset = PRESETS.get(store.get("name"), PRESETS[DEFAULT_THEME])
     colors = store.setdefault("colors", {})
     missing = [t for t in TOKENS if t not in colors]
@@ -242,9 +212,7 @@ def _save(store: dict) -> None:
     _THEME_PATH.write_text(json.dumps(store, indent=2))
 
 
-# Cached for the process, but never at import time: the first read happens on
-# the first colors()/get() call, so a theme.json edited between process start
-# and first paint is still honoured.
+# Cached lazily on first colors()/get() call, not at import time.
 _store: dict | None = None
 
 
@@ -272,9 +240,8 @@ def get(token: str) -> str:
     return colors()[token]
 
 
-# --- live switching ------------------------------------------------------
-# alt_screen_ (OSC default bg/fg) and start_live_tui_ (cache invalidation +
-# re-render) register here so a switch repaints without a restart.
+# --- live switching ---
+# alt_screen_ and start_live_tui_ register here so a switch repaints without a restart.
 _listeners: list = []
 
 
@@ -290,9 +257,7 @@ def _apply(store: dict) -> None:
         try:
             cb(store.get("name", "custom"))
         except Exception:
-            # A listener blowing up must not leave the switch half-applied —
-            # the new set is already active and saved, so swallow and let the
-            # others run. Worst case one surface repaints late.
+            # Swallow errors; switch is already applied and saved.
             pass
 
 

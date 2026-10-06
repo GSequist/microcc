@@ -74,6 +74,16 @@ class WriteAheadCase(LoopCase):
         await self.run_loop(Scripted(turn(use("a", "quick", {"tag": "1"})), final()), [])
         self.assertEqual(seen_at_run[0][-1], "assistant")
 
+    async def test_results_are_flushed_before_the_next_model_call(self):
+        inner, seen = Scripted(turn(use("a", "quick", {"tag": "1"})), final()), []
+
+        async def model(**kw):
+            seen.append(flush_log[-1][-1] if flush_log else None)
+            return await inner(**kw)
+
+        await self.run_loop(model, [])
+        self.assertEqual(seen, [None, "user"])
+
     async def test_parallel_failure_keeps_sibling_results(self):
         msgs = []
         await self.run_loop(Scripted(turn(use("a", "quick", {"tag": "1"}), use("b", "boom", {"tag": "2"})), final()), msgs)

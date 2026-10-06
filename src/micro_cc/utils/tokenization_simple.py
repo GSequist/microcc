@@ -2,12 +2,11 @@ import hashlib
 import json
 import time
 
-# 'input' is a snapshot of the last call; 'total_input' is the running sum across calls.
-token_stats = {"input": 0, "output": 0, "total_input": 0, "trimmed": 0, "max": 0}
+token_stats = {"input": 0, "output": 0, "total_input": 0, "trimmed": 0, "max": 0}  # Last call + running sum
 
 
 def save_token_stats(project_dir: str) -> None:
-    """Persist token_stats to disk or Postgres."""
+    """Save token_stats to disk or Postgres."""
     from micro_cc.utils.msg_store_ import _get_storage_dir, _use_postgres
 
     if _use_postgres():
@@ -48,7 +47,7 @@ def load_token_stats(project_dir: str) -> None:
 
 
 def peek_token_stats(project_dir: str) -> dict | None:
-    """Read another project's persisted token stats without mutating globals."""
+    """Read another project's token stats without mutating globals."""
     from micro_cc.utils.msg_store_ import _get_storage_dir, _use_postgres
 
     if _use_postgres():
@@ -66,7 +65,7 @@ def peek_token_stats(project_dir: str) -> dict | None:
 
 
 def erase_token_stats(project_dir: str) -> None:
-    """Zero and delete persisted token_stats."""
+    """Clear and delete persisted token stats."""
     from micro_cc.utils.msg_store_ import _get_storage_dir, _use_postgres
 
     token_stats.update(input=0, output=0, total_input=0, trimmed=0, max=0)
@@ -87,11 +86,8 @@ def erase_token_stats(project_dir: str) -> None:
         pass
 
 
-# Anthropic's default cache TTL: an idle gap past it likely explains a miss.
-CACHE_TTL_S = 5 * 60
-# Misses below this are cache-breakpoint granularity, not drift.
+CACHE_TTL_S = 5 * 60  # Cache TTL and miss detection for prompt caching
 _CACHE_MISS_FLOOR = 5_000
-# Not persisted: after a restart the next miss goes undetected once.
 _last_call_time: float | None = None
 _last_model: str | None = None
 _segment_hashes: list[dict] = []
@@ -107,7 +103,7 @@ def record_prompt_segments(tools: list, system_msgs: list) -> None:
 
 
 def detect_cache_miss(usage: dict, model: str) -> dict | None:
-    """Detect cache miss by comparing API usage against previous call."""
+    """Detect cache miss from API usage vs previous call."""
     global _last_call_time, _last_model
 
     now = time.monotonic()
@@ -142,12 +138,12 @@ CHARS_PER_TOKEN = 3
 
 
 def _approx_tokens(text: str) -> int:
-    """Estimate tokens as char_count / 3."""
+    """Estimate tokens (char_count / 3)."""
     return len(text) // CHARS_PER_TOKEN
 
 
 def _cap_user_msg(msg: dict, cap: int) -> None:
-    """Truncate oversized user message to cap tokens."""
+    """Truncate oversized user message to token cap."""
     if msg.get("role") != "user":
         return
     content = msg.get("content")
@@ -194,10 +190,7 @@ def _msg_tokens(msg: dict) -> int:
 
 
 def total_tokens(messages: list[dict]) -> int:
-    """Sum of _msg_tokens across `messages` — used by claude_loop_'s
-    token-pressure trigger to decide when to fire a background checkpoint
-    compaction, independent of whether token_cutter ends up trimming
-    anything this turn."""
+    """Sum token counts across messages for checkpoint compaction triggers."""
     return sum(_msg_tokens(m) for m in messages)
 
 
@@ -255,13 +248,12 @@ def token_cutter(
         return messages
 
     messages = messages[start_index:]
-    # Gate on start_index, not on the summary being non-empty: an empty checkpoint still needs a stand-in.
+    # Inject checkpoint summary; recovery_note rebuilt each call so it can't drift.
     if start_index > 0:
         stand_in_text = (
             checkpoint_summary if checkpoint_summary
             else "[earlier conversation history was trimmed; no summary was captured for it]"
         )
-        # Rebuilt every call, never stored in the checkpoint, so it can't drift; folded messages stay in storage.
         recovery_note = (
             f"The {start_index} messages this summary was folded from are still "
             "fully preserved, not lost — call search_history_(query=...) any time "
@@ -357,9 +349,7 @@ def token_cutter(
             "content": "[Earlier conversation history has been truncated.]",
         })
 
-    # folded_tokens (already not visible, replaced by the checkpoint
-    # summary) plus whatever this call's own tail-cut additionally dropped
-    # from the live pool.
+    # folded_tokens + tail-cut tokens from this call.
     token_stats.update(
         trimmed=folded_tokens + (total - sum(_msg_tokens(m) for m in validated)),
         max=max_tokens,

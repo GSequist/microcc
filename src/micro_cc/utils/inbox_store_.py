@@ -1,23 +1,13 @@
-"""Durable, file-based inbox for message_session_ deliveries to targets that
-aren't (or might not be) a live listening process — headless/batch runs.
+"""Local file-based inbox for message_session_ deliveries to a project_dir that may not be running.
 
-Local-disk only, deliberately: this backs subagent orchestration, which only
-ever happens boss-TUI-side on a local machine (see pg_store_.py/msg_store_'s
-Postgres branch, which is for headless-as-cron-in-a-container instead — that
-deployment mode never runs this feature, so it doesn't need a Postgres path).
-
-One JSON array per project_dir at .../inbox.json. Writers are separate OS
-processes (sibling headless PIDs), not asyncio tasks in one process, so an
-in-memory lock can't serialize them — fcntl.flock on a sidecar lock file is
-the real cross-process lock. Reads/writes of inbox.json itself go through a
-tmp-file + os.replace so a lock-free peek (read_pending_count) never observes
-a torn write.
+One inbox.json per project_dir, guarded by an fcntl flock on a sidecar file (writers are separate processes) and written via tmp + os.replace.
 """
 
 import datetime
 import fcntl
 import json
 import os
+import uuid
 from pathlib import Path
 
 from micro_cc.utils.msg_store_ import _get_storage_dir
@@ -57,15 +47,13 @@ def _with_lock(project_dir: str, fn):
 
 
 def write_mail(target_project_dir: str, from_dir: str, text: str) -> None:
-    """Durably drop a message in target_project_dir's inbox. Delivery just
-    means "will be picked up next time that project_dir's headless run
-    checks its inbox" (on launch, and at every turn_boundary while running)
-    — no live process required on the receiving end."""
+    """Drop a message in target_project_dir's inbox; delivered next time that project's headless run folds mail."""
     path = _inbox_path(target_project_dir)
 
     def _do():
         mail = _read(path)
         mail.append({
+            "id": uuid.uuid4().hex,
             "from": from_dir,
             "text": text,
             "timestamp": datetime.datetime.now().isoformat(),
@@ -75,22 +63,35 @@ def write_mail(target_project_dir: str, from_dir: str, text: str) -> None:
     _with_lock(target_project_dir, _do)
 
 
-def read_and_clear_mail(project_dir: str) -> list:
-    """Pop everything pending for project_dir. Atomic read+clear under the
-    same lock a concurrent write_mail would take, so nothing lands in the gap
-    between reading and truncating."""
+def peek_mail(project_dir: str) -> list:
+    """Pending mail without clearing it; entries from before ids existed get one."""
     path = _inbox_path(project_dir)
 
     def _do():
         mail = _read(path)
-        if mail:
-            _atomic_write(path, [])
+        if any("id" not in m for m in mail):
+            for m in mail:
+                m.setdefault("id", uuid.uuid4().hex)
+            _atomic_write(path, mail)
         return mail
 
     return _with_lock(project_dir, _do)
 
 
+def ack_mail(project_dir: str, ids: list) -> None:
+    """Remove delivered mail by id; mail that arrived since the peek stays."""
+    path = _inbox_path(project_dir)
+    done = set(ids)
+
+    def _do():
+        mail = _read(path)
+        rest = [m for m in mail if m.get("id") not in done]
+        if len(rest) != len(mail):
+            _atomic_write(path, rest)
+
+    _with_lock(project_dir, _do)
+
+
 def peek_pending_count(project_dir: str) -> int:
-    """Lock-free — for status/monitor display only, never for delivery
-    decisions. A stale-by-one-write count is fine there."""
+    """Lock-free count for status display only, never for delivery."""
     return len(_read(_inbox_path(project_dir)))

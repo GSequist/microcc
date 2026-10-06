@@ -7,9 +7,8 @@ single-process asyncio model:
 
   * `interval` specs ("30s", "5m", "2h", "1d", or "every 5 minutes") and
     standard 5-field `cron` specs (local time) both compile to a next-fire
-    time. cron parsing is a faithful Python port of their `cron.ts` — same
-    field syntax (wildcard / N / step / range / list), same day-of-month OR
-    day-of-week semantics, same DST behaviour.
+    time. Cron fields support wildcard / N / step / range / list; day-of-month
+    and day-of-week are OR-ed when both are restricted.
   * Anti-herd jitter is ported too: a recurring task fires up to 10% of its
     period late (capped at 15 min), deterministically from its id, so a fleet
     of users asking for "hourly" doesn't all hit the model at :00. One-shots
@@ -156,9 +155,7 @@ def validate_spec(spec: str) -> tuple[str, str] | None:
 
 
 def _next_cron_dt(fields: dict, after: datetime) -> datetime | None:
-    """Next datetime strictly after `after` matching the cron fields, in local
-    time. Minute-by-minute walk, month/day/hour jumps, bounded at 366 days.
-    Ported from cron.ts computeNextCronRun (same DST + dom/dow-OR behaviour)."""
+    """Next local datetime strictly after `after` matching the cron fields (walk bounded at 366 days)."""
     minute_set = set(fields["minute"])
     hour_set = set(fields["hour"])
     dom_set = set(fields["day-of-month"])
@@ -200,8 +197,7 @@ def _next_cron_dt(fields: dict, after: datetime) -> datetime | None:
 
 
 def cron_to_human(expr: str) -> str:
-    """Best-effort human label; falls back to the raw cron. Narrow on purpose
-    — only the common shapes, same as cron.ts cronToHuman."""
+    """Best-effort human label for common cron shapes; falls back to the raw cron."""
     parts = expr.strip().split()
     if len(parts) != 5:
         return expr

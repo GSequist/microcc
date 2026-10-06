@@ -43,7 +43,7 @@ def _connect():
             "Postgres backend selected but psycopg isn't installed — "
             "run `pip install micro-cc[postgres]`"
         ) from e
-    url = os.environ.get("CRM_POSTGRES_URL") or os.environ["MICRO_CC_POSTGRES_URL"]
+    url = os.environ.get("MICRO_CC_MIRROR_POSTGRES_URL") or os.environ.get("CRM_POSTGRES_URL") or os.environ["MICRO_CC_POSTGRES_URL"]
     conn = psycopg.connect(url, autocommit=True)
     schema_.ensure_all(conn)
     return conn

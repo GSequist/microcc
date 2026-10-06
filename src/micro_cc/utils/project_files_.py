@@ -4,8 +4,7 @@ and the TUI's mirror of it (start_live_.py)."""
 import os
 from pathlib import Path
 
-# Directories that would swamp the @ dropdown with build output rather than
-# the user's own files.
+# Skip build/cache dirs to avoid cluttering @ dropdown.
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "env", "venv", "dist",
     "build", ".next", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea",
@@ -15,8 +14,7 @@ MAX_FILES = 3000
 
 
 def list_project_files(project_dir: str) -> list[str]:
-    """Relative paths of every file under project_dir, skipping SKIP_DIRS and
-    dotfiles, capped at MAX_FILES."""
+    """List relative paths, skipping SKIP_DIRS and dotfiles, capped at MAX_FILES."""
     root = Path(project_dir)
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
@@ -31,11 +29,7 @@ def list_project_files(project_dir: str) -> list[str]:
 
 
 def rank_file_matches(files: list[str], query: str, limit: int = 50) -> list[str]:
-    """Order @-picker candidates so an obvious match (typing "config" for
-    src/config.py) doesn't get buried under every unrelated path that
-    happens to contain the substring somewhere in a directory name. Three
-    tiers — basename starts with query, basename contains query, full path
-    contains query — each shallow-path-first."""
+    """Rank files by tier: basename starts with, contains, or full path contains query."""
     query_lc = query.lower()
     depth_then_name = lambda f: (f.count("/"), f)  # noqa: E731
 

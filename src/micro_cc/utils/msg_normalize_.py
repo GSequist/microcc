@@ -1,17 +1,13 @@
 import datetime
+import json
 import os
 import time
 
+from micro_cc.utils.tool_safety_ import is_read_only
+
 
 def log_dropped_message(source: str, project_dir: str, count: int) -> None:
-    """Durable trace for load_msgs dropping malformed rows (see
-    is_valid_message) — NOT a bare print(). start_live_tui_.py monkeypatches
-    builtins.print to a no-op for the whole process (raw stdout would
-    corrupt raw-terminal rendering — see its own comment), so a plain print
-    here would be silently swallowed in exactly the surface (the TUI) this
-    is meant to be diagnosable from. Same os.makedirs + try/except OSError
-    pattern as stack_.py's _log_render_error / render_errors.log — see
-    notes/logging.md."""
+    """Append a line to ~/.micro-cc/dropped_messages.log (print is a no-op in the TUI)."""
     try:
         log_path = os.path.expanduser("~/.micro-cc/dropped_messages.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -22,22 +18,7 @@ def log_dropped_message(source: str, project_dir: str, count: int) -> None:
 
 
 def _strip_image_content(content):
-    """Replace {"type": "image", ...} blocks with a text placeholder,
-    recursing into tool_result wrappers — everything else passes through
-    untouched. Images must never reach messages.jsonl: they stay in the
-    in-memory msgs list claude_loop_.py holds for the running session's
-    own API calls (that's the only place they need to exist), but never
-    get written to disk. Two concrete failures from actually persisting
-    them: (1) a raw base64 blob run through tokenization_simple's
-    len(text)//3 char-count heuristic registers as enormous — one
-    unresized screenshot as over a million "tokens" — blowing the trim
-    budget and triggering checkpoint-fold/summarize on what's otherwise a
-    tiny conversation; (2) confirmed directly against a live project's
-    messages.jsonl: an 8MB file, individual lines up to 3.6MB, all real
-    base64 JPEG data, in a 17-message session. Same shape/placeholder
-    convention as msg_store_._strip_images_for_summary (a narrower fix
-    for just the summarizer's own input) — this is the same idea applied
-    at the actual persistence boundary, where it belongs."""
+    """Replace image blocks with a text placeholder, recursing into tool_result; images never reach disk."""
     if not isinstance(content, list):
         return content
     out = []
@@ -54,7 +35,7 @@ def _strip_image_content(content):
 
 
 def normalize_message(msg: dict) -> dict:
-    """Convert message to serializable dict - strips thinking blocks (API rejects them)."""
+    """JSON-safe {role, ts, content}: keeps thinking blocks (thinking, signature, id), replaces images with a placeholder."""
     normalized = {
         "role": msg.get("role"),
         "ts": datetime.datetime.now().isoformat(),
@@ -74,15 +55,7 @@ def normalize_message(msg: dict) -> dict:
                         "type": "thinking",
                         "thinking": item.thinking,
                         "signature": item.signature,
-                        # OpenAI Responses path: the reasoning item's own id,
-                        # required to replay it ahead of the function_call
-                        # items it preceded (models/openai.py gates on
-                        # block.get("id") and silently drops an id-less
-                        # block). Dropping it here meant a reasoning item
-                        # survived in memory but vanished from every
-                        # persist->reload — resume, compaction, self-restart.
-                        # "" for Anthropic, which identifies thinking by
-                        # signature rather than id; harmless there.
+                        # id: the OpenAI Responses reasoning item id, needed to replay it; empty for Anthropic, which uses signature.
                         "id": item.id,
                     })
                 elif item.type == "tool_use":
@@ -121,13 +94,7 @@ _VALID_ROLES = {"user", "assistant"}
 
 
 def is_valid_message(msg) -> bool:
-    """A stored row is well-formed enough to survive reconstruct_message and
-    reach the API: a dict, role in {user, assistant} (anything else 400s),
-    and non-empty content — a str or a list of dict blocks each carrying a
-    "type" (an empty content list also 400s; Anthropic rejects both). Any
-    on-disk/Postgres row that doesn't clear this bar gets dropped by
-    load_msgs rather than forwarded and taking the whole session's next
-    turn down with it."""
+    """True if a stored row can reach the API: a dict, role user/assistant, non-empty str or list of typed dict blocks."""
     if not isinstance(msg, dict):
         return False
     if msg.get("role") not in _VALID_ROLES:
@@ -153,35 +120,57 @@ REPAIR_RESULT_TEXT = (
     "was interrupted) before this tool finished."
 )
 
+_READ_ONLY_NOTE = "It is read-only: call it again if you still need the result."
+_MAY_HAVE_RUN_NOTE = (
+    "It may have partly run. Check the current state (re-read the file or "
+    "inbox it touched) before repeating it, and do not assume it succeeded or failed."
+)
+_ARGS_SHOWN = 120
+
+
+def _interrupted_text(block: dict) -> str:
+    """REPAIR_RESULT_TEXT plus the call's name and args and how to treat it."""
+    from micro_cc.tools.use_tool_ import resolve_call  # lazy: utils must not import tools at load
+
+    name, args = resolve_call(block)
+    if not name:
+        return REPAIR_RESULT_TEXT
+    try:
+        shown = json.dumps(args, ensure_ascii=False)
+    except (TypeError, ValueError):
+        shown = str(args)
+    if len(shown) > _ARGS_SHOWN:
+        shown = shown[:_ARGS_SHOWN] + "…"
+    note = _READ_ONLY_NOTE if is_read_only(name, args if isinstance(args, dict) else {}) else _MAY_HAVE_RUN_NOTE
+    return f"{REPAIR_RESULT_TEXT} Call: {name}({shown}). {note}"
+
+
+def cut_short_calls(msgs: list) -> list:
+    """Inner names of the calls the repair answered at the tail of msgs (a run cut short), else []."""
+    from micro_cc.tools.use_tool_ import resolve_call
+
+    if len(msgs) < 2:
+        return []
+    last, prev = msgs[-1], msgs[-2]
+    last_content, prev_content = last.get("content"), prev.get("content")
+    if last.get("role") != "user" or prev.get("role") != "assistant":
+        return []
+    if not isinstance(last_content, list) or not isinstance(prev_content, list):
+        return []
+    if not all(isinstance(b, dict) and b.get("type") == "tool_result" for b in last_content):
+        return []
+    cut = {
+        b.get("tool_use_id") for b in last_content
+        if isinstance(b.get("content"), str) and b["content"].startswith(REPAIR_RESULT_TEXT)
+    }
+    return [
+        resolve_call(b)[0] for b in prev_content
+        if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") in cut
+    ]
+
 
 def repair_dangling_tool_use(msgs: list) -> list:
-    """Answer any assistant tool_use left without a tool_result.
-
-    An interrupt landing between the assistant's tool_use being appended and
-    its tool_result being appended (TUI: ESC mid tool-result loop; webui:
-    /api/chat/stop -> gen.aclose() while resumed; a headless process killed
-    or crashed mid-tool) can leave that tool_use dangling, and every later
-    model call against the transcript would be rejected. Runs only at load
-    time (see msg_store_._rewrite_all for why never at write time).
-
-    Two shapes, chosen so the returned list lines up with what's on disk:
-      - dangling tool_use is the LAST message: append one synthetic
-        tool_result message. It's a genuinely new tail, so the next
-        store_msgs appends it (the append mark is the pre-repair count).
-      - dangling mid-history (followed by a user message, e.g. a prompt or a
-        partial tool_result set): merge the missing results INTO that next
-        user message instead of inserting a new one. Inserting shifted every
-        later index by one, so store_msgs/pg COUNT appended the wrong
-        message — the last one again — on every reload, and the synthetic
-        result itself never reached disk. Merging keeps positions intact;
-        the repair is simply re-applied on each load. (An assistant followed
-        directly by another assistant still gets an inserted message — that
-        transcript was already invalid.)
-
-    The synthetic result carries the dangling tool_use's own timestamp, not
-    load time, so a transcript reads as "died during this call" instead of
-    looking like something happened at the moment of the reload.
-    """
+    """Answer every assistant tool_use that has no tool_result. A dangling last message gets a new tail message; a mid-history one is merged into the next user message so positions stay put. Load-time only."""
     repaired = []
     skip_next = False
     for i, msg in enumerate(msgs):
@@ -212,11 +201,12 @@ def repair_dangling_tool_use(msgs: list) -> list:
         missing = [tid for tid in tool_use_ids if tid not in answered_ids]
         if not missing:
             continue
+        uses = {b["id"]: b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"}
         synthetic = [
             {
                 "type": "tool_result",
                 "tool_use_id": tid,
-                "content": REPAIR_RESULT_TEXT,
+                "content": _interrupted_text(uses[tid]),
                 "is_error": True,
             }
             for tid in missing

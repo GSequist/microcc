@@ -1,29 +1,4 @@
-"""One-time, best-effort terminal keybinding setup — the terminal-config half
-of fixing Shift+Enter/Alt+Left/Right (see keybindings.py for the pure Textual
-binding gaps). Handles platform-specific keybinding configuration to enable
-unified multi-terminal support.
-
-Some terminals can't disambiguate Shift+Enter from plain Enter without extra
-configuration. Textual negotiates the Kitty keyboard protocol on startup
-(see textual/drivers/linux_driver.py), which handles this automatically —
-but only terminals that speak it natively (iTerm2, Kitty, Ghostty, WezTerm,
-Warp) actually recognize the negotiation. Everywhere else we install a
-terminal- or multiplexer-level keybinding that sends ESC+CR for Shift+Enter
-(PromptInput._on_key in start_live_.py reads a bare ESC prefix as the alt
-modifier, so ESC+CR decodes as alt+enter, which it already treats as
-"insert newline" — same code path as real Shift+Enter and the Ctrl+J
-fallback). Covered automatically: Windows Terminal, tmux, VS Code's
-integrated terminal, xterm, Alacritty. Apple Terminal has no send-string
-keybinding API, so we only enable 'Use Option as Meta key' there (gives
-Option+Left/Right word jump) and point the user at the Ctrl+J fallback for
-newlines. Where no hook exists at all (GNOME Terminal/VTE terminals,
-Konsole, raw PowerShell/cmd consoles) we just tell the user about the
-Ctrl+J / Alt+Enter fallbacks that always work.
-
-Progress is recorded in ~/.micro-cc/terminal_setup.json so this only runs
-once per terminal (and once per tmux/no-tmux state, since tmux needs its
-own passthrough regardless of the outer terminal).
-"""
+"""Platform-specific terminal keybinding setup for Shift+Enter and Alt+Left/Right."""
 import json
 import os
 import platform
@@ -76,10 +51,7 @@ def _save_state(state: dict) -> None:
 
 
 def _append_snippet_if_absent(path: Path, marker: str, snippet: str) -> bool | None:
-    """Appends snippet to path if marker isn't already there. Idempotent
-    across reinstalls/reruns even when terminal_setup.json gets wiped.
-    Returns True on a fresh write, None if the marker was already present,
-    False on failure."""
+    """Append snippet if marker absent (idempotent); True on write, None if present, False on failure."""
     try:
         existing = path.read_text() if path.exists() else ""
     except Exception:
@@ -117,11 +89,7 @@ def setup_apple_terminal() -> str:
     except Exception:
         return "Could not read Terminal.app's default profile — set 'Use Option as Meta key' manually in Preferences > Profiles > Keyboard."
 
-    # Back up the user's whole Terminal.app domain before touching it —
-    # once, so re-runs (e.g. after terminal_setup.json gets wiped) don't
-    # clobber a backup taken before any prior edit. `defaults import
-    # com.apple.Terminal <backup>` reverts everything if the edit below
-    # does something unwanted.
+    # Back up once so re-runs don't overwrite prior backup; reverts with `defaults import`.
     if not os.path.exists(backup):
         subprocess.run(["defaults", "export", "com.apple.Terminal", backup], capture_output=True)
 
@@ -309,19 +277,9 @@ def setup_alacritty() -> str:
 
 
 # --- newline hint (for the static hint bar in start_live_.py) -----------
-#
-# Deliberately coarse: rather than tracking whether each per-terminal remap
-# actually succeeded (and whether the terminal's been restarted since), we
-# only special-case terminals that speak the Kitty protocol natively — every
-# other terminal gets pointed at backslash+Enter, since that works
-# immediately with zero setup/restart, unlike a freshly-installed Shift+Enter
-# remap. Stops being shown at all once the user has demonstrably used any of
-# the newline tricks once (see mark_multiline_used, called from
-# PromptInput._on_key in start_live_.py).
 
 def newline_hint_text() -> str | None:
-    """Hint text for the hint bar's top-priority slot, or None once the
-    user's already used a newline trick — nothing left to teach."""
+    """Hint text for newline shortcuts, or None if user already knows them."""
     if _load_state().get("used_multiline"):
         return None
     if detect_terminal() in _NATIVE_TERMINALS:
@@ -339,10 +297,7 @@ def mark_multiline_used() -> None:
 # --- orchestrator -----------------------------------------------------
 
 def ensure_terminal_setup() -> str | None:
-    """Run once per detected terminal (and once per tmux/no-tmux state).
-    Returns a status string to surface to the user, or None if there's
-    nothing worth telling them (native support, or already handled on a
-    previous launch)."""
+    """Run keybinding setup once per terminal; returns status or None if already done."""
     terminal_id = detect_terminal()
     in_tmux = bool(os.environ.get("TMUX"))
     state = _load_state()
@@ -371,19 +326,14 @@ def ensure_terminal_setup() -> str | None:
     elif terminal_id == "alacritty":
         messages.append(setup_alacritty())
     elif terminal_id in ("konsole", "vte"):
-        # Konsole's keybindings live in per-profile keytab files (too fragile
-        # to safely rewrite without risking the user's existing scheme); VTE
-        # terminals (GNOME Terminal, xfce4-terminal, Tilix, ...) only expose
-        # fixed menu-action keybindings, no "send custom string" hook.
+        # Konsole keytabs and VTE have no send-string hook.
         name = "Konsole" if terminal_id == "konsole" else "your terminal (GNOME Terminal/VTE-based)"
         messages.append(
             f"Shift+Enter can't be auto-configured in {name} — "
             "use Ctrl+J or Alt+Enter for a newline instead."
         )
     else:
-        # raw PowerShell/cmd consoles, unrecognized Linux VTs, etc. — no
-        # reliable way to install a keybinding. Ctrl+J / Alt+Enter already
-        # work everywhere as a newline, so just point the user at them.
+        # No reliable keybinding hook; fallback shortcuts work everywhere.
         messages.append(
             f"Shift+Enter may not work in {terminal_id} — "
             "use Ctrl+J or Alt+Enter for a newline instead."

@@ -1,17 +1,4 @@
-"""Stage-walking composite for ask_user_question_tool_'s AskQuestion list —
-the native replacement for _show_current_ask_question/_advance_ask_user/
-_hide_ask_ui in start_live_.py. Mirrors that flow exactly: one question
-shown at a time, in order, three mutually exclusive modes per stage
-(multiSelect -> MultiSelectList, single-select -> ListPicker, options=[]
--> freeform text routed to the real prompt input). No Future inside this
-component — its eventual call site keeps using the existing
-_pending_input/_pending_result Event pair unchanged; this only exposes
-plain on_done(answers)/on_cancel() callback attributes, same shape as
-ListPicker/MultiSelectList.
-
-Expects each question as the AskQuestion TypedDict shape from
-tools/ask_user_tool.py: {question, header, options: [{label, description}], multiSelect}.
-"""
+"""Stage-walking composite for ask_user_question_tool AskQuestion list."""
 
 from micro_cc.tui_native.list_picker_ import ListPicker, PickerItem
 from micro_cc.tui_native.multi_select_list_ import MultiSelectList
@@ -69,14 +56,13 @@ class QuestionPanel:
             comp.on_cancel = self._cancel
         self._component = comp
 
-    # --- freeform stage entry point (called by whatever owns the real
-    # prompt input, since this panel doesn't own a text box itself) ------
+    # --- freeform stage entry point; called by owner of real prompt input ---
     def submit_text_answer(self, text: str) -> None:
         if not self.is_text_stage:
             return
         self._advance(text)
 
-    # --- stage advancement, mirrors _advance_ask_user exactly -----------
+    # --- stage advancement ---
     def _advance(self, answer) -> None:
         self.answers[self.current_header] = answer
         self.stage += 1

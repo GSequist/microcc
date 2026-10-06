@@ -16,7 +16,11 @@ id — so accounts with a plain OPENAI_API_KEY can reach the same models
 directly via models/openai.py instead of through the proxy.
 """
 
-MODELS = {
+import copy
+import json
+import os
+
+_BUILTIN_MODELS = {
     # context_window / max_output are real API limits, used by
     # trim_budget_for() below to size token_cutter's history budget per
     # model instead of every model sharing one flat number regardless of
@@ -73,22 +77,7 @@ MODELS = {
     "gpt-6-luna":    {"litellm": "openai.gpt-6-luna",    "openai": "gpt-6-luna",    "thinking": True, "summarized_display": False, "responses_api": True, "context_window": 1_050_000, "max_output": 128_000},
 }
 
-# Bare family-name shorthand a model might plausibly send instead of the
-# exact versioned alias (e.g. "haiku" instead of "haiku-4.5") — resolve()'s
-# own docstring is deliberate about failing loudly on a genuine typo, but a
-# bare family name isn't a typo, it's the obvious guess, and this codebase
-# hit it for real: a /graph subagent spawn passing `--model haiku` errored
-# instead of running. Mapped to the SAME dict entry (not a copy) so this
-# never drifts from whichever versioned alias is current — bump the pointer
-# here, not a duplicated literal, when the "current" haiku/sonnet/opus
-# changes. Deliberately NOT added to MODEL_OPTIONS: the /model picker should
-# only ever show the exact versioned aliases, this is purely a resolution
-# fallback for aliases nothing user-facing ever offers directly.
-MODELS["haiku"] = MODELS["haiku-4.5"]
-MODELS["sonnet"] = MODELS["sonnet-5"]
-MODELS["opus"] = MODELS["opus-5"]
-
-DEFAULT_MODEL = "sonnet-5"
+_BUILTIN_DEFAULT = "sonnet-5"
 
 # Transcript trim budget (token_cutter's max_tokens in claude_loop_.py) —
 # how much of the conversation history stays in context before older turns
@@ -175,10 +164,132 @@ def summary_cap_for(alias: str, budget: int | None = None) -> int:
 
 
 # Aliases shown in the /model picker UI, in display order.
-MODEL_OPTIONS = [
+_BUILTIN_OPTIONS = [
     "sonnet-5", "sonnet-5.5", "opus-5", "opus-5.5", "opus-4.8", "opus-4.7", "opus-4.6", "sonnet-4.6", "haiku-4.5",
     "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Catalog layers: builtin (above, offline fallback) < remote cache of the
+# GitHub models.json (catalog_.py refreshes it) < user ~/.micro-cc/models.json.
+# Built once at import from local files only (no network); a refresh applies
+# on the next start.
+_BACKENDS = ("anthropic", "foundry", "litellm", "openai")
+_BOOLS = ("thinking", "summarized_display", "responses_api", "server_fallback")
+_INTS = ("context_window", "max_output")
+_REQUIRED = ("thinking", "summarized_display", "context_window", "max_output")
+
+
+def remote_cache_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".micro-cc", "cache", "models.json")
+
+
+def user_catalog_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".micro-cc", "models.json")
+
+
+def _running_version() -> tuple:
+    try:
+        from importlib.metadata import version
+        return _parse_version(version("micro-cc"))
+    except Exception:
+        return (0, 0, 0)
+
+
+def _parse_version(v) -> tuple:
+    parts = tuple(int(x) for x in v.split("."))
+    if len(parts) != 3:
+        raise ValueError(v)
+    return parts
+
+
+def _check_entry(e) -> dict:
+    """Validated fields of one entry (unknown keys dropped); raises ValueError."""
+    if not isinstance(e, dict):
+        raise ValueError("not an object")
+    out = {}
+    for k, v in e.items():
+        if k in _BACKENDS:
+            if not isinstance(v, str) or not v:
+                raise ValueError(f"{k} must be a non-empty string")
+        elif k in _BOOLS:
+            if not isinstance(v, bool):
+                raise ValueError(f"{k} must be true/false")
+        elif k in _INTS:
+            if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+                raise ValueError(f"{k} must be a positive integer")
+        elif k == "min_version":
+            if not isinstance(v, str):
+                raise ValueError("min_version must be a string")
+            if _parse_version(v) > _running_version():
+                raise ValueError(f"needs micro-cc >= {v}")
+            continue
+        else:
+            continue
+        out[k] = v
+    return out
+
+
+def validate_catalog(doc) -> tuple:
+    """(entries, default_model, skipped) from a catalog document; bad entries are skipped, not the file."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("models", {}), dict):
+        return {}, None, ["malformed document"]
+    entries, skipped = {}, []
+    for alias, e in doc.get("models", {}).items():
+        try:
+            entries[alias] = _check_entry(e)
+        except ValueError as err:
+            skipped.append(f"{alias}: {err}")
+    default = doc.get("default_model")
+    return entries, default if isinstance(default, str) else None, skipped
+
+
+def _read_layer(path: str):
+    """(doc, status): status is 'absent', 'ok' or 'unreadable: ...'."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except FileNotFoundError:
+        return None, "absent"
+    except Exception as e:
+        return None, f"unreadable: {type(e).__name__}"
+    if not isinstance(doc, dict):
+        return None, "unreadable: not an object"
+    return doc, "ok"
+
+
+def build_catalog() -> tuple:
+    """(models, options, default, status) merged builtin < remote cache < user file."""
+    models = copy.deepcopy(_BUILTIN_MODELS)
+    options = list(_BUILTIN_OPTIONS)
+    default = _BUILTIN_DEFAULT
+    status = {"skipped": []}
+    for name, path in (("remote", remote_cache_path()), ("user", user_catalog_path())):
+        doc, status[name] = _read_layer(path)
+        if doc is None:
+            continue
+        entries, layer_default, skipped = validate_catalog(doc)
+        status["skipped"] += [f"{name} {s}" for s in skipped]
+        for alias, fields in entries.items():
+            if alias in models:
+                models[alias].update(fields)
+            elif any(b in fields for b in _BACKENDS) and all(k in fields for k in _REQUIRED):
+                models[alias] = fields
+                options.append(alias)
+            else:
+                status["skipped"].append(f"{name} {alias}: new alias needs a backend id and {', '.join(_REQUIRED)}")
+        if layer_default in models:
+            default = layer_default
+    return models, options, default, status
+
+
+MODELS, MODEL_OPTIONS, DEFAULT_MODEL, CATALOG_STATUS = build_catalog()
+
+# Bare family names resolve to the same entry as the versioned alias (never in MODEL_OPTIONS).
+for _short, _alias in (("haiku", "haiku-4.5"), ("sonnet", "sonnet-5"), ("opus", "opus-5")):
+    MODELS[_short] = MODELS[_alias]
+
 
 
 def options_for_backend(backend: str) -> list:
@@ -219,19 +330,19 @@ def wants_summarized_display(alias: str) -> bool:
     return entry["summarized_display"] if entry else False
 
 
-def anthropic_beta_headers(alias: str) -> list:
+def anthropic_beta_headers(alias: str, server_fallback: bool = True) -> list:
     """anthropic-beta flags anthropic.py must send for `alias`'s
     context_window claim to be real on the direct-Anthropic wire (see the
     warning above MODELS) — "context-1m-2025-08-07", only past the real
     200_000 default ceiling — plus the server-side-fallback beta for
-    aliases flagged "server_fallback" (see fallback_params() below — the
-    two must travel together, or the fallbacks parameter is rejected)."""
+    aliases flagged "server_fallback" when `server_fallback` (direct-Anthropic
+    only; must travel with fallback_params(), litellm passes False)."""
     entry = MODELS.get(alias)
     betas = []
     window = entry.get("context_window") if entry else None
     if window and window > 200_000:
         betas.append("context-1m-2025-08-07")
-    if entry and entry.get("server_fallback"):
+    if server_fallback and entry and entry.get("server_fallback"):
         betas.append("server-side-fallback-2026-07-01")
     return betas
 

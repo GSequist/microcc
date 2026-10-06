@@ -31,7 +31,7 @@ scenarios = ["self-reload-properties"]
 
 [[contract]]
 id = "boot-failure-recovery-is-bounded"
-statement = "If the app fails to reach a running UI, the supervisor reinstalls the published wheel and relaunches, at most MAX_BOOT_ATTEMPTS consecutive times; a successful boot clears the counter and a crash after boot never triggers a reinstall."
+statement = "If the app fails to reach a running UI from an installed wheel, the supervisor reinstalls the published wheel and relaunches, at most MAX_BOOT_ATTEMPTS consecutive times; a successful boot clears the counter and a crash after boot never triggers a reinstall. On a source checkout it never reinstalls: it logs the crash and exits 1, so the dev tree is never shadowed by a wheel in site-packages."
 anchors = ["src/micro_cc/self_heal_.py::main"]
 assumptions = [
   "The supervisor is a separate process from the app, so a broken app module surfaces as a caught boot failure, not an ImportError killing the supervisor.",
@@ -41,6 +41,7 @@ questions = [
   "Walk N consecutive boot failures — exactly N reinstalls then stop, no loop.",
   "Walk boot-then-later-crash — no reinstall, non-zero exit.",
   "Walk a boot that succeeds after the counter was raised — counter cleared.",
+  "Walk repeated boot failures on a source checkout — zero reinstalls, zero relaunches, exit 1 each time.",
 ]
 scenarios = ["self-reload-properties"]
 
@@ -104,6 +105,31 @@ timeout = 30
 inputs = ["tests/test_self_reload.py"]
 scope = "The manifest/diff and prompt-stash logic run for real against temp dirs; the supervisor's start_/_reinstall/execv boundaries are faked (no network, no real ~/.micro-cc state, no process replacement)."
 
+# --- Model catalog overlay ---------------------------------------------------
+# Several microcc processes (TUI, headless subagents) share ~/.micro-cc/cache/models.json.
+# See OVERLAY_MODELS_PLAN.md and notes/rewrites-plan.md.
+
+[[contract]]
+id = "model-catalog-import-is-local-and-cache-write-is-atomic"
+statement = "Importing models.registry reads only local files (cache + user models.json) and never touches the network; a missing/corrupt/invalid layer is ignored without breaking the builtin catalog. The remote cache is replaced atomically (unique tmp + os.replace) so a concurrent process never reads a partial file, and the refresh is throttled by cache age. Only the interactive supervisor (self_heal_.main) starts the refresh, as a daemon thread whose failures are swallowed; headless subagents never do."
+anchors = ["src/micro_cc/models/registry.py::build_catalog", "src/micro_cc/models/catalog_.py::refresh_remote_catalog", "src/micro_cc/models/catalog_.py::_write_atomic", "src/micro_cc/self_heal_.py::_start_catalog_refresh"]
+assumptions = [
+  "The catalog is built once at import and never mutated afterwards, so the refresh thread only touches the file, not in-process state.",
+  "A refresh takes effect on the next process start; a running parent and a freshly spawned child may briefly see different catalogs, and an unknown alias passes through resolve() unchanged.",
+]
+questions = [
+  "Walk two processes refreshing at once, and a reader opening the cache mid-replace.",
+  "Walk a 404/timeout, a 304, and a 200 with garbage — the cache must stay valid or absent.",
+]
+scenarios = ["model-catalog"]
+
+[[scenario]]
+id = "model-catalog"
+command = ["{python}", "tests/test_model_catalog.py"]
+timeout = 60
+inputs = ["tests/test_model_catalog.py", "models.json"]
+scope = "Real registry merge/validation and catalog_ refresh against a temp HOME; urlopen is mocked (no network); concurrent atomic writers race a reader on a real temp file."
+
 # --- Subagent lifecycle + bounded tools --------------------------------------
 # A subagent is a separate OS process (microcc-headless) the boss spawns via
 # bash_. These guarantees cross that process boundary, so no import graph shows
@@ -164,7 +190,7 @@ statement = "Load-time repair of an unanswered tool_use never shifts the positio
 anchors = ["src/micro_cc/utils/msg_normalize_.py::repair_dangling_tool_use"]
 assumptions = ["store_msgs appends msgs[known:] where known is the pre-repair on-disk count."]
 questions = ["Walk three reload+store cycles of a mid-history dangling tool_use: line count unchanged."]
-scenarios = ["subagent-lifecycle"]
+scenarios = ["subagent-lifecycle", "interrupted-run-recovery"]
 
 [[link]]
 from = "src/micro_cc/tools/monitor_.py::_activity"
@@ -211,7 +237,6 @@ inputs = ["tests/test_use_tool_dispatcher.py"]
 scope = "Real claude_loop, search_tools, resolve_call, OAuth stealth rename and history renderers. The model is a scripted fake; MCP resolution/calls, checkpoint/memory/token-stats storage and the weather catalog tool are mocked. No network, no credentials, no real ~/.micro-cc writes."
 
 # --- write-ahead tool calls ---------------------------------------------------
-# See notes/durability-plan.md, stage 0.
 
 [[contract]]
 id = "tool-use-is-flushed-before-tools-run"
@@ -233,3 +258,81 @@ command = ["{python}", "tests/test_write_ahead.py"]
 timeout = 60
 inputs = ["tests/test_write_ahead.py", "tests/test_use_tool_dispatcher.py"]
 scope = "Real claude_loop and search_tools with fake catalog tools (quick, boom, hang). The model is scripted and store_msgs is recorded, so nothing touches ~/.micro-cc. No network, no credentials."
+
+# --- interrupted-run recovery -------------------------------------------------
+
+[[contract]]
+id = "tool-results-are-flushed-before-next-model-call"
+statement = "The user message holding a turn's tool results is appended and flushed (local append, Postgres insert, registered sink) before the next model call starts, so a kill during that call loses no finished tool result."
+anchors = ["src/micro_cc/claude_loop_.py::claude_loop"]
+assumptions = [
+  "store_msgs is append-only by position; the results message is appended once and never mutated, so the extra flush does not disturb _persisted_len, the Postgres COUNT insert or checkpoint as_of_index.",
+  "pending is cleared before the flush, so a failing flush cannot make the finally answer the same calls twice.",
+]
+questions = [
+  "Walk a store_msgs failure right after the results append: pending is already None, the error ends the run, no second results message.",
+  "Walk consumer flushes on the next tool_call/final_text: the tail is empty, nothing is written twice.",
+]
+scenarios = ["write-ahead-tool-calls"]
+
+[[contract]]
+id = "interrupted-calls-are-named-for-the-model"
+statement = "Load-time repair answers each unanswered tool_use with text that names the call and its args and says whether it is read-only (call it again) or may have partly run (check state first). It starts with the fixed REPAIR_RESULT_TEXT sentence, defaults to may-have-run for any tool not in the read-only set, and never changes message positions."
+anchors = [
+  "src/micro_cc/utils/msg_normalize_.py::repair_dangling_tool_use",
+  "src/micro_cc/utils/msg_normalize_.py::cut_short_calls",
+  "src/micro_cc/utils/tool_safety_.py::is_read_only",
+]
+assumptions = [
+  "pg_store_.load_msgs runs the same repair, so a Postgres-backed run hands the model this text after a kill.",
+  "Nothing re-runs a tool at load; the model decides.",
+]
+questions = [
+  "Walk a use_tool_ wrapper, a memory_ add vs get, and args over the display cap.",
+  "Walk the tail helper after the user continues: it stops reporting.",
+]
+scenarios = ["interrupted-run-recovery"]
+
+[[contract]]
+id = "inbox-mail-survives-a-crash-before-ack"
+statement = "Inbox mail is appended to the transcript and flushed before it is removed from inbox.json, and a replay after a crash skips mail already in the transcript: it is neither lost nor duplicated. Mail that arrives between the peek and the ack stays pending."
+anchors = [
+  "src/micro_cc/start_headless_.py::_fold_mail",
+  "src/micro_cc/utils/inbox_store_.py::peek_mail",
+  "src/micro_cc/utils/inbox_store_.py::ack_mail",
+]
+assumptions = [
+  "peek and ack each run under the inbox flock; ids identify mail across the two calls.",
+  "The mail id tag is in the first line of the stored user message, which is how a replay recognises it.",
+]
+questions = [
+  "Walk a crash after the flush and before the ack, and a failing flush before the ack.",
+  "Walk a write_mail between peek and ack.",
+]
+scenarios = ["interrupted-run-recovery"]
+
+[[contract]]
+id = "summary-write-is-atomic"
+statement = "summary.json is replaced by a tmp-file rename, so a crash or a concurrent reader never sees a torn checkpoint; a failed write leaves the previous one whole."
+anchors = ["src/micro_cc/utils/msg_store_.py::_atomic_write_text"]
+assumptions = ["tmp and target share a directory, so os.replace is atomic on the same filesystem."]
+questions = ["Walk os.replace failing: old content intact, no tmp file left."]
+scenarios = ["interrupted-run-recovery"]
+
+[[contract]]
+id = "killed-headless-run-resumes-cleanly"
+statement = "A headless run whose stored transcript ends on an unanswered tool_use resumes with a valid transcript: the model is sent the tool-aware interrupted text, no stored row is duplicated, and a registered message sink sees the synthetic message at the right position."
+anchors = ["src/micro_cc/start_headless_.py::run_headless"]
+assumptions = [
+  "An embedding app may register msg_store_.set_sink, which mirrors every store_msgs.",
+  "The new prompt is appended after the repaired tail as its own user message.",
+]
+questions = ["Walk a stored transcript with a dangling last tool_use through run_headless: valid transcript, tool-aware text sent, no duplicate rows, sink parity."]
+scenarios = ["interrupted-run-recovery"]
+
+[[scenario]]
+id = "interrupted-run-recovery"
+command = ["{python}", "tests/test_interrupted_run.py"]
+timeout = 60
+inputs = ["tests/test_interrupted_run.py", "tests/test_use_tool_dispatcher.py"]
+scope = "Real msg_normalize_, msg_store_ on a temp HOME, inbox_store_, and run_headless against a scripted model. Mocked: model_call, checkpoint/memory/token-stats storage; Postgres is not used (local backend only), the sink is a recording stub. No network, no credentials."

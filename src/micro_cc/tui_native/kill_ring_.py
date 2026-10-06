@@ -1,9 +1,4 @@
-"""Ring buffer for Emacs-style kill/yank operations. Tracks killed (deleted)
-text entries; consecutive kills accumulate into a single entry (so a run of
-ctrl+k presses yanks back as one block, not one ring entry per keystroke).
-Supports yank (paste most recent) and yank-pop (cycle through older entries).
-
-Implemented as a stateful class managing the ring buffer."""
+"""Emacs-style kill ring: consecutive kills accumulate into one entry; supports yank and yank-pop."""
 
 
 class KillRing:
@@ -11,14 +6,7 @@ class KillRing:
         self._ring: list[str] = []
 
     def push(self, text: str, *, prepend: bool, accumulate: bool = False) -> None:
-        """Add text to the kill ring.
-
-        prepend: if accumulating, prepend (backward deletion) or append
-        (forward deletion) — keeps repeated word-kills in either
-        direction reading back in the order they were typed.
-        accumulate: merge with the most recent entry instead of
-        creating a new one.
-        """
+        """Add text; accumulate merges into the latest entry (prepend for backward kills)."""
         if not text:
             return
 

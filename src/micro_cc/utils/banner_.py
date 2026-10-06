@@ -1,20 +1,4 @@
-"""BANNER — the startup splash. Pure Rich-markup string, zero UI-framework
-dependency, so it lives in utils/ rather than tui_native/.
-
-Colors come from the active theme set (utils/theme_store_), so the splash
-repaints with everything else on a /theme switch:
-
-  banner_colors  the wordmark hue, picked at random per launch from a small
-                 list — the per-launch variety is kept, but the hues now
-                 come from the theme instead of being hardcoded pastels
-                 (which were tuned for a dark ground and washed out on white)
-  banner_dim     the shadow/dim strokes and the quote + key hints
-
-banner() is a FUNCTION, not a module constant: a live theme switch has to be
-able to rebuild the splash, so binding it once at import would freeze the
-old palette for the process's whole life. start_live_tui_ calls it when
-constructing the widget and again from _apply_theme.
-"""
+"""Startup splash: pure Rich-markup string; colors from active theme."""
 
 import random
 
@@ -43,13 +27,10 @@ def _banner_template(c: str, dim: str) -> str:
 
 
 def banner() -> tuple[str, str]:
-    """(splash_markup, chosen_hue). The hue is returned so anything that
-    wants to match the wordmark (the hint bar historically did) can, without
-    picking a second random color of its own."""
+    """Return (splash_markup, chosen_hue); hue for matching wordmark color."""
     c = banner_color()
     return _banner_template(c, theme_store_.get("banner_dim")), c
 
 
-# Picked once at import so the very first frame (before any /theme switch)
-# has a splash; start_live_tui_ rebuilds it via banner() on a theme change.
+# Picked once at import; start_live_tui_ rebuilds on /theme switch.
 BANNER, BANNER_COLOR = banner()

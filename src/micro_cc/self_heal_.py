@@ -1,34 +1,4 @@
-"""Supervisor entry point: run the TUI, and if it fails to BOOT, reinstall
-the published micro-cc wheel over whatever is on disk and try again.
-
-This is the second half of the "malleable harness" mechanism (the first is
-utils/self_reload_.py's restart-on-self-change). Because the harness is plain
-.py files loaded from a source tree, the model can edit its own code — and an
-edit can break the tree so the app no longer starts. Without a supervisor that
-failure is unrecoverable from inside the app: the process that would report
-the error is the process that won't start.
-
-So the TUI is now launched through this module (pyproject's `microcc` console
-script points here, and self_reload_.exec_relaunch re-execs into here). It:
-
-  1. runs the real app (start_live_tui_.start_),
-  2. on a *boot* failure — start_ raised before the app ever signalled it was
-     up — runs the same `pip install --force-reinstall micro-cc` the /update
-     command uses, then re-execs itself,
-  3. bounds that: at most MAX_BOOT_ATTEMPTS consecutive boot failures, then it
-     stops reinstalling and reports recovery instructions instead of looping.
-
-"Booted" is a real signal, not a timer guess: start_live_tui_.start() calls
-note_boot_ok() once it is up, which clears the attempt counter. So the counter
-only ever accumulates *consecutive failures to reach a running UI* — a
-long-lived session that later crashes on some unrelated bug is not a boot
-failure and does not trigger a reinstall.
-
-Deliberately stdlib-only at module scope, and it imports nothing from
-micro_cc outside the guarded block in main() — a broken harness module must
-surface as a caught boot failure here, not as an ImportError that kills the
-supervisor before it can act.
-"""
+"""Boot supervisor: restart TUI with wheel reinstall on boot failure (max 3 attempts; never on a source checkout)."""
 
 import importlib.util
 import json
@@ -47,9 +17,14 @@ _CRASH_LOG = os.path.join(os.path.expanduser("~"), ".micro-cc", "boot_crash.log"
 _ENTRY_MODULE = "micro_cc.self_heal_"
 
 
+def _is_source_checkout() -> bool:
+    """True when running from a source tree; self-contained so a broken tree can't break it."""
+    here = os.path.abspath(__file__)
+    return "site-packages" not in here and "dist-packages" not in here
+
+
 def _project_dir_from_argv() -> str:
-    """Same resolution start_live_tui_.start_ uses, so the state key matches
-    the project the app will actually open."""
+    """Get project dir from argv (matches start_live_tui_ resolution)."""
     if len(sys.argv) > 1:
         return os.path.abspath(sys.argv[1])
     return os.getcwd()
@@ -84,22 +59,14 @@ def _save_entry(project_dir: str, attempts: int, booted: bool) -> None:
 
 
 def note_boot_ok(project_dir: str) -> None:
-    """Called by start_live_tui_.start() the moment the app is actually up.
-    Clearing the counter here — rather than on clean exit — is what makes the
-    bound count *consecutive boot failures* instead of every restart in a
-    session: a deliberate self-reload (utils/self_reload_) re-execs through
-    this supervisor and increments the counter, and this clears it right back
-    once the new process proves it renders. Never raises."""
+    """Mark boot successful; clears consecutive-failure counter."""
     try:
         _save_entry(project_dir, attempts=0, booted=True)
     except Exception:
         pass
 
 
-# Stock libs whose import name a paper-* fork now owns. pip installs both side
-# by side (different distribution names), the forks refuse to import in that
-# state, and a wheel has no install hook to evict the old one — so every
-# install path we drive evicts it after installing.
+# Evict stock libs shadowed by paper-* forks after install
 _STOCK_TO_PAPER = {"python-pptx": "paper-pptx", "python-docx": "paper-docx", "openpyxl": "paper-xlsx"}
 
 
@@ -109,7 +76,7 @@ def _uv() -> str | None:
 
 
 def install_cmd(*pkgs: str, force: bool = True, no_deps: bool = False) -> list[str]:
-    """Install into the running env: pip when present, else uv (uv tool envs ship without pip)."""
+    """Build install command (pip or uv, preferring pip)."""
     if importlib.util.find_spec("pip") or not _uv():
         return [sys.executable, "-m", "pip", "install", "--upgrade", *(["--force-reinstall"] if force else []),
                 *(["--no-deps"] if no_deps else []), "--quiet", "--no-input", "--disable-pip-version-check", *pkgs]
@@ -133,10 +100,7 @@ def _installed(dist: str) -> bool:
 
 
 def evict_stock_office_libs() -> str | None:
-    """Uninstall stock libs shadowed by an installed paper fork, then
-    force-reinstall that fork (the uninstall deletes files both share).
-    Run only after a successful install, so an offline failure leaves the old
-    working env untouched. Returns an error tail, or None."""
+    """Uninstall stock office libs shadowed by paper-* forks; return error tail or None."""
     stock = [s for s, p in _STOCK_TO_PAPER.items() if _installed(s) and _installed(p)]
     if not stock:
         return None
@@ -200,17 +164,27 @@ def _give_up_message(project_dir: str) -> str:
     )
 
 
+def _start_catalog_refresh() -> None:
+    """Start background thread to refresh model catalog cache."""
+    try:
+        import threading
+
+        from micro_cc.models.catalog_ import refresh_remote_catalog
+
+        threading.Thread(target=refresh_remote_catalog, name="catalog-refresh", daemon=True).start()
+    except Exception:
+        pass
+
+
 def main() -> None:
     project_dir = _project_dir_from_argv()
     entry = _entry(project_dir)
     attempts = int(entry.get("attempts", 0))
+    source = _is_source_checkout()
 
-    # Budget exhausted: don't reinstall again, but still try to start once —
-    # if the user has since fixed the tree this succeeds and clears the
-    # counter, so a fixed checkout always recovers; only an actually-broken
-    # one lands on the give-up message. No reinstall here, so no loop.
-    if attempts >= MAX_BOOT_ATTEMPTS:
+    if attempts >= MAX_BOOT_ATTEMPTS and not source:  # Budget exhausted; try start once more
         sys.stderr.write(_give_up_message(project_dir))
+        _start_catalog_refresh()
         try:
             from micro_cc.start_live_tui_ import start_
             start_()
@@ -222,34 +196,30 @@ def main() -> None:
         note_boot_ok(project_dir)
         sys.exit(0)
 
-    # Assume the worst until the app says otherwise; note_boot_ok clears this.
-    _save_entry(project_dir, attempts=attempts + 1, booted=False)
+    _save_entry(project_dir, attempts=attempts + 1, booted=False)  # Assume worst, clear on success
+    _start_catalog_refresh()
 
     try:
         from micro_cc.start_live_tui_ import start_
         start_()
     except BaseException:
-        # KeyboardInterrupt (Ctrl+C) is a normal way to leave the app, not a
-        # boot failure — treat it as a clean exit so it can't trigger a
-        # reinstall. start_live_tui_ already swallows its own Ctrl+C; this
-        # guards the path where it propagates.
-        if isinstance(sys.exc_info()[1], KeyboardInterrupt):
+        if isinstance(sys.exc_info()[1], KeyboardInterrupt):  # User quit is not a boot failure
             sys.exit(0)
 
         tb = traceback.format_exc()
         _log_crash(tb)
 
-        if _entry(project_dir).get("booted"):
-            # The app reached a running UI and crashed later — a real bug,
-            # but not a failure to boot. Report it; don't reinstall over a
-            # tree that demonstrably starts.
+        if _entry(project_dir).get("booted"):  # Reached UI, crashed after; don't reinstall
             sys.stderr.write(tb)
             sys.exit(1)
 
-        # Never got a UI up — the tree is broken. Reinstall and relaunch.
-        if _reinstall():
-            _relaunch()  # does not return on success
-        # Reinstall failed (offline, permissions…): report, don't loop.
+        if source:  # A wheel would shadow the dev tree in site-packages; leave the fix to the developer
+            sys.stderr.write(tb)
+            sys.stderr.write(f"[ micro-cc ] boot failed on a source checkout, not reinstalling. Crash log: {_CRASH_LOG}\n")
+            sys.exit(1)
+
+        if _reinstall():  # UI never started; tree is broken
+            _relaunch()
         sys.stderr.write(tb)
         sys.exit(1)
     else:

@@ -1,16 +1,4 @@
-"""One list of tips, shown by both front ends.
-
-The TUI rotates these through its hint bar; the GUI drops them into the input
-placeholder once a turn settles. Same copy either way, so a tip added here
-shows up in both without anyone remembering to mirror it.
-
-`where` scopes a tip to the surface it makes sense on — telling someone
-already looking at the browser that /gui opens the browser is noise.
-Presentation (the ⌖ prefix both surfaces use) belongs to the surface, not to
-the text.
-
-Keep these SHORT — they land in one line of chrome next to the status bar.
-"""
+"""Tips for TUI/GUI; keep short (one-line)."""
 
 TUI = "tui"
 GUI = "gui"
@@ -39,5 +27,5 @@ HINTS = [
 
 
 def for_surface(surface: str) -> list:
-    """Just the tip strings that belong on `surface`."""
+    """Return tips for given surface (tui/gui)."""
     return [h["text"] for h in HINTS if surface in h["where"]]

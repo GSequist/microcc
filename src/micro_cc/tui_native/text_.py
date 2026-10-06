@@ -1,32 +1,4 @@
-"""Word-wrapping, ANSI-preserving text block. Implements text wrapping with
-ANSI code preservation, drawing on proven patterns for handling escape
-sequences and text layout.
-
-Two known limitations already documented in text_utils_.py's module
-docstring: no grapheme segmentation (every non-escape char counts as width 1
-— CJK/combining/emoji width is wrong, same known gap) and no OSC 8 hyperlink
-tracking (nothing feeds TextLine a hyperlink today).
-
-Markup translation
--------------------
-TextLine wraps plain ANSI strings. What actually reaches the Static
-widgets (see start_live_.py's _static_hint_text, _status_text/_update_status_bar,
-_flash_status, _tick_working) is a *small, fixed* vocabulary of Rich markup:
-`[red]...[/red]`, `[#rrggbb]...[/#rrggbb]` (hex colors, including
-BANNER_COLOR), plain unstyled text, and already-raw ANSI like `\x1b[7m...\x1b[27m`
-(inverse video, used directly rather than through markup). translate_markup()
-below handles exactly that: the named color `red`, any `#rrggbb` hex color
-(converted to a 24-bit ANSI foreground code), and closing tags — either
-`[/red]` / `[/#rrggbb]` (matching the tag that opened) or a bare `[/]`.
-This is NOT a Rich markup engine: no nesting, no bold/italic/other named
-colors, no background colors. Anything outside that exact vocabulary (e.g.
-the banner's own richer template, which uses named colors like `grey42`) is
-left untouched, brackets and all, rather than silently stripped — so an
-unsupported tag shows up as visible garbage instead of vanishing text.
-Already-raw ANSI passes through untouched too, since it contains no `[...]`
-bracket tags for the regex to match — so TextLine transparently accepts
-either plain-plus-markup or pre-converted-ANSI text.
-"""
+"""Word-wrapping text with ANSI code preservation and minimal markup translation."""
 
 import re
 from dataclasses import dataclass, field
@@ -39,9 +11,7 @@ RESET = "\x1b[0m"
 
 # --- markup translation -------------------------------------------------
 
-# Named aliases for TextLine markup. "red" is an alias for the theme's error
-# token rather than a fixed hue, so a theme switch reaches it too; resolved at
-# translate time, not import time.
+# Named color "red" is aliased to theme's error token; resolved at translate time.
 _NAMED_COLOR_TOKENS = {"red": "error"}
 _TAG_RE = re.compile(r"\[(#[0-9a-fA-F]{6}|red)\]|\[/(?:#[0-9a-fA-F]{6}|red)?\]")
 
@@ -67,10 +37,7 @@ def translate_markup(text: str) -> str:
 
 
 # --- SGR state tracking (ANSI attribute tracking) -------------------
-# Track the attribute numbers individually so each can be turned off without
-# a full reset. A full \x1b[0m at a wrap point would also kill color/background,
-# not just
-# whatever's bleeding into the padding).
+# Track attributes individually to turn off without full reset.
 
 _TOGGLE_ATTRS = (1, 2, 3, 4, 5, 7, 8, 9)
 
@@ -165,8 +132,7 @@ def _update_tracker_from_text(text: str, state: _SgrState) -> None:
 
 
 # --- tokenizing + wrapping ------------------------------------------------
-# Uses a simplified width model (width-1-per-char), without grapheme
-# segmentation or special CJK break rules.
+# Simplified width model (1 char = 1 width); no grapheme segmentation.
 
 def _split_tokens_with_ansi(text: str) -> list[str]:
     tokens: list[str] = []
@@ -288,20 +254,7 @@ def _wrap_single_line(line: str, width: int, strip_trailing: bool = True) -> lis
 
 
 def wrap_text_with_ansi(text: str, width: int, strip_trailing: bool = True) -> list[str]:
-    """Word-wrap preserving ANSI codes across breaks. No padding, no
-    background — just lines each <= width visible columns.
-
-    strip_trailing=True (the default, used by read-only rendering like
-    MessageRow) drops trailing whitespace from every wrapped sub-line —
-    fine there since it's purely cosmetic. PromptInput's own _wrap_line
-    passes strip_trailing=False: a trailing space is live content the
-    user just typed (and the cursor may currently sit right after it,
-    mid-edit, on any wrapped sub-line — not only the last one overall),
-    not decoration to clean up. Stripping it there made a just-typed
-    space at a wrap boundary render as if it never happened, and threw
-    off the cursor-column math in PromptInput.render() (computed from
-    each wrapped sub-line's stripped visible width), which is what made
-    it look like the space had silently vanished."""
+    """Word-wrap preserving ANSI codes; strip_trailing controls space handling at breaks."""
     if not text:
         return [""]
     input_lines = re.split(r"\r\n|\r|\n", text)
@@ -320,9 +273,7 @@ def _apply_background(line: str, width: int, bg_fn: Callable[[str], str]) -> str
 
 
 class TextLine:
-    """Component protocol (render/invalidate). Multi-line, word-wrapped,
-    optionally padded text block — see module docstring for the markup
-    it accepts."""
+    """Multi-line word-wrapped text block with optional padding."""
 
     def __init__(self, text: str = "", padding_x: int = 1, padding_y: int = 1,
                  custom_bg_fn: Callable[[str], str] | None = None):

@@ -107,6 +107,7 @@ def _fake_supervisor_env(monkeypatch_root):
     rec = {"reinstalls": 0, "execs": 0}
 
     sh._reinstall = lambda: (rec.__setitem__("reinstalls", rec["reinstalls"] + 1), True)[1]
+    sh._is_source_checkout = lambda: False  # these walks model an installed wheel
 
     def fake_execv(path, argv):
         rec["execs"] += 1
@@ -188,10 +189,37 @@ def test_boot_recovery_bounded():
         _fail("a post-boot crash must not trigger a reinstall")
 
 
+def test_source_checkout_never_reinstalls():
+    d = tempfile.mkdtemp()
+    rec, mod = _fake_supervisor_env(d)
+    sh._is_source_checkout = lambda: True
+    pd = "/tmp/sr_test_source"
+
+    def always_fail():
+        raise RuntimeError("broken dev tree")
+    mod.start_ = always_fail
+    sys.argv = ["microcc", pd]
+    for _ in range(sh.MAX_BOOT_ATTEMPTS + 2):  # past the budget too: no give-up reinstall path
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            try:
+                sh.main()
+            except SystemExit as e:
+                if e.code != 1:
+                    _fail(f"source boot failure should exit 1, got {e.code}")
+        if "not reinstalling" not in err.getvalue() or "broken dev tree" not in err.getvalue():
+            _fail(f"source boot failure must explain itself: {err.getvalue()[-200:]}")
+    if rec["reinstalls"] or rec["execs"]:
+        _fail(f"source checkout reinstalled/relaunched: {rec}")
+    if "broken dev tree" not in open(sh._CRASH_LOG).read():
+        _fail("source boot failure not written to crash log")
+
+
 def main():
     test_manifest_diff()
     test_prompt_stash()
     test_boot_recovery_bounded()
+    test_source_checkout_never_reinstalls()
     sys.stderr.write("OK: self-reload / self-heal properties held\n")
     sys.exit(0)
 

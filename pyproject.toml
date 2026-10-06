@@ -4,17 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "micro-cc"
-version = "0.2.101"
+version = "0.2.104"
 description = "Harness that gives frontier models full system access — shell, filesystem, browser, MCP — running directly on the metal."
 readme = "README.md"
 requires-python = ">=3.12"
 license = {file = "LICENSE"}
 authors = [{name = "George Salapa"}]
 classifiers = ["License :: OSI Approved :: MIT License"]
-
-[project.urls]
-Homepage = "https://github.com/GSequist/microcc"
-Issues = "https://github.com/GSequist/microcc/issues"
 
 dependencies = [
     "anthropic>=0.125.0",
@@ -56,6 +52,10 @@ dependencies = [
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.2"]
 
+[project.urls]
+Homepage = "https://github.com/GSequist/microcc"
+Issues = "https://github.com/GSequist/microcc/issues"
+
 [project.scripts]
 # The interactive entry point goes through the supervisor (self_heal_.main),
 # not start_live_tui_ directly: the harness is plain source the model can edit,
@@ -71,7 +71,7 @@ where = ["src"]
 exclude = ["*pyarmor_runtime*", "build_obf*"]
 
 [tool.setuptools.package-data]
-"micro_cc.skills" = ["**/*.md", "**/scripts/*", "**/canvas-fonts/*"]
+"micro_cc.skills" = ["**/*.md", "**/scripts/*", "**/canvas-fonts/*", "hairline-create/*.js", "hairline-create/*.mjs", "hairline-create/*.html", "hairline-create/examples/*", "hairline-create/LICENSE-lib"]
 # Built by `npm run build` in frontend/ (see publish.sh) — the wheel ships the
 # compiled GUI, never the TSX sources, so installing needs no node.
 "micro_cc.webui" = ["dist/index.html", "dist/assets/*"]

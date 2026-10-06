@@ -12,13 +12,11 @@ _MEMORY_PATH = Path.home() / ".micro-cc" / "memory.json"
 
 
 def _use_postgres() -> bool:
-    """Same toggle as msg_store_._use_postgres — set MICRO_CC_POSTGRES_URL and
-    every call in this module routes to Postgres instead of local disk."""
+    """Routes to Postgres if MICRO_CC_POSTGRES_URL is set."""
     return bool(os.getenv("MICRO_CC_POSTGRES_URL"))
 
 
-# Same relay pattern as msg_store_.set_sink: (project_dir, action, key,
-# description, content), add/edit/delete only.
+# Post-local-write callback: (project_dir, action, key, description, content).
 _sink: Optional[Callable[[Optional[str], str, str, str, str], None]] = None
 
 
@@ -38,11 +36,7 @@ def _notify_sink(project_dir: Optional[str], action: str, key: str, description:
 
 
 def _project_memory_path(project_dir: str) -> Path:
-    """Project-scoped memory lives alongside this project's other local
-    state — ~/.micro-cc/projects/{name}_{hash}/memory.json — reusing the
-    same storage_dir convention as msg_store_ (messages.jsonl), inbox_store_
-    (inbox.json), subagent_tracker_ (tracked_subagents.json), etc. Imported
-    lazily to avoid a module-load cycle (msg_store_ also imports pg_store_)."""
+    """Path to project's memory.json in its storage dir."""
     from micro_cc.utils.msg_store_ import _get_storage_dir
     return _get_storage_dir(project_dir) / "memory.json"
 
@@ -76,8 +70,7 @@ def hydrate_local(entries: dict, project_dir: str | None = None) -> None:
 
 
 def list_memories(project_dir: str | None = None) -> list:
-    """Manifest: [{key, description, updated_at}], newest first. Pass
-    project_dir to list that project's scoped memories instead of global."""
+    """List [{key, description, updated_at}], newest first."""
     if _use_postgres():
         return pg_store_.list_memories(project_hash=_phash(project_dir))
 

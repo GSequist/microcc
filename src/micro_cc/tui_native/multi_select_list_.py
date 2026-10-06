@@ -1,8 +1,4 @@
-"""Multi-select picker matching AskUserSelect's shape: space toggles the
-item under the cursor, enter confirms the checked set (in item order),
-escape cancels. Cursor position and checked-state are independent —
-you can move over an item without checking it. Reuses ListPicker's
-rendering/navigation/filtering by composition rather than duplicating it."""
+"""Multi-select picker; space toggles items, enter confirms checked set."""
 
 from dataclasses import dataclass
 
@@ -17,6 +13,7 @@ class MultiSelectList:
         self._picker = ListPicker(items, max_visible, primary_min, primary_max, theme, max_desc_lines)
         self.theme = theme or default_theme()
         self.checked: set[str] = set()
+        self._hit_rows: list[tuple[int, int, int]] = []  # (first_row, last_row, item index) inside the border
 
         self.on_confirm = None           # Callable[[list[PickerItem]], None]
         self.on_cancel = None            # Callable[[], None]
@@ -80,6 +77,15 @@ class MultiSelectList:
         if self.on_cancel:
             self.on_cancel()
 
+    def click_row(self, row: int) -> bool:
+        """Move cursor to row and toggle that item; 0 is top border."""
+        for first, last, idx in self._hit_rows:
+            if first <= row <= last:
+                self._picker.selected_index = idx
+                self.toggle()
+                return True
+        return False
+
     def handle_key(self, key: str) -> bool:
         if key == "up":
             self.move_up()
@@ -108,13 +114,16 @@ class MultiSelectList:
             return wrap_in_border([self.theme.no_match("  No matches")], width)
 
         lines: list[str] = []
+        self._hit_rows = []
         primary_width = self._picker._primary_column_width()
         picker = self._picker
         start = max(0, min(picker.selected_index - picker.max_visible // 2,
                             len(picker.items) - picker.max_visible))
         end = min(start + picker.max_visible, len(picker.items))
         for i in range(start, end):
-            lines.extend(self._render_item(picker.items[i], i == picker.selected_index, inner_width, primary_width))
+            item_lines = self._render_item(picker.items[i], i == picker.selected_index, inner_width, primary_width)
+            self._hit_rows.append((len(lines) + 1, len(lines) + len(item_lines), i))
+            lines.extend(item_lines)
         if start > 0 or end < len(picker.items):
             lines.append(self.theme.scroll_info(f"  ({picker.selected_index + 1}/{len(picker.items)})"))
         return wrap_in_border(lines, width)
@@ -128,9 +137,7 @@ class MultiSelectList:
         body_lines = self._picker._render_item(item, False, max(1, width - prefix_w + 2), primary_width)
         lines = []
         for i, body in enumerate(body_lines):
-            # _render_item already prepends its own 2-space "  " prefix; strip
-            # it and substitute ours (arrow + checkbox) on the first line, or
-            # our own matching indent on a wrapped continuation line.
+            # Strip picker's prefix and use ours (arrow + checkbox) on first line, indent on rest.
             stripped = body[2:] if body.startswith("  ") else body
             line = f"{prefix}{stripped}" if i == 0 else f"{indent}{stripped}"
             if is_cursor:

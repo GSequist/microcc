@@ -9,7 +9,7 @@ SYNC_TOOL_TIMEOUT = 120
 
 
 def _run_in_daemon_thread(fn, kwargs: dict) -> asyncio.Future:
-    """Run a sync tool on a daemon thread (not to_thread: executor threads block process exit)."""
+    """Run sync tool on daemon thread to avoid blocking process exit."""
     loop = asyncio.get_running_loop()
     fut = loop.create_future()
     ctx = contextvars.copy_context()
@@ -42,7 +42,7 @@ async def execute_tool_call(
     project_dir: str,
     model: str,
 ):
-    """Execute a tool call; sync tools run on a daemon thread with timeout."""
+    """Execute tool call; sync tools run on daemon thread with timeout."""
     name = tool_call.name
     args = tool_call.input
 
