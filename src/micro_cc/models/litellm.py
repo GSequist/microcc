@@ -402,7 +402,7 @@ async def l_model_call(
     alias = model
     # Registry-derived output ceiling when the caller didn't pass one
     # explicitly — was a flat 120000 regardless of alias, which over-asks
-    # haiku-4.5 (max_output 64_000) on its bedrock route through this same
+    # an older 64k-max_output alias on its bedrock route through this same
     # proxy (the Haiku trap). 120000 stays only as the fallback for an
     # unregistered alias.
     max_tokens = max_tokens or max_output_for(alias) or 120000

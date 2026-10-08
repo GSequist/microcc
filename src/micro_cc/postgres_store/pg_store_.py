@@ -43,7 +43,8 @@ def _connect():
             "Postgres backend selected but psycopg isn't installed — "
             "run `pip install micro-cc[postgres]`"
         ) from e
-    url = os.environ.get("MICRO_CC_MIRROR_POSTGRES_URL") or os.environ.get("CRM_POSTGRES_URL") or os.environ["MICRO_CC_POSTGRES_URL"]
+    # Embedding apps set the mirror URL for their sink without flipping the Postgres switch.
+    url = os.environ.get("MICRO_CC_MIRROR_POSTGRES_URL") or os.environ["MICRO_CC_POSTGRES_URL"]
     conn = psycopg.connect(url, autocommit=True)
     schema_.ensure_all(conn)
     return conn
@@ -470,22 +471,34 @@ def load_settings() -> dict | None:
 
 
 def load_theme() -> dict | None:
-    """None on a missing row — same "no row yet" contract as load_settings,
-    so theme_store_._load() can tell "never written" apart from "written"."""
+    """Theme row of micro_cc_settings; None if never written. Copies a pre-0.2.106 micro_cc_theme row once."""
     with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT data FROM micro_cc_settings WHERE id = 'theme'")
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        cur.execute("SELECT to_regclass('micro_cc_theme') IS NOT NULL")
+        if not cur.fetchone()[0]:
+            return None
         cur.execute("SELECT data FROM micro_cc_theme WHERE id = 'global'")
         row = cur.fetchone()
-    return row[0] if row else None
+        if not row:
+            return None
+        # Idempotent: racing processes upsert the same legacy data; the old table is left in place.
+        cur.execute(
+            "INSERT INTO micro_cc_settings (id, data, updated_at) VALUES ('theme', %s, now()) ON CONFLICT (id) DO NOTHING",
+            (json.dumps(row[0]),),
+        )
+        return row[0]
 
 
 def save_theme(store: dict) -> None:
-    """Whole-dict upsert, mirroring save_settings — a look is edited by a
-    human via /theme, not a hot path."""
+    """Whole-dict upsert into the 'theme' row of micro_cc_settings; edited via /theme, not a hot path."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO micro_cc_theme (id, data, updated_at)
-            VALUES ('global', %s, now())
+            INSERT INTO micro_cc_settings (id, data, updated_at)
+            VALUES ('theme', %s, now())
             ON CONFLICT (id) DO UPDATE
                 SET data = EXCLUDED.data, updated_at = now()
             """,

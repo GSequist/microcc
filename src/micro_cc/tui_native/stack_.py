@@ -216,3 +216,125 @@ class VStack:
         for e in self.entries:
             e.component.invalidate()
 
+
+
+def _keep_images(left: str, out: str, left_w: int) -> str:
+    """Re-attach the kitty image escapes compositing strips, at their original column (CHA, zero-width)."""
+    start = left.find("\x1b_G")
+    if start == -1:
+        return out
+    from micro_cc.tui_native.text_utils_ import visible_width
+    end = left.rfind("\x1b\\") + 2  # chunked transmits are one contiguous run
+    c = visible_width(left[:start])
+    if c >= left_w:
+        return out
+    seq = left[start:end]
+    return seq + out if c == 0 else f"\x1b[{c + 1}G{seq}\x1b[1G{out}"
+
+
+class HSplit:
+    """Conversation plus an optional mod pane on its right, top or bottom; collapses to the conversation alone when too small or closed."""
+
+    MIN_LEFT = 60     # conversation columns kept beside a right pane
+    MIN_PANE = 24     # narrowest right pane
+    MIN_ROWS = 6      # conversation rows kept beside a top/bottom pane
+    MIN_PANE_ROWS = 3
+
+    def __init__(self, left):
+        self.left = left
+        self.pane = None           # callable(width, height) -> lines, or None when the pane closed itself
+        self.pane_width = "40%"    # size: columns for "right", rows for "top"/"bottom"; int or "NN%"
+        self.side = "right"        # "right" | "top" | "bottom"
+        self.on_close = None       # called when pane returns None
+        self.rect = None           # (col, row, width, height) of the pane in the last frame; None = not shown
+        self._width = 0
+        self._pane_w = 0
+        self._left_top = 0         # rows above the conversation (top pane + divider)
+        self._left_lines: list[str] = []
+
+    @staticmethod
+    def _size(spec, total: int) -> int:
+        return total * int(spec[:-1]) // 100 if isinstance(spec, str) and spec.endswith("%") else int(spec)
+
+    def _pane_cols(self, width: int) -> int:
+        if self.pane is None or self.side != "right":
+            return 0
+        cols = min(self._size(self.pane_width, width), width - self.MIN_LEFT - 1)
+        return cols if cols >= self.MIN_PANE else 0
+
+    def _pane_rows(self, height: int) -> int:
+        rows = min(self._size(self.pane_width, height), height - self.MIN_ROWS - 1)
+        return rows if rows >= self.MIN_PANE_ROWS else 0
+
+    def render(self, width: int) -> list[str]:
+        self._width, self._pane_w = width, self._pane_cols(width)
+        left_w = width - self._pane_w - 1 if self._pane_w else width
+        self._left_lines = _safe_render(self.left, left_w)
+        return self._left_lines
+
+    def _scroll_left(self, height: int) -> list[str]:
+        scrolled = getattr(self.left, "get_scrolled_lines", None)
+        return scrolled(self._left_lines, height) if scrolled else (self._left_lines + [""] * height)[:height]
+
+    def _draw_pane(self, w: int, h: int):
+        """Pane lines padded to h, or None after closing a pane that returned None."""
+        try:
+            lines = self.pane(w, h)
+        except Exception:
+            _log_render_error(self.pane)
+            lines = []
+        if lines is None:
+            self.pane, self.rect = None, None
+            if self.on_close:
+                self.on_close()
+            return None
+        return (list(lines) + [""] * h)[:h]
+
+    def get_scrolled_lines(self, full_lines: list[str], height: int) -> list[str]:
+        self._left_top = 0
+        if self.pane is not None and self.side in ("top", "bottom"):
+            return self._vertical(height)
+        lines = self._scroll_left(height)
+        if not self._pane_w:
+            self.rect = None
+            return lines
+        from micro_cc.tui_native.alt_screen_ import composite_tui_line
+        right = self._draw_pane(self._pane_w, height)
+        if right is None:
+            return lines
+        col = self._width - self._pane_w
+        self.rect = (col, 0, self._pane_w, height)
+        bar = "\x1b[2m│\x1b[22m"
+        return [_keep_images(l, composite_tui_line(l, bar + r, col - 1, self._pane_w + 1, self._width), col - 1)
+                for l, r in zip(lines, right)]
+
+    def _vertical(self, height: int) -> list[str]:
+        ph = self._pane_rows(height)
+        if not ph:
+            self.rect = None
+            return self._scroll_left(height)
+        left_h = height - ph - 1
+        pane = self._draw_pane(self._width, ph)
+        if pane is None:
+            return self._scroll_left(height)
+        rule = "\x1b[2m" + "─" * self._width + "\x1b[22m"
+        if self.side == "top":
+            self.rect, self._left_top = (0, 0, self._width, ph), ph + 1
+            return pane + [rule] + self._scroll_left(left_h)
+        self.rect = (0, left_h + 1, self._width, ph)
+        return self._scroll_left(left_h) + [rule] + pane
+
+    def find_offset(self, component) -> int | None:
+        if component is self.left:
+            return self._left_top
+        nested = getattr(self.left, "find_offset", None)
+        found = nested(component) if nested else None
+        return None if found is None else self._left_top + found
+
+    def find_component_at(self, row: int):
+        row -= self._left_top  # pane/divider rows land outside the conversation's viewport
+        nested = getattr(self.left, "find_component_at", None)
+        return nested(row) if nested else self.left
+
+    def invalidate(self) -> None:
+        self.left.invalidate()

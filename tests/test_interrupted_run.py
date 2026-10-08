@@ -185,6 +185,16 @@ class MirrorUrlTests(unittest.TestCase):
         self.assertNotIn("MICRO_CC_MIRROR_POSTGRES_URL", hidden)
         self.assertNotIn("MICRO_CC_POSTGRES_URL", hidden)
 
+    def test_falls_back_to_main_url_and_ignores_crm_name(self):
+        env = {"CRM_POSTGRES_URL": "postgresql://crm/db", "MICRO_CC_POSTGRES_URL": "postgresql://main/db"}
+        seen = []
+        fake = type("P", (), {"connect": staticmethod(lambda url, **kw: seen.append(url) or (_ for _ in ()).throw(RuntimeError("stop")))})
+        with patch.dict(os.environ, env), patch.dict(sys.modules, {"psycopg": fake}):
+            os.environ.pop("MICRO_CC_MIRROR_POSTGRES_URL", None)
+            with self.assertRaises(RuntimeError):
+                pg_store_._connect()
+        self.assertEqual(seen, ["postgresql://main/db"])
+
 
 class HeadlessResumeTests(LoopCase):
     async def test_killed_run_resumes_with_tool_aware_text_and_no_duplicate_rows(self):

@@ -75,6 +75,48 @@ def diff_manifest(old: dict, new: dict) -> set:
     return changed
 
 
+# Process-wide reload state shared by the TUI poll and the loop; the model decides when to restart.
+_state = {"live": False, "manifest": None, "changed": set(), "requested": False}
+
+
+def init_baseline() -> None:
+    """Snapshot the source at startup and mark a TUI present (only it can restart the process)."""
+    _state["manifest"] = build_manifest()
+    _state["live"] = True
+
+
+def is_live() -> bool:
+    return _state["live"]
+
+
+def refresh_changes() -> set:
+    """Diff disk against the baseline, record new changes and advance the baseline; no-op without a TUI."""
+    if _state["manifest"] is None:
+        return set()
+    current = build_manifest()
+    changed = diff_manifest(_state["manifest"], current)
+    if changed:
+        _state["manifest"] = current
+        _state["changed"] |= changed
+    return changed
+
+
+def changed_files() -> list:
+    return sorted(_state["changed"])
+
+
+def request_reload() -> None:
+    _state["requested"] = True
+
+
+def cancel_request() -> None:
+    _state["requested"] = False
+
+
+def reload_requested() -> bool:
+    return _state["requested"]
+
+
 # Unsent prompts are the only live state a restart would eat; persisted in storage dir.
 
 def _prompt_sidecar(project_dir: str):

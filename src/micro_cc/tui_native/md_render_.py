@@ -14,18 +14,21 @@ def rich_theme() -> Theme:
     """Markdown styles from active color set; rebuilt fresh per call for live /theme switch."""
     c = theme_store_.get
     return Theme({
-        "markdown.code": f"bold {c('inline_code')} on {c('code_bg')}",
+        "markdown.code": c("inline_code"),
         "markdown.code_block": c("code_fg"),
         "markdown.block_quote": c("quote"),
-        "markdown.h2": f"bold {c('heading')} underline",
-        "markdown.h3": f"bold {c('heading')}",
+        "markdown.h1": f"{c('heading')} underline",
+        "markdown.h2": c("heading"),
+        "markdown.h3": c("heading"),
         "markdown.h4": f"italic {c('heading')}",
+        "markdown.strong": c("heading"),
         "markdown.link": c("link"),
         "markdown.link_url": f"{c('link_url')} underline",
         "markdown.list": c("list"),
         "markdown.item.number": c("list"),
+        "markdown.item.bullet": c("list"),
         "markdown.table.border": c("table_border"),
-        "markdown.table.header": f"bold {c('table_header')}",
+        "markdown.table.header": c("table_header"),
     })
 
 

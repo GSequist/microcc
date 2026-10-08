@@ -47,12 +47,12 @@ def build_diff_lines(old: str, new: str, file_path: str = "", context: int = 3) 
                 continue
             if tag in ("delete", "replace"):
                 for i in range(i1, i2):
-                    line = Text("- ", style=f"bold {theme_store_.get('diff_del_fg')}") + old_hi[i]
+                    line = Text("- ", style=theme_store_.get('diff_del_fg')) + old_hi[i]
                     line.stylize(f"on {theme_store_.get('diff_del_bg')}")
                     out.append(line)
             if tag in ("insert", "replace"):
                 for j in range(j1, j2):
-                    line = Text("+ ", style=f"bold {theme_store_.get('diff_add_fg')}") + new_hi[j]
+                    line = Text("+ ", style=theme_store_.get('diff_add_fg')) + new_hi[j]
                     line.stylize(f"on {theme_store_.get('diff_add_bg')}")
                     out.append(line)
     return out

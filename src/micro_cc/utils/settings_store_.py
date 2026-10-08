@@ -24,6 +24,8 @@ def _defaults() -> dict:
         "tokens_budget": model_registry.DEFAULT_TRIM_BUDGET,
         # Max concurrent subagents (enforced at spawn; /subagents changes it).
         "max_subagents": DEFAULT_MAX_SUBAGENTS,
+        # Mod side pane open at exit, {"name", "width"}; {} = none. Reopened at TUI start.
+        "pane": {},
     }
 
 

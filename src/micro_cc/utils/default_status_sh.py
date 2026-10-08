@@ -1,7 +1,7 @@
 _DEFAULT_STATUS_SCRIPT = """#!/usr/bin/env python3
 # ~/.micro-cc/statusline.sh — defines micro-cc's status bar (the line under
 # the input box). Whatever this script prints to stdout becomes that line,
-# verbatim. Edit it freely — there is no other definition of the status bar.
+# verbatim (Rich markup). Edit it freely — there is no other definition of the status bar.
 #
 # You get one JSON object on stdin: {"tokens": {input,output,trimmed,max},
 # "project_dir": "..."} — that's the only stuff that's genuinely live in the
@@ -23,14 +23,32 @@ try:
 except Exception:
     pass
 
-s = f"◈ {settings.get('model', '?')}"
+# Nerd Font icons where the terminal ships them (Ghostty/WezTerm/kitty), plain Unicode elsewhere.
+nerd = os.environ.get("MICRO_CC_NERD", "1" if os.environ.get("TERM_PROGRAM") in ("ghostty", "WezTerm")
+                      or os.environ.get("TERM") == "xterm-kitty" else "0") == "1"
+I = dict(model="\\U000f06a9", ctx="\\U000f061a", cut="\\U000f0190", warn="\\U000f0ecd") if nerd \\
+    else dict(model="\\u25c8", ctx="\\u25a4", cut="\\u2702", warn="\\u26a0")
+SEP = " [dim]\\u00b7[/dim] "
+
+
+def k(n):
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k" if n >= 1e3 else str(n)
+
+
+parts = [f"{I['model']} {settings.get('model', '?')}"]
 if t.get("input"):
-    s += f" | \\u2193 {t['input']:,}"
+    budget = settings.get("tokens_budget") or 0
+    if budget:
+        pct = min(t["input"] / budget, 1)
+        bar, rest = "\\u2501" * round(pct * 10), "\\u2500" * (10 - round(pct * 10))
+        parts.append(f"[dim]{I['ctx']}[/dim] {bar}[dim]{rest} {k(t['input'])}/{k(budget)} ({pct:.0%})[/dim]")
+    else:
+        parts.append(f"[dim]{I['ctx']} {k(t['input'])}[/dim]")
+    parts.append(f"[dim]\\u2191 {k(t.get('output', 0))}[/dim]")
     if t.get("trimmed"):
-        s += f" (\\u2702 {t['trimmed']:,})"
-    s += f" \\u2191 {t.get('output', 0):,}"
+        parts.append(f"[dim]{I['cut']} {k(t['trimmed'])}[/dim]")
 dangerous = settings.get("dangerous") or []
 if dangerous:
-    s += f" | \\u26a0 {len(dangerous)} tools gated"
-print(s)
+    parts.append(f"[dim]{I['warn']} {len(dangerous)} gated[/dim]")
+print(SEP.join(parts))
 """

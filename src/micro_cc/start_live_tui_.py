@@ -7,6 +7,7 @@ import sys
 import platform
 
 from rich.markup import escape as _markup_escape
+from micro_cc.utils import self_reload_
 from micro_cc.utils.history_mount_ import history_mount_
 from micro_cc.utils.msg_normalize_ import cut_short_calls
 from micro_cc.utils.msg_store_ import load_msgs, rewind_msgs, store_msgs
@@ -41,7 +42,8 @@ from micro_cc.utils.tokenization_simple import load_token_stats
 from micro_cc.claude_loop_ import claude_loop
 from collections import deque
 from micro_cc.tui_native.alt_screen_ import TuiAltScreen, OverlayOptions, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN
-from micro_cc.tui_native.stack_ import VStack
+from micro_cc.tui_native.stack_ import HSplit, VStack
+from micro_cc.tui_native import pane_
 from micro_cc.tui_native.scroll_view_ import ScrollView
 from micro_cc.tui_native import list_picker_
 from micro_cc.tui_native.list_picker_ import ListPicker, PickerItem
@@ -238,6 +240,10 @@ class MicroTui():
         self._subagent_poll_cache = {}  # project_dir -> (mtime_ns, size) from last poll
         self._subagent_poll_timer = None
         self._subagent_viewing_target: str | None = None
+        self._subagent_snapshot: list[dict] = []  # last poll, read by mods via api.subagents()
+        ## mod side pane (tui_native/pane_.py)
+        self._pane_name: str | None = None
+        self._pane_focused = False
         # Seed from disk so an old compaction doesn't flash "compacted just now" on launch.
         _existing_checkpoint = load_checkpoint(self._project_dir)
         self._last_checkpoint_index = (
@@ -264,11 +270,9 @@ class MicroTui():
         self._flash_status_timer_task: asyncio.Task | None = None
         self._memory_flash_timer_task: asyncio.Task | None = None
 
-        ## restart-on-self-change: _reload_pending is drained at a turn boundary, never mid-turn.
-        ## _self_manifest is the (mtime_ns, size) baseline; None makes the poll a no-op.
+        ## restart-on-self-change: the poll flags changes; the model restarts via reload_harness_, applied at a turn boundary.
         self._reload_pending = False
         self._reload_changed: set = set()
-        self._self_manifest = None
         self._self_poll_timer: asyncio.Task | None = None
         self._restarting = False  # guards against a second restart mid-relaunch
 
@@ -289,10 +293,12 @@ class MicroTui():
         # Mods load once, before the widget tree renders; 0.2.103 seam files move to legacy/ first.
         self._legacy_moved = mods_.sweep_legacy()
         mods_.bind(self._get_ui)
+        mods_.on_fail(lambda text: self._flash_status(_markup_escape(text), seconds=8))
         mods_.load()
         glyphs_.reload()
 
         self._build_widget_tree()
+        pane_.restore(self)
 
     # --- widget tree -----------------------------------------------------
     def _build_widget_tree(self) -> None:
@@ -350,7 +356,10 @@ class MicroTui():
         # conversation is tall; only messages_scroll may give up rows.
         self.root.add(self.banner, basis="auto", shrink=0)
         self.root.add(self.header_panels, basis="auto", shrink=0)
-        self.root.add(self.messages_scroll, grow=1)
+        # Conversation (or a subagent's) on the left, optional mod pane on the right.
+        self.main_split = HSplit(self.messages_scroll)
+        self.main_split.on_close = lambda: pane_.on_closed(self)
+        self.root.add(self.main_split, grow=1)
         self.root.add(self.bottom_bar, basis="auto", shrink=0)
 
         self.tui = TuiAltScreen(self.root)
@@ -524,6 +533,8 @@ class MicroTui():
             return
         mouse = self.tui.parse_sgr_mouse_event(data)
         if mouse is not None:
+            if pane_.route_mouse(self, mouse):
+                return
             # Intercept wheel events (button 64/65) before selection state machine.
             if mouse["button"] in (64, 65):
                 if not mouse["release"]:
@@ -555,6 +566,9 @@ class MicroTui():
             return
         key_id = parse_key(data)
         if key_id is None:
+            return
+        if pane_.route_key(self, data, key_id):
+            self.request_render()
             return
         if (
             self._input_mode in ("idle", "query_active")
@@ -1303,6 +1317,7 @@ class MicroTui():
         # The UI cleanup below is synchronous for instant feedback.
         if self._current_query_task is not None and not self._current_query_task.done():
             self._current_query_task.cancel()
+            self_reload_.cancel_request()  # an interrupt withdraws a queued reload; the model can ask again
 
         if self._pending_input is not None:
             self._pending_input.set()
@@ -1524,6 +1539,8 @@ class MicroTui():
                     await etype_handler(
                         self, event, container, tool_call_rows, approval_rows
                     )
+                # After the builtin draw, so a mod can't delay or reorder it.
+                mods_.observe(event)
         except asyncio.CancelledError:
             # action_cancel_query already did the UI cleanup; fall through to the idempotent finally.
             pass
@@ -1646,7 +1663,7 @@ class MicroTui():
         history_msgs = history_mount_(target_msgs)
         for m in history_msgs:
             self.subagent_message_list.add(MessageRow(m))
-        self.root.replace(self.messages_scroll, self.subagent_scroll_view)
+        self.main_split.left = self.subagent_scroll_view
         self.subagent_scroll_view.scroll_to_end()
         self.request_render()
 
@@ -1654,7 +1671,7 @@ class MicroTui():
         """Back to the boss conversation; reload from disk unless a turn is active.
         Skipped mid-turn: message_list is fresher than disk and a reload reorders the streaming row."""
         self._subagent_viewing_target = None
-        self.root.replace(self.subagent_scroll_view, self.messages_scroll)
+        self.main_split.left = self.messages_scroll
         self.messages_scroll.scroll_to_end()
         self.request_render()
         turn_active = self._current_query_task is not None and not self._current_query_task.done()
@@ -1755,7 +1772,7 @@ class MicroTui():
             warn = theme_store_.get("warn")
             names = ", ".join(dict.fromkeys(cut))
             self._call_later(1.0, lambda: self._flash_status(
-                f"[bold {warn}]↻ last run was cut off during {names}: marked interrupted, Claude will check state[/bold {warn}]",
+                f"[{warn}]↻ last run was cut off during {names}: marked interrupted, Claude will check state[/{warn}]",
                 seconds=8,
             ))
 
@@ -1769,7 +1786,7 @@ class MicroTui():
             _warn = theme_store_.get("warn")
             _note = _markup_escape(f"mods: {len(_uerrs)} notice(s), first: {_uerrs[0]}")
             self._call_later(9.5 if cut else 1.0, lambda: self._flash_status(
-                f"[bold {_warn}]{_note}[/bold {_warn}]", seconds=8,
+                f"[{_warn}]{_note}[/{_warn}]", seconds=8,
             ))
 
         # Force focus onto PromptInput so Enter is routed to

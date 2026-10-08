@@ -370,7 +370,7 @@ class PromptInput:
         end = min(start + self.MAX_VISIBLE_LINES, len(out))
         out = out[start:end]
         cont = " " * marker_width
-        prefixes = [f"\x1b[1m{mark}\x1b[0m " if start == 0 else cont]
+        prefixes = [f"{mark} " if start == 0 else cont]
         prefixes += [cont] * (len(out) - 1)
 
         lines = [p + line for p, line in zip(prefixes, out)]

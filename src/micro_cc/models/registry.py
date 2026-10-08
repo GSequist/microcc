@@ -68,7 +68,7 @@ _BUILTIN_MODELS = {
     "opus-4.7":   {"anthropic": "claude-opus-4-7",           "foundry": "claude-opus-4-7",           "litellm": "bedrock.anthropic.claude-opus-4-7",  "thinking": True,  "summarized_display": True,  "context_window": 1_000_000, "max_output": 128_000},
     "opus-4.6":   {"anthropic": "claude-opus-4-6",           "foundry": "claude-opus-4-6",           "litellm": "bedrock.anthropic.claude-opus-4-6",  "thinking": True,  "summarized_display": False, "context_window": 1_000_000, "max_output": 128_000},
     "sonnet-4.6": {"anthropic": "claude-sonnet-4-6",         "foundry": "claude-sonnet-4-6",         "litellm": "bedrock.anthropic.claude-sonnet-4-6", "thinking": True,  "summarized_display": False, "context_window": 1_000_000, "max_output": 128_000},
-    "haiku-4.5":  {"anthropic": "claude-haiku-4-5-20251001", "foundry": "claude-haiku-4-5-20251001", "litellm": "bedrock.anthropic.claude-haiku-4-5", "thinking": False, "summarized_display": False, "context_window": 200_000, "max_output": 64_000},
+    "haiku-5.5":  {"anthropic": "claude-haiku-5-5",          "foundry": "claude-haiku-5-5",          "litellm": "bedrock.anthropic.claude-haiku-5-5", "thinking": True,  "summarized_display": True,  "context_window": 1_000_000, "max_output": 128_000},
     "gpt-5.6-terra": {"litellm": "openai.gpt-5.6-terra", "openai": "gpt-5.6-terra", "thinking": True, "summarized_display": False, "responses_api": True, "context_window": 1_050_000, "max_output": 128_000},
     "gpt-5.6-luna":  {"litellm": "openai.gpt-5.6-luna",  "openai": "gpt-5.6-luna",  "thinking": True, "summarized_display": False, "responses_api": True, "context_window": 1_050_000, "max_output": 128_000},
     "gpt-5.6-sol":   {"litellm": "openai.gpt-5.6-sol",   "openai": "gpt-5.6-sol",   "thinking": True, "summarized_display": False, "responses_api": True, "context_window": 1_050_000, "max_output": 128_000},
@@ -165,7 +165,7 @@ def summary_cap_for(alias: str, budget: int | None = None) -> int:
 
 # Aliases shown in the /model picker UI, in display order.
 _BUILTIN_OPTIONS = [
-    "sonnet-5", "sonnet-5.5", "opus-5", "opus-5.5", "opus-4.8", "opus-4.7", "opus-4.6", "sonnet-4.6", "haiku-4.5",
+    "sonnet-5", "sonnet-5.5", "opus-5", "opus-5.5", "opus-4.8", "opus-4.7", "opus-4.6", "sonnet-4.6", "haiku-5.5",
     "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
 ]
 
@@ -287,7 +287,7 @@ def build_catalog() -> tuple:
 MODELS, MODEL_OPTIONS, DEFAULT_MODEL, CATALOG_STATUS = build_catalog()
 
 # Bare family names resolve to the same entry as the versioned alias (never in MODEL_OPTIONS).
-for _short, _alias in (("haiku", "haiku-4.5"), ("sonnet", "sonnet-5"), ("opus", "opus-5")):
+for _short, _alias in (("haiku", "haiku-5.5"), ("sonnet", "sonnet-5"), ("opus", "opus-5")):
     MODELS[_short] = MODELS[_alias]
 
 

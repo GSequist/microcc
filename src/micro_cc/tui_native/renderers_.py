@@ -44,7 +44,7 @@ def helpers() -> SimpleNamespace:
 # --- builtin renderers ---------------------------------------------------
 
 def _user(msg, r):
-    return Text(f"{glyph('user_prompt')} {msg['content']}", style="bold")
+    return Text.assemble((f"{glyph('user_prompt')} ", theme_store_.get("accent")), (msg["content"], theme_store_.get("fg")))
 
 
 def _user_queued(msg, r):
@@ -83,7 +83,7 @@ def _tool_call(msg, r, ansi_result=False):
         else:
             result_body = render_md(f"```\n{ansi_plain(capped_result)}\n```")
         return Group(
-            Text.assemble((f"{glyph('tool')} {name}", "bold dim"), (f"   {glyph('hint_collapse')}", "dim italic")),
+            Text.assemble((f"{glyph('tool')} {name}", "dim"), (f"   {glyph('hint_collapse')}", "dim italic")),
             Text("input", style="dim italic"),
             render_md(f"```\n{shown_inp}\n```"),
             Text("result", style="dim italic"),
@@ -109,7 +109,7 @@ def _tool_call_edit(msg, r):
     fp = inp.get("file_path", "")
     old = inp.get("old_string", "")
     new = inp.get("new_string", "")
-    parts = [Text.assemble((f"{glyph('tool')} {msg['name']}", "bold dim"), (f"   {glyph('hint_collapse')}", "dim italic"))]
+    parts = [Text.assemble((f"{glyph('tool')} {msg['name']}", "dim"), (f"   {glyph('hint_collapse')}", "dim italic"))]
     if fp:
         parts.append(Text(fp, style="dim"))
     if old or new:
@@ -123,7 +123,7 @@ def _approval_frame(msg, body):
     hint = glyph("hint_collapse") if msg.get("expanded") else glyph("hint_view_full")
     warn = theme_store_.get("warn")
     header = Text.assemble(
-        (f"{glyph('approval')} ", f"bold {warn}"), (name, f"bold {warn}"),
+        (f"{glyph('approval')} ", warn), (name, warn),
         (f"   {glyph('approval_keys')} · {hint}", "dim"),
     )
     return Group(header, body, Text(glyph("rule") * 40, style="dim"))

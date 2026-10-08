@@ -222,7 +222,8 @@ class TestGlyphs(ModsCase):
         self.assertEqual(glyphs_.glyph("user_prompt"), ">>")
         self.assertEqual(glyphs_.glyph("tool"), glyphs_.DEFAULTS["tool"])
         self.assertEqual(len(mods_.errors()), 2)
-        self.assertIn(">> hi", MessageRow({"type": "user", "content": "hi"}).render(40)[0])
+        from micro_cc.tui_native.renderers_ import ansi_plain
+        self.assertIn(">> hi", ansi_plain(MessageRow({"type": "user", "content": "hi"}).render(40)[0]))
         p = PromptInput()
         p.insert("x")
         self.assertIn(">>", p.render(20)[0])

@@ -33,7 +33,7 @@ async def cmd_clear(app):
     # Reset UI view state only to avoid orphaning live processes.
     if app._subagent_viewing_target is not None:
         app._subagent_viewing_target = None
-        app.root.replace(app.subagent_scroll_view, app.messages_scroll)
+        app.main_split.left = app.messages_scroll
     if app._bgproc_viewing:
         app._hide_bgproc_detail()
 
@@ -257,8 +257,7 @@ async def _run_hidden_setup(app, prompt_body: str, extra: str, busy_msg: str):
         await app._mount_row(err)
         return
     app._input_mode = "query_active"
-    import asyncio
-    asyncio.create_task(app.do_query(setup_prompt))
+    app._current_query_task = app._safe_task(app.do_query(setup_prompt), "setup")  # tracked so Esc can cancel it
 
 
 async def cmd_setup(app, extra: str = ""):

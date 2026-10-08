@@ -336,3 +336,80 @@ command = ["{python}", "tests/test_interrupted_run.py"]
 timeout = 60
 inputs = ["tests/test_interrupted_run.py", "tests/test_use_tool_dispatcher.py"]
 scope = "Real msg_normalize_, msg_store_ on a temp HOME, inbox_store_, and run_headless against a scripted model. Mocked: model_call, checkpoint/memory/token-stats storage; Postgres is not used (local backend only), the sink is a recording stub. No network, no credentials."
+
+# --- Mod side pane and agent observers ------------------------------------------
+# Mods run third-party code on the UI thread; these boundaries keep a bad mod from
+# owning layout, focus or the agent loop. See skills/customizing-micro-cc/SKILL.md.
+
+[[contract]]
+id = "mod-pane-cannot-break-layout"
+statement = "A mod pane (right, top or bottom) that raises, hangs or returns bad markup is disabled and closed in the same frame: the conversation reflows to the full area, pane focus is dropped and the frame still renders. While shown, the conversation, search and selection all use the conversation's own width, rows and offset; a pane that doesn't fit beside the minimum conversation collapses; mouse inside the pane goes to the mod (except an in-progress drag-select), and a picker or question taking the prompt slot takes key focus back."
+anchors = [
+  "src/micro_cc/tui_native/stack_.py::HSplit",
+  "src/micro_cc/tui_native/pane_.py::route_key",
+  "src/micro_cc/tui_native/pane_.py::route_mouse",
+  "src/micro_cc/mods_.py::render_pane",
+]
+assumptions = [
+  "Rendering and input run on the asyncio main thread, so the SIGALRM watchdog can interrupt a hung handler.",
+  "The subagent view swaps HSplit.left; nothing replaces the split itself in the root VStack.",
+]
+questions = [
+  "Walk a pane handler that sleeps past HANG_S while focused: same-frame close, focus dropped, next frame full width.",
+  "Walk a search match and a multi-row drag-select with the pane open: columns map to the left width, highlight stops at the divider.",
+  "Walk a resize below MIN_LEFT + MIN_PANE while focused, and an ask_user question arriving while focused.",
+]
+scenarios = ["mod-pane-properties"]
+
+[[contract]]
+id = "agent-observers-cannot-affect-the-loop"
+statement = "Agent-event observers see a shallow copy of each coarse loop event after the builtin handler ran; a raising, slow or hung observer disables only its mod and never propagates into do_query. Per-token deltas are never forwarded."
+anchors = ["src/micro_cc/mods_.py::observe"]
+assumptions = ["observe is called synchronously inside do_query's event loop on the main thread, after etype_handler."]
+questions = ["Walk an observer that raises on tool_call mid-turn: the turn finishes, the transcript and tool rows are unchanged, a second mod still observes."]
+scenarios = ["mod-pane-properties"]
+
+[[link]]
+from = "src/micro_cc/start_live_tui_.py::MicroTui.do_query"
+to = "src/micro_cc/mods_.py::observe"
+kind = "calls-guarded"
+why = "do_query hands every loop event to mod observers; their failures must stay inside mods_."
+
+[[link]]
+from = "src/micro_cc/tui_native/alt_screen_.py::TuiAltScreen.apply_selection"
+to = "src/micro_cc/tui_native/scroll_view_.py::ScrollView.render"
+kind = "reads-state"
+why = "Search and selection re-render content at ScrollView.last_width; a side pane narrows it."
+
+[[scenario]]
+id = "mod-pane-properties"
+command = ["{python}", "tests/test_mod_pane.py"]
+timeout = 60
+inputs = ["tests/test_mod_pane.py", "tests/test_mods.py"]
+scope = "Real HSplit/VStack/ScrollView/TuiAltScreen and mods_ dispatch with temp-HOME mods; the app is a SimpleNamespace stub (no terminal, no claude_loop). The watchdog runs for real with HANG_S lowered."
+
+[[contract]]
+id = "pane-preference-restores-without-risking-boot"
+statement = "Only an explicit open_pane/close_pane changes the saved pane (settings 'pane'); a mod failure or a width collapse never does. At TUI start the saved pane reopens only if a loaded mod draws it, silently otherwise, and restore never raises into boot (self_heal_ would count that as a boot crash)."
+anchors = ["src/micro_cc/tui_native/pane_.py::restore", "src/micro_cc/tui_native/pane_.py::open_pane", "src/micro_cc/tui_native/pane_.py::close_pane"]
+assumptions = [
+  "settings are a whole-document read-modify-write; a concurrent writer in another process can lose an update (pre-existing for every setting).",
+  "Headless runs and the web UI never read or write 'pane'.",
+]
+questions = ["Walk restore with the mod removed, with a non-dict value, and with get_setting raising: no pane, no flash, no exception."]
+scenarios = ["mod-pane-properties"]
+
+[[contract]]
+id = "theme-row-migrates-once-and-leaves-settings-alone"
+statement = "Under Postgres the theme is the id='theme' document of micro_cc_settings. The first read with no theme row copies a legacy micro_cc_theme row (ON CONFLICT DO NOTHING, so racing processes agree); the settings id='global' document and the legacy table are never modified."
+anchors = ["src/micro_cc/postgres_store/pg_store_.py::load_theme", "src/micro_cc/postgres_store/pg_store_.py::save_theme"]
+assumptions = ["load_settings selects id='global' only; nothing reads all rows of micro_cc_settings."]
+questions = ["Walk two processes migrating at once, and a database that never had micro_cc_theme."]
+scenarios = ["pg-theme-row"]
+
+[[scenario]]
+id = "pg-theme-row"
+command = ["{python}", "tests/test_pg_theme_row.py"]
+timeout = 30
+inputs = ["tests/test_pg_theme_row.py"]
+scope = "pg_store_.load_theme/save_theme against a fake connection that answers only the expected SQL; no real Postgres, so SQL validity, to_regclass and ON CONFLICT semantics are asserted by shape, not executed."

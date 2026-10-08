@@ -481,7 +481,7 @@ class TuiAltScreen:
             self.search_matches = []
             self.search_selected = -1
             return
-        content_lines = sv.child.render(width)
+        content_lines = sv.child.render(sv.last_width or width)
         needle = query.lower()
         matches: list[SearchMatch] = []
         for row, line in enumerate(content_lines):
@@ -528,7 +528,7 @@ class TuiAltScreen:
             hit = slice_by_column(line, start_col, end_col - start_col, True)
             after = slice_by_column(line, end_col, max(0, line_width - end_col), True)
             current = i == self.search_selected
-            style, reset = ("\x1b[1;7m", "\x1b[22;27m") if current else ("\x1b[4m", "\x1b[24m")
+            style, reset = ("\x1b[7m", "\x1b[27m") if current else ("\x1b[4m", "\x1b[24m")
             result[screen_row] = f"{before}{style}{hit}{reset}{after}"
         return result
 
@@ -546,7 +546,8 @@ class TuiAltScreen:
     def _content_lines(self) -> list[str]:
         if self._content_cache is None:
             self._content_cache = [
-                strip_osc133_zone(l) for l in self.primary_scroll_view.child.render(self._terminal_size()[0])
+                strip_osc133_zone(l) for l in self.primary_scroll_view.child.render(
+                    self.primary_scroll_view.last_width or self._terminal_size()[0])
             ]
         return self._content_cache
 
@@ -662,6 +663,7 @@ class TuiAltScreen:
         region = self._scroll_region() if self.selection_in_content else None
         if self.selection_in_content and region is None:
             return screen
+        max_col = (region[0].last_width or None) if region else None  # keep highlight out of a side pane
 
         def transform(screen_row: int, line: str) -> str:
             row = screen_row
@@ -672,7 +674,7 @@ class TuiAltScreen:
                 row = screen_row - offset + sv.scroll_top
             if row < start.row or row > end.row:
                 return line
-            col_start, col_end = self._selection_columns(line, row, sel)
+            col_start, col_end = self._selection_columns(line, row, sel, max_col=max_col)
             if col_end <= col_start:
                 return line
             line_width = visible_width(line)
@@ -743,7 +745,8 @@ class TuiAltScreen:
         """Screen point -> content-row point, clamped into the viewport."""
         sv, offset, height = region
         screen_row = max(offset, min(offset + height - 1, point.row))
-        return SelectionPoint(screen_row - offset + sv.scroll_top, point.col)
+        col = min(point.col, sv.last_width - 1) if sv.last_width else point.col
+        return SelectionPoint(screen_row - offset + sv.scroll_top, col)
 
     def handle_selection_mouse_event(self, event: dict) -> None:
         term_width, term_height = self._terminal_size()

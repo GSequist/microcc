@@ -5,6 +5,7 @@ import os
 
 from rich.markup import escape as _markup_escape
 
+from micro_cc import mods_
 from micro_cc.tui_native.glyphs_ import glyph
 from micro_cc.utils import theme_store_
 from micro_cc.utils.msg_store_ import load_memory_review_recap
@@ -64,12 +65,14 @@ async def poll_subagents_tick(app, *, cold_start: bool = False) -> None:
     app._tracked_subagents = list(subagents)
 
     if not subagents:
+        app._subagent_snapshot = []
         app.subagent_status.update("")
         app.request_render()
         return
 
     display_lines = []
     wakeups = []
+    snapshot = []
     for target, entry in subagents.items():
         cached = app._subagent_poll_cache.get(target)
         info, new_stat = poll_status(target, cached)
@@ -123,10 +126,15 @@ async def poll_subagents_tick(app, *, cold_start: bool = False) -> None:
         pending = info["pending"] if info is not None else 0
         # tokens only refresh on a real change; .get because the synthetic died-info has no tokens.
         tokens = info.get("tokens") if info is not None else None
+        snapshot.append({"target": target, "name": name, "status": status, "pending": pending,
+                         "tokens": tokens, "pid": entry.get("pid"),
+                         "viewing": target == app._subagent_viewing_target})
         # Leading glyph marks which target is currently swapped into the message area.
         viewing_glyph = "●" if target == app._subagent_viewing_target else "○"
         display_lines.append(f"{viewing_glyph} {format_status_glyph(name, status, pending, tokens)}")
 
+    app._subagent_snapshot = snapshot
+    mods_.bump()  # pane renders reading api.subagents() are cached per generation
     # Viewing decoration composed here; format_status_glyph stays UI-agnostic.
     if display_lines:
         boss_glyph = "●" if app._subagent_viewing_target is None else "○"

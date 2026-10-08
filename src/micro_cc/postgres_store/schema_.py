@@ -1,11 +1,11 @@
 # micro_cc_sessions (parent) -> micro_cc_messages (child, FK project_hash).
-# micro_cc_memory / micro_cc_settings are independent tables.
+# micro_cc_memory / micro_cc_settings are independent tables. micro_cc_settings holds one
+# document per id: 'global' (settings) and 'theme'. micro_cc_theme is legacy, read once to migrate.
 
 _sessions_table_ready = False
 _messages_table_ready = False
 _memory_table_ready = False
 _settings_table_ready = False
-_theme_table_ready = False
 
 
 def _ensure_sessions_table(conn) -> None:
@@ -103,24 +103,8 @@ def _ensure_settings_table(conn) -> None:
     _settings_table_ready = True
 
 
-def _ensure_theme_table(conn) -> None:
-    global _theme_table_ready
-    if _theme_table_ready:
-        return
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS micro_cc_theme (
-                id TEXT PRIMARY KEY DEFAULT 'global',
-                data JSONB NOT NULL,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            )
-        """)
-    _theme_table_ready = True
-
-
 def ensure_all(conn) -> None:
     _ensure_sessions_table(conn)
     _ensure_messages_table(conn)
     _ensure_memory_table(conn)
     _ensure_settings_table(conn)
-    _ensure_theme_table(conn)

@@ -12,7 +12,7 @@ def init_self_manifest(app) -> None:
     """Snapshot package source at startup; works on any install type."""
     from micro_cc.utils import self_reload_
 
-    app._self_manifest = self_reload_.build_manifest()
+    self_reload_.init_baseline()
 
 async def self_poll_loop(app) -> None:
     while True:
@@ -26,36 +26,34 @@ async def self_poll_loop(app) -> None:
             pass
 
 def poll_self_change_tick(app) -> None:
-    if app._self_manifest is None or app._restarting:
+    if app._restarting:
         return
     from micro_cc.utils import self_reload_
 
-    current = self_reload_.build_manifest()
-    changed = self_reload_.diff_manifest(app._self_manifest, current)
-    if changed:
-        app._self_manifest = current
-        app._reload_changed = changed
+    self_reload_.refresh_changes()  # the loop may have refreshed first; compare against the app's view
+    files = set(self_reload_.changed_files())
+    if files and files != app._reload_changed:
+        app._reload_changed = files
         app._reload_pending = True
         app._static_hint_text()  # show the pending hint (hintbar, not statusbar)
-        # Name the blocker once per change, not every tick (avoid status bar spam).
-        blocker = app._self_reload_blocker()
-        if blocker:
-            app._flash_status(f"↻ reload queued — {blocker} active", seconds=4)
+        app._flash_status("↻ harness changed — the model will decide when to reload", seconds=5)
 
-    # Drain on every tick while pending to make state self-healing (prevent wedging).
-    # Idle pre-check avoids spawning task on every tick during streaming turn.
-    if app._reload_pending and app._input_mode == "idle":
+    # Restart only once the model asked for it (reload_harness_); drain every tick so a blocked request self-heals.
+    if self_reload_.reload_requested() and app._input_mode == "idle":
         app._safe_task(app._maybe_self_reload(), "self reload")
 
 def self_reload_hint(app) -> str:
     """Short hint: one file name, many files count, blocker reason if blocked."""
+    from micro_cc.utils import self_reload_
+
     n = len(app._reload_changed)
+    tail = "reloading…" if self_reload_.reload_requested() or app._restarting else "model decides when to reload"
     if n == 0:
-        base = "↻ reloading…"
+        base = f"↻ {tail}"
     elif n == 1:
-        base = f"↻ {os.path.basename(next(iter(app._reload_changed)))} — reloading…"
+        base = f"↻ {os.path.basename(next(iter(app._reload_changed)))} — {tail}"
     else:
-        base = f"↻ {n} files — reloading…"
+        base = f"↻ {n} files — {tail}"
     # Name the blocker if any, so stalls report themselves.
     blocker = app._self_reload_blocker()
     if blocker:
@@ -78,8 +76,10 @@ def self_reload_blocker(app) -> str | None:
     return None
 
 async def maybe_self_reload(app) -> None:
-    """Drain pending reload if safe; called at turn-boundary points."""
-    if not app._reload_pending or app._restarting:
+    """Restart if the model requested it and it is safe; called at turn-boundary points."""
+    from micro_cc.utils import self_reload_
+
+    if not self_reload_.reload_requested() or app._restarting:
         return
     # Same gates /exit and /update respect: nothing in flight, no browser/subagent.
     if app._input_mode != "idle":

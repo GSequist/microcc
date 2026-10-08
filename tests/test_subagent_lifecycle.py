@@ -184,6 +184,27 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(merged["content"][-1], {"type": "text", "text": "continue"})
 
 
+_saved = {}
+
+
+def setUpModule():
+    # discover imports every test module before running any; a later import may repoint HOME.
+    # Spawned children get _TMP_HOME, so this process must too (settings path is frozen at import).
+    from micro_cc.utils import settings_store_
+    _saved.update(home=os.environ.get("HOME"), settings=settings_store_._SETTINGS_PATH)
+    os.environ["HOME"] = _TMP_HOME
+    settings_store_._SETTINGS_PATH = Path(_TMP_HOME) / ".micro-cc" / "settings.json"
+
+
+def tearDownModule():
+    from micro_cc.utils import settings_store_
+    settings_store_._SETTINGS_PATH = _saved["settings"]
+    if _saved["home"] is None:
+        os.environ.pop("HOME", None)
+    else:
+        os.environ["HOME"] = _saved["home"]
+
+
 class CapTests(unittest.TestCase):
     def test_cap_counts_only_live_pid_entries(self):
         boss = tempfile.mkdtemp(prefix="mcc-boss-")

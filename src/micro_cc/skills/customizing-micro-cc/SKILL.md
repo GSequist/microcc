@@ -22,7 +22,7 @@ Rule: put the change in a mod or a config file below. Edit core only when nothin
 
 ## Mods
 
-One folder per mod: `~/.micro-cc/mods/<name>/mod.py` (name: lowercase, digits, `-`, `_`; a leading `_` disables it). Helper files beside it import relatively (`from .parts import x`). Saving any file under `mods/` restarts the app into the change at the next idle moment, conversation kept.
+One folder per mod: `~/.micro-cc/mods/<name>/mod.py` (name: lowercase, digits, `-`, `_`; a leading `_` disables it). Helper files beside it import relatively (`from .parts import x`). Saving a file under `mods/` does not apply it by itself: once the user allows it, call `reload_harness_` (load it with `search_tools`) to restart into the change, conversation kept. Do not skip this, the edit has no effect until then.
 
 ```python
 def register(on):
@@ -50,16 +50,22 @@ Every handler is `fn(api, e, nxt)`. `nxt(e)` runs the rest of the chain and fina
 | `glyphs` | | `{}` | dict: `{**nxt(e), "user_prompt": "❯"}` |
 | `command` | `name=`, `hint=` | `name`, `arg`, `line` | anything; may be `async` (then `await nxt(e)`) |
 | `key` | `key=` like `ctrl+g` | `data` | `True` if consumed |
+| `pane` | `name=` | `name`, `width`, `height`, `focused` | Rich markup lines for the pane; long lines are cropped |
+| `pane_key` | `name=` | `data`, `key` (e.g. `up`, `enter`, `tab`, `j`) | `True` if consumed; only while the pane is focused |
+| `pane_click` | `name=` | `x`, `y` (pane-relative), `button` (0 left, 64/65 wheel), `release` | ignored |
+| `agent` | none | a loop event: `tool_call` (`id, name, input`), `tool_result` (`id, name, output`), `turn_boundary`, `final_text`, `done`, `error`, `approval_request`, `question_asked`, `cache_invalidate` | ignored; handler is `fn(api, e)`, no `nxt` |
 
 - `header` (under the banner) and `above_input` are empty until a mod adds lines.
 - `r` has `glyph, color, render_md, diff_lines, cap_lines, cap_diff_lines, ansi_plain, Text, Group`. Read `micro_cc/tui_native/renderers_.py` for the builtin message renderers.
 - Glyph names: `user_prompt, queued, thinking, tool_pending, tool, error, approval, approval_keys, hint_expand, hint_collapse, hint_view_full, rule, spinner, bgproc, watch, stalled`.
 - A command with a builtin's name wraps it: `nxt(e)` runs the builtin.
 - `ctrl+c`, `escape` and `enter` can't be bound.
+- Pane: `api.open_pane("name", "40%")` puts the mod's `pane` right of the conversation; `side="bottom"` or `side="top"` makes it a full-width strip and the size counts rows (`"30%"` or `12`). It collapses when the terminal is too narrow (right) or too short (top/bottom). `ctrl+]` or a click focuses it, `escape` leaves. The open pane is saved in settings and reopened at the next start if its mod still draws it; `close_pane()` forgets it. A focused pane gets every key except `ctrl+c` and `escape`. Pane renders are cached; call `api.refresh()` after changing what it shows (e.g. from a background thread or a timer).
+- `agent` handlers run after the builtin UI handled the event and get a copy. Text/thinking deltas are not forwarded.
 - Component renders are cached; they re-run when the content or width changes, at each status refresh, or on `api.refresh()`.
 
 ### `api`, the only object a mod gets
-`notify(text)`, `get_input()`, `set_input(text)`, `send_prompt(text)`, `usage()` (token stats dict), `model()`, `project_dir`, `refresh()`, `request_render()`. Never reach into app internals: they change between releases. Handlers run on the UI event loop and must return fast: over 100 ms disables the mod, and one stuck for 0.5 s is interrupted and disabled. `async` command handlers aren't interrupted, so `await` instead of blocking. Start slow work with `send_prompt` or a background thread.
+`notify(text)`, `get_input()`, `set_input(text)`, `send_prompt(text)`, `usage()` (token stats dict), `model()`, `project_dir`, `refresh()`, `request_render()`, `open_pane(name, width, side="right")`, `close_pane()`, `pane_open()` (open pane name or None), `focus_pane(on=True)`, `subagents()` (list of `target, name, status, pending, tokens, pid, viewing` from the last 3 s poll), `transcript_path(project_dir=None)` (a project's or subagent's `messages.jsonl`; tail it from a thread, absent with Postgres storage). Never reach into app internals: they change between releases. Handlers run on the UI event loop and must return fast: over 100 ms disables the mod, and one stuck for 0.5 s is interrupted and disabled. `async` command handlers aren't interrupted, so `await` instead of blocking. Start slow work with `send_prompt` or a background thread.
 
 ### Failures
 A mod that fails to import, raises, is too slow, or returns invalid markup is disabled as a whole and the builtin shows. Problems are flashed at startup (`mods: N notice(s)`), never crash the app. Test a mod before relying on the restart: `python3 -c "import sys; sys.path.insert(0, '<mods dir>/<name>'); import mod"`.

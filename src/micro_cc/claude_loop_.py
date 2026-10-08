@@ -246,7 +246,7 @@ async def claude_loop(
 - You are running LOCALLY on the user's machine (on the metal), NOT a remote server
 - You have direct access to the local filesystem, Desktop, Documents, etc.
 - Project directory: {project_dir}
-- Your own source code lives at: {package_dir} (not project_dir) — plain, editable .py. You can change the harness itself: edit it and the running process restarts into your change (auto at the next idle turn, or /reload to force it now); the conversation persists across the restart. Before changing the harness, read the customizing-micro-cc skill: it says which changes belong in ~/.micro-cc (they survive updates) and which edit core (overwritten by the next /update).
+- Your own source code lives at: {package_dir} (not project_dir) — plain, editable .py. You can change the harness itself: edit it, then once the user allows it call reload_harness_ (load it with search_tools) to restart into your change, otherwise it never takes effect; the conversation persists across the restart. Before changing the harness, read the customizing-micro-cc skill: it says which changes belong in ~/.micro-cc (they survive updates) and which edit core (overwritten by the next /update).
 - Date: {datetime.datetime.now().strftime("%B %d, %Y")}
 
 ## Core Tools (always available)
@@ -369,6 +369,17 @@ whole conversation history, including compacted turns.
             conversation_summary = load_summary(project_dir)
             if conversation_summary:
                 status_sections.append(f"<conversation-summary>\n{conversation_summary}\n</conversation-summary>")
+
+        from micro_cc.utils import self_reload_
+        self_reload_.refresh_changes()  # don't wait for the TUI poll: an edit made a moment ago must show now
+        reload_files = self_reload_.changed_files()
+        if reload_files and not self_reload_.reload_requested():
+            shown = ", ".join(os.path.basename(f) for f in reload_files[:8]) + (" …" if len(reload_files) > 8 else "")
+            status_sections.append(
+                "<reload-pending>\nHarness source or mods changed on disk (" + shown + ") but the running process still "
+                "has the old code. Once the user allows it (ask if unsure), call reload_harness_ (search_tools add) "
+                "to restart into the change; the conversation is kept.\n</reload-pending>"
+            )
 
         current_manifest = _build_memory_manifest()  # Mid-turn edits surfaced as delta
         if current_manifest is not None and current_manifest != _last_shown_manifest:

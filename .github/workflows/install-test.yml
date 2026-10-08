@@ -57,23 +57,6 @@ jobs:
           command -v microcc
           "$(uv tool dir)/micro-cc/bin/python" -c "import micro_cc"
 
-  windows-wsl:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Vampire/setup-wsl@v5
-        with:
-          distribution: Ubuntu-24.04
-      - name: run install.ps1
-        shell: pwsh
-        run: |
-          if ("${{ github.event_name }}" -eq "schedule") { irm "$env:RAW/install.ps1" | iex } else { ./install.ps1 }
-      - name: verify inside WSL
-        shell: wsl-bash {0}
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          command -v microcc
-
   windows-no-wsl:
     # runner has wsl.exe but no distro: the script must fail loudly with guidance
     runs-on: windows-2022
@@ -119,3 +102,11 @@ jobs:
           wsl -d Ubuntu -e sh -c 'export PATH=$HOME/.local/bin:$PATH; command -v microcc'
           if ($LASTEXITCODE -ne 0) { throw "microcc not found in WSL" }
           $global:LASTEXITCODE = 0
+      - name: re-run install.ps1 (existing distro path)
+        shell: pwsh
+        env:
+          MICROCC_WSL_INSTALL: "0"
+        run: |
+          ./install.ps1
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "second install.ps1 run exited $code" }

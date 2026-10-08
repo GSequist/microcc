@@ -11,6 +11,7 @@ from micro_cc.tools.mcp_client_ import resolve_mcp_tools
 from micro_cc.tools.browser_tool_ import browser
 from micro_cc.tools.computer_tool_ import computer
 from micro_cc.tools.message_session_ import message_session_
+from micro_cc.tools.reload_tool_ import reload_harness_
 from micro_cc.tools.web_tools_ import (
     visit_url,
     google_search,
@@ -42,6 +43,7 @@ def _register(func, search_text: str):
 
 
 _register(message_session_, "message notify tell list find discover other running micro-cc sessions peers terminal cross-session communicate")
+_register(reload_harness_, "reload restart relaunch harness self apply changes edited source mods mod modification")
 _register(browser, "browser chrome playwright navigate click type web automation interact page form")
 # Screenshot capture and AX scoping are mac-only: keep the tool out of the catalog elsewhere.
 if platform.system() == "Darwin":

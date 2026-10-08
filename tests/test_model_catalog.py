@@ -141,7 +141,7 @@ class TestValidation(CatalogCase):
         self.assertEqual(self.build()[1], registry._BUILTIN_OPTIONS)
 
     def test_shorthand_points_at_same_entry(self):
-        self.assertIs(registry.MODELS["haiku"], registry.MODELS["haiku-4.5"])
+        self.assertIs(registry.MODELS["haiku"], registry.MODELS["haiku-5.5"])
 
 
 class TestImport(unittest.TestCase):

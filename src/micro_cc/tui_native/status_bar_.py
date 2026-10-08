@@ -4,6 +4,7 @@ import asyncio
 import random
 
 from micro_cc import mods_
+from micro_cc.tui_native.glyphs_ import glyph
 from micro_cc.utils import hints, settings_store_, statusline_, theme_store_
 from micro_cc.utils.msg_store_ import load_checkpoint
 from micro_cc.utils.terminal_setup import newline_hint_text
@@ -11,27 +12,27 @@ from micro_cc.utils.tokenization_simple import token_stats
 
 
 def get_random_hint(app):
-    # Hint copy shared with GUI; ⌖ is TUI's own decoration.
-    return "⌖ " + random.choice(hints.for_surface(hints.TUI))
+    # Hint copy shared with GUI; the hint glyph is TUI's own decoration.
+    return f"{glyph('hint')} " + random.choice(hints.for_surface(hints.TUI))
 
 
 def static_hint_text(app) -> None:
     # Skip while question is active (bars hidden); _hide_ask_ui will restore.
     if app._input_mode == "question_asked":
         return
-    text = f"⏣ {app._shorten_path(app._project_dir, app._PROJECT_DIR_DISPLAY_MAXLEN)}"
+    text = f"[dim]{glyph('project')} {app._shorten_path(app._project_dir, app._PROJECT_DIR_DISPLAY_MAXLEN)}[/dim]"
     if app._reload_pending and not app._restarting:
         # Reload queued; report delay so user knows something is happening.
-        text += f" | [{theme_store_.get('accent')}]{app._self_reload_hint()}[/{theme_store_.get('accent')}]"
+        text += f" [dim]·[/dim] [{theme_store_.get('accent')}]{app._self_reload_hint()}[/{theme_store_.get('accent')}]"
     elif app._update_available:
-        text += f" | [{theme_store_.get('accent')}]⚠ micro-cc {app._update_available} available — run /update[/{theme_store_.get('accent')}]"
+        text += f" [dim]·[/dim] [{theme_store_.get('accent')}]⚠ micro-cc {app._update_available} available — run /update[/{theme_store_.get('accent')}]"
     elif settings_store_.was_reset_for_corruption():
-        text += f" | [{theme_store_.get('error')}]⚠ ~/.micro-cc/settings.json was corrupt — reset to defaults[/{theme_store_.get('error')}]"
+        text += f" [dim]·[/dim] [{theme_store_.get('error')}]⚠ ~/.micro-cc/settings.json was corrupt — reset to defaults[/{theme_store_.get('error')}]"
     else:
         # newline_hint_text() returns None once user learns newlines; fall back to rotation.
         hint = newline_hint_text() or app.get_random_hint()
         hue = app._banner_hue
-        text += f" | [{hue}]{hint}[/{hue}]"
+        text += f" [dim]·[/dim] [{hue}]{hint}[/{hue}]"
     app.static_hintbar.update(
         text[: app._STATIC_HINT_LINE_MAXLEN]
     )
@@ -62,7 +63,7 @@ async def status_text(app) -> str:
     except Exception:
         pass
     short_dir = app._shorten_path(app._project_dir, app._PROJECT_DIR_DISPLAY_MAXLEN)
-    return f"⏣ {short_dir} | ◈ {app._current_model}"  # crash-safety only, not "the default"
+    return f"{glyph('project')} {short_dir} · {glyph('model')} {app._current_model}"  # crash-safety only, not "the default"
 
 # Called at natural stopping points, never during streaming; no debounce needed.
 def refresh_status(app):
@@ -80,7 +81,7 @@ async def update_status_bar(app):
         app._last_checkpoint_index = checkpoint["as_of_index"]
         # Return to avoid overwriting flash before it renders; timer will restore normal text.
         app._flash_status(
-            f"[bold {theme_store_.get('warn')}]✂ compacted past conversation just now[/bold {theme_store_.get('warn')}]",
+            f"[{theme_store_.get('warn')}]✂ compacted past conversation just now[/{theme_store_.get('warn')}]",
             seconds=8,
         )
         return

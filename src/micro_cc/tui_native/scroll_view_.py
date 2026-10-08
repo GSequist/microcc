@@ -23,6 +23,7 @@ class ScrollView:
         self._scroll_top = 0
         self._content_height = 0
         self._viewport_height = 0
+        self.last_width = 0  # width of the last render; search/selection re-render at it
 
     # --- read-only state, mirrors what a caller needs to draw a scrollbar
     # or decide "should I keep auto-scrolling" -------------------------
@@ -49,6 +50,7 @@ class ScrollView:
     # --- Component protocol --------------------------------------------
     def render(self, width: int) -> list[str]:
         """Return full, unwindowed content; caller handles windowing via get_scrolled_lines."""
+        self.last_width = width
         return self.child.render(width)
 
     def invalidate(self) -> None:

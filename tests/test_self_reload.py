@@ -101,12 +101,14 @@ def test_prompt_stash():
 def _fake_supervisor_env(monkeypatch_root):
     """Point self_heal_ at a throwaway state/crash path and fake the three
     side-effecting boundaries (start_, _reinstall, os.execv). Returns a small
-    record of what was called."""
+    record of what was called. The catalog refresh thread is stubbed too."""
     sh._STATE_PATH = os.path.join(monkeypatch_root, "state.json")
     sh._CRASH_LOG = os.path.join(monkeypatch_root, "crash.log")
     rec = {"reinstalls": 0, "execs": 0}
 
     sh._reinstall = lambda: (rec.__setitem__("reinstalls", rec["reinstalls"] + 1), True)[1]
+    # The real one starts a network daemon thread that writes ~/.micro-cc/cache and segfaults at exit mid-SSL.
+    sh._start_catalog_refresh = lambda: None
     sh._is_source_checkout = lambda: False  # these walks model an installed wheel
 
     def fake_execv(path, argv):

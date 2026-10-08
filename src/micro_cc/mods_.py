@@ -14,10 +14,14 @@ from pathlib import Path
 
 from rich.text import Text
 
-from micro_cc.tui_native.keys_ import matches_key, parse_key_id
+from micro_cc.tui_native.keys_ import matches_key, parse_key, parse_key_id
 
 API_VERSION = 2
-EVENTS = ("render", "glyphs", "command", "key")
+EVENTS = ("render", "glyphs", "command", "key", "pane", "pane_key", "pane_click", "agent")
+PANE_EVENTS = ("pane", "pane_key", "pane_click")
+# Coarse loop events mods may observe; per-token deltas are left out to keep streaming cheap.
+AGENT_TYPES = ("tool_call", "tool_result", "final_text", "done", "error", "turn_boundary",
+               "approval_request", "question_asked", "cache_invalidate")
 LEGACY = ("commands", "renderers", "panels", "keys.json", "glyphs.json", "banner.txt")  # 0.2.103 seams
 SLOW_S = 0.1  # sync handler self-time that disables its mod after it returns
 HANG_S = 0.5  # sync handler self-time at which the watchdog interrupts it
@@ -30,6 +34,7 @@ _disabled: set[str] = set()
 _errors: list[str] = []
 _generation = 0
 _api_factory = lambda: None
+_notify_fail = None  # set by the TUI: shows a mod disabled mid-session
 
 
 def user_dir() -> Path:
@@ -58,10 +63,26 @@ def clear_errors() -> None:
 
 
 def fail(mod: str, msg: str) -> None:
-    """Disable a mod for the rest of the process."""
+    """Disable a mod for the rest of the process; logged to ~/.micro-cc/mods.log and flashed in the TUI."""
     _disabled.add(mod)
     record_error(f"mods/{mod}", f"{msg}, disabled")
+    try:
+        with open(user_dir() / "mods.log", "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} mods/{mod}: {msg}, disabled\n")
+    except OSError:
+        pass
+    if _notify_fail is not None:
+        try:
+            _notify_fail(f"mod {mod} disabled: {msg}")
+        except Exception:
+            pass
     bump()
+
+
+def on_fail(fn) -> None:
+    """Register fn(text) called when a mod is disabled at runtime."""
+    global _notify_fail
+    _notify_fail = fn
 
 
 # --- watchdog ----------------------------------------------------------------
@@ -151,6 +172,10 @@ def _check(event: str, filters: dict) -> dict:
         if not _NAME_RE.match(name):
             raise ValueError(f"command needs name= of lowercase letters, digits, - or _ (got {name!r})")
         filters = {**filters, "name": name}
+    if event in PANE_EVENTS and not _NAME_RE.match(str(filters.get("name", ""))):
+        raise ValueError(f"{event} needs name= of lowercase letters, digits, - or _")
+    if event == "agent" and filters:
+        raise ValueError("agent takes no filters")
     if event == "key":
         key = filters.get("key")
         if not isinstance(key, str) or is_reserved(key):
@@ -361,6 +386,67 @@ def match_command(query: str) -> tuple[str, str] | None:
         if lower == name or lower.startswith(name + " "):
             return name[1:], query[len(name):].strip()
     return None
+
+
+def render_pane(name: str, width: int, height: int, focused: bool) -> list[str] | None:
+    """Pane lines as ANSI; None once no active mod draws this pane (closed or disabled)."""
+    if not has("pane", name=name):
+        return None
+    e = {"name": name, "width": width, "height": height, "focused": focused}
+    lines = dispatch("pane", e, lambda e: [], norm=_lines, name=name)[:height]
+    if not has("pane", name=name):
+        return None  # its mod failed during this very call
+    if not lines:
+        return []
+    from micro_cc.tui_native.message_row_ import _render_to_lines
+    try:
+        text = Text.from_markup("\n".join(lines))
+    except Exception as err:
+        record_error(f"pane {name}", f"invalid markup ({type(err).__name__})")
+        text = Text(f"pane {name}: invalid markup ({type(err).__name__})", style="red")
+    rows = text.split("\n", allow_blank=True)
+    for row in rows:
+        row.truncate(width, overflow="ellipsis")  # crop explicitly; Rich no_wrap still wraps here
+    return _render_to_lines(Text("\n").join(rows), width)[:height]
+
+
+def pane_key(name: str, data: str) -> bool:
+    """True if the pane's mod consumed this raw input."""
+    e = {"name": name, "data": data, "key": parse_key(data)}  # key: "up", "enter", "ctrl+r", ...
+    out = bool(dispatch("pane_key", e, lambda e: False, name=name))
+    bump()
+    return out
+
+
+def pane_click(name: str, x: int, y: int, button: int, release: bool) -> None:
+    """Pane-relative mouse event; button 64/65 is wheel up/down."""
+    dispatch("pane_click", {"name": name, "x": x, "y": y, "button": button, "release": release},
+             lambda e: None, name=name)
+    bump()
+
+
+def observe(event: dict) -> None:
+    """Hand one loop event to every agent handler; return values are ignored, failures disable the mod."""
+    if event.get("type") not in AGENT_TYPES:
+        return
+    links = _links("agent", {}, _matches)
+    if not links:
+        return
+    api = _api_factory()
+    for _, fn, mod in links:
+        if mod in _disabled:
+            continue
+        t0 = time.perf_counter()
+        try:
+            with _guard(mod, HANG_S):
+                fn(api, dict(event))
+        except (Exception, ModHung) as err:
+            why = f"hung over {HANG_S}s, interrupted" if isinstance(err, ModHung) else f"{type(err).__name__}: {err}"
+            fail(mod, f"agent handler {getattr(fn, '__name__', '?')}: {why}")
+            continue
+        if time.perf_counter() - t0 > SLOW_S:
+            fail(mod, f"agent handler {getattr(fn, '__name__', '?')} took over {int(SLOW_S * 1000)}ms")
+    bump()
 
 
 # --- legacy sweep ------------------------------------------------------------

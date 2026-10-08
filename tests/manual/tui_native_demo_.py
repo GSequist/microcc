@@ -129,7 +129,7 @@ def main() -> None:
     app.model_picker.set_items([
         PickerItem("opus", "claude-opus-5", "most capable, slowest"),
         PickerItem("sonnet", "claude-sonnet-5", "balanced (default)"),
-        PickerItem("haiku", "claude-haiku-4-5", "fastest, cheapest"),
+        PickerItem("haiku", "claude-haiku-5-5", "fastest, cheapest"),
     ])
     app.model_picker.selected_index = 1
     app._open_picker(app.model_picker, "_model_picker_overlay")

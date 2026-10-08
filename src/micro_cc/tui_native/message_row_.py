@@ -90,7 +90,7 @@ class MessageRow:
     def _render_image_result(self, width: int) -> list[str]:
         if self._cached_image is None:
             self._cached_image = Image(self._msg["result"]["data"])
-        header = _render_to_lines(Text(f"{glyph('tool')} {self._msg['name']}", style="bold dim"), width)
+        header = _render_to_lines(Text(f"{glyph('tool')} {self._msg['name']}", style="dim"), width)
         return header + self._cached_image.render(width)
 
     def render(self, width: int) -> list[str]:
