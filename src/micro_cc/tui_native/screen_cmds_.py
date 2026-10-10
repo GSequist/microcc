@@ -413,6 +413,8 @@ async def cmd_keys(app):
     app.prompt.placeholder = "Env var name to store (e.g. AZURE_CLIENT_SECRET) — blank to finish"
     app.set_focus(app.prompt)
 
+async def cmd_config(app):
+
 
 PREFIX_COMMANDS = {
     "/setup": cmd_setup,
@@ -444,6 +446,7 @@ SLASH_COMMANDS = {
     "/reload": cmd_reload,
     "/author": cmd_author,
     "/gui": cmd_gui,
+    "/config": cmd_config,
 }
 
 _registry_prompt_names = {c["name"] for c in command_registry.COMMANDS if c["kind"] == "prompt"}
