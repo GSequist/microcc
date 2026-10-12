@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "default_model": "sonnet-5",
+  "default_model": "sonnet-5.5",
   "providers": {
     "Anthropic": {
       "backend": "anthropic",
