@@ -157,6 +157,15 @@ def _pink() -> str:
     return theme_store_.get("accent")
 
 
+def _log_update(python, latest, installed, rc, output):
+    import os, time
+    try:
+        with open(os.path.expanduser("~/.micro-cc/update.log"), "a") as f:
+            f.write(f"[{time.strftime('%FT%T')}] python={python} want={latest} got={installed or '?'} rc={rc}\n{output}\n")
+    except OSError:
+        pass
+
+
 async def _run_update(app):
     """Install update and re-exec with fresh module imports."""
     import asyncio
@@ -169,7 +178,7 @@ async def _run_update(app):
     from micro_cc.self_heal_ import install_cmd
 
     proc = await asyncio.create_subprocess_exec(
-        *install_cmd("micro-cc"),
+        *install_cmd(f"micro-cc=={latest}"),  # pinned: an unpinned install can resolve a stale index and reinstall the old version
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
 
@@ -197,9 +206,18 @@ async def _run_update(app):
     await drain_task
     output = b"".join(chunks).decode(errors="replace").strip()
 
-    if proc.returncode != 0:
-        tail = "\n".join(output.splitlines()[-5:])
-        app._flash_status(f"Update failed:\n{tail}", seconds=10)
+    # Verify in a fresh interpreter: rc 0 can still mean the old version was reinstalled.
+    installed = ""
+    if proc.returncode == 0:
+        chk = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", "from importlib.metadata import version; print(version('micro-cc'))",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        installed = (await chk.communicate())[0].decode().strip()
+    if proc.returncode != 0 or installed != latest:
+        tail = "\n".join(output.splitlines()[-5:]) or f"installed {installed or '?'}, expected {latest}"
+        _log_update(sys.executable, latest, installed, proc.returncode, output)
+        app._flash_status(f"Update failed (see ~/.micro-cc/update.log):\n{tail}", seconds=10)
         app._static_hint_text()
         return
 

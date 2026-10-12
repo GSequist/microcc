@@ -79,9 +79,9 @@ def install_cmd(*pkgs: str, force: bool = True, no_deps: bool = False) -> list[s
     """Build install command (pip or uv, preferring pip)."""
     if importlib.util.find_spec("pip") or not _uv():
         return [sys.executable, "-m", "pip", "install", "--upgrade", *(["--force-reinstall"] if force else []),
-                *(["--no-deps"] if no_deps else []), "--quiet", "--no-input", "--disable-pip-version-check", *pkgs]
+                *(["--no-deps"] if no_deps else []), "--quiet", "--no-input", "--no-cache-dir", "--disable-pip-version-check", *pkgs]
     return [_uv(), "pip", "install", "--python", sys.executable, "--upgrade", *(["--reinstall"] if force else []),
-            *(["--no-deps"] if no_deps else []), "--quiet", *pkgs]
+            *(["--no-deps"] if no_deps else []), "--refresh", "--quiet", *pkgs]
 
 
 def uninstall_cmd(*pkgs: str) -> list[str]:

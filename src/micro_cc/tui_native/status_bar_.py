@@ -46,7 +46,7 @@ async def status_text(app) -> str:
     script = ensure_status_script(app)
     import json
     payload = json.dumps(
-        {"tokens": dict(token_stats), "project_dir": app._project_dir}
+        {"tokens": {**token_stats, "budget": app._trim_budget}, "project_dir": app._project_dir}
     ).encode()
     try:
         proc = await asyncio.create_subprocess_exec(

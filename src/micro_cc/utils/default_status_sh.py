@@ -3,7 +3,7 @@ _DEFAULT_STATUS_SCRIPT = """#!/usr/bin/env python3
 # the input box). Whatever this script prints to stdout becomes that line,
 # verbatim (Rich markup). Edit it freely — there is no other definition of the status bar.
 #
-# You get one JSON object on stdin: {"tokens": {input,output,trimmed,max},
+# You get one JSON object on stdin: {"tokens": {input,output,trimmed,max,budget},
 # "project_dir": "..."} — that's the only stuff that's genuinely live in the
 # running app and can't be read any other way. For anything else you want to
 # show, read it yourself:
@@ -37,7 +37,7 @@ def k(n):
 
 parts = [f"{I['model']} {settings.get('model', '?')}"]
 if t.get("input"):
-    budget = settings.get("tokens_budget") or 0
+    budget = t.get("budget") or settings.get("tokens_budget") or 0
     if budget:
         pct = min(t["input"] / budget, 1)
         bar, rest = "\\u2501" * round(pct * 10), "\\u2500" * (10 - round(pct * 10))
