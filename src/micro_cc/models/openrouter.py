@@ -20,7 +20,7 @@ import os
 from micro_cc.models.adapters import chat
 from micro_cc.models.priming import prime_stream, first_event_timeout
 from micro_cc.models.schema import tools_to_chat
-from micro_cc.models.registry import DEFAULT_MODEL, resolve, supports_thinking
+from micro_cc.models.registry import DEFAULT_MODEL, resolve, resolve_effort, supports_thinking
 
 load_dotenv(os.path.expanduser("~/.micro-cc/.env"))
 load_dotenv()
@@ -162,6 +162,7 @@ async def or_model_call(
     tools: Optional[List[Dict[str, Any]]] = None,
     stream: bool = False,
     thinking: bool = False,
+    reasoning_effort: str | None = None,
     max_tokens: int = 120000,
     client_timeout: int = 480,
     pdf: str = None,
@@ -215,7 +216,7 @@ async def or_model_call(
 
     if thinking and supports_thinking(alias):
         # OpenRouter's unified reasoning param — a no-op on unsupported models.
-        extra_body["reasoning"] = {"effort": "high"}
+        extra_body["reasoning"] = {"effort": resolve_effort(alias, reasoning_effort) or "high"}
 
     if extra_body:
         api_params["extra_body"] = extra_body

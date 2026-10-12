@@ -65,5 +65,4 @@ COMMANDS = [
         "gui": False,
     },
     {"name": "/gui", "hint": "open this session in the browser", "kind": "action", "gui": False},
-    {"name": "/config", "hint": "configuration", "kind": "ui"},
 ]

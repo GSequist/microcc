@@ -332,7 +332,7 @@ class TestRouting(PaneCase):
         self.assertFalse(self.app._pane_focused)
         self.app._input_mode = "idle"
         pane_.focus(self.app)
-        self.app.focus = object()  # a question panel took the prompt slot
+        self.app.focus = object()  # an option panel took the prompt slot
         self.assertFalse(pane_.route_key(self.app, "k", "k"))
         self.assertFalse(self.app._pane_focused)
 

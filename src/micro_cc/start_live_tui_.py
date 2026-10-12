@@ -24,6 +24,7 @@ from micro_cc.utils.helpers import (
 from micro_cc.cache import state_store
 from micro_cc.utils import banner_
 from micro_cc.utils import theme_store_
+from micro_cc.tui_native.theme_ import shimmer
 from micro_cc.tui_native.glyphs_ import glyph
 
 # Theme tokens read live via theme_store_.get() to allow /theme switch.
@@ -31,7 +32,7 @@ from micro_cc.tui_native.screen_cmds_ import SLASH_COMMANDS, PREFIX_COMMANDS
 from micro_cc import mods_
 from micro_cc.utils import command_registry, statusline_
 from micro_cc.tui_native.ui_api_ import make_ui
-from micro_cc.tui_native import glyphs_, login_ui_, pollers_, self_reload_ui_, status_bar_
+from micro_cc.tui_native import glyphs_, login_ui_, pollers_, self_reload_ui_, status_bar_, question_ui_, panel_layout_
 from micro_cc.tui_native.self_update_ import check_and_update
 from micro_cc.tui_native.self_terminal_setup_ import _background_terminal_setup_check
 from micro_cc.tui_native.etype_handler_ import ETYPES
@@ -41,24 +42,24 @@ from micro_cc.utils import settings_store_
 from micro_cc.utils.tokenization_simple import load_token_stats
 from micro_cc.claude_loop_ import claude_loop
 from collections import deque
-from micro_cc.tui_native.alt_screen_ import TuiAltScreen, OverlayOptions, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN
+from micro_cc.tui_native.alt_screen_ import TuiAltScreen, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN
 from micro_cc.tui_native.stack_ import HSplit, VStack
 from micro_cc.tui_native import pane_
 from micro_cc.tui_native.scroll_view_ import ScrollView
-from micro_cc.tui_native import list_picker_
-from micro_cc.tui_native.list_picker_ import ListPicker, PickerItem
-from micro_cc.tui_native.multi_select_list_ import MultiSelectList
-from micro_cc.tui_native.question_panel_ import QuestionPanel
 from micro_cc.tui_native.message_row_ import MessageRow, StreamingRow, RichStatic, HRule
 from micro_cc.tui_native.prompt_input_ import PromptInput
 from micro_cc.tui_native.terminal_ import ProcessTerminal
 from micro_cc.tui_native.stdin_buffer_ import StdinBuffer, Paste
 from micro_cc.tui_native.keys_ import parse_key, is_key_release
 from micro_cc.utils.msg_store_ import load_checkpoint, load_memory_review_recap
+from micro_cc.tui_native.option_panel_ import OptionPanel, PanelItem
+from micro_cc.tui_native.login_ui_ import ollama_trim_budget as _ollama_trim_budget  # noqa: E402
 
 # --------------- background noise: discard, don't persist ---------------
 # Background-thread logging to stderr corrupts the alt-screen; swallow it.
 import logging as _logging
+
+
 
 _logging.getLogger().addHandler(_logging.NullHandler())
 _logging.getLogger().setLevel(_logging.WARNING)
@@ -95,7 +96,6 @@ def _allow_sleep(handle):
     handle.wait()
 
 
-from micro_cc.tui_native.login_ui_ import ollama_trim_budget as _ollama_trim_budget  # noqa: E402
 
 
 def _initial_trim_budget(model_alias: str):
@@ -115,72 +115,8 @@ class MicroTui():
 
     MODEL_OPTIONS = model_registry.MODEL_OPTIONS
 
-    LOGIN_SEQUENCE = {
-        "Anthropic": ["ANTHROPIC_API_KEY", "SERPAPI_KEY"],
-        "Foundry": ["FOUNDRY_BASE_URL", "FOUNDRY_API_KEY", "SERPAPI_KEY"],
-        "LiteLLM": ["LITELLM_BASE_URL", "LITELLM_API_KEY", "SERPAPI_KEY"],
-        "OpenAI": ["OPENAI_API_KEY", "SERPAPI_KEY"],
-        "OpenRouter": ["OPENROUTER_API_KEY", "OPENROUTER_MODEL", "SERPAPI_KEY"],
-        "Ollama": [
-            "OLLAMA_BASE_URL",
-            "OLLAMA_MODEL",
-            "OLLAMA_NUM_CTX",
-            "OLLAMA_MAX_OUTPUT",
-            "SERPAPI_KEY",
-        ],
-    }
-    LOGIN_PROMPTS = {
-        "ANTHROPIC_API_KEY": "Paste ANTHROPIC_API_KEY (sk-ant-...)",
-        "OPENAI_API_KEY": "Paste OPENAI_API_KEY (chat backend)",
-        "FOUNDRY_BASE_URL": "Paste your Foundry endpoint base URL",
-        "FOUNDRY_API_KEY": "Paste your FOUNDRY_API_KEY",
-        "LITELLM_BASE_URL": "Paste your LiteLLM proxy base URL",
-        "LITELLM_API_KEY": "Paste your LITELLM_API_KEY",
-        "OPENROUTER_API_KEY": "Paste OPENROUTER_API_KEY (openrouter.ai/keys)",
-        "OPENROUTER_MODEL": (
-            "Model slug, author/name — copy exactly from openrouter.ai/models\n"
-            "e.g. qwen/qwen3-235b-a22b-thinking-2507, deepseek/deepseek-chat,\n"
-            "  z-ai/glm-4.6, moonshotai/kimi-k2"
-        ),
-        "OLLAMA_BASE_URL": (
-            "Ollama daemon URL.\n"
-            "Requires the Ollama CLI + daemon running locally:\n"
-            "  brew install ollama && brew services start ollama\n"
-            "Enter for default: http://localhost:11434/v1\n"
-            "(only change this if Ollama runs on another host/port)"
-        ),
-        "OLLAMA_MODEL": (
-            "Model tag to use.\n"
-            "Local: pull first with `ollama pull <tag>`, e.g. qwen3:14b\n"
-            "  Browse sizes/tags per model at ollama.com/library\n"
-            "  See what you've already pulled: `ollama list`\n"
-            "Cloud (huge models, run on Ollama's servers not your machine):\n"
-            "  tag ends in :cloud, e.g. kimi-k2.7-code:cloud\n"
-            "  still needs `ollama pull <tag>:cloud` once, plus `ollama signin`\n"
-            "  browse at ollama.com/search"
-        ),
-        "OLLAMA_NUM_CTX": (
-            "Context window, in tokens — this is what sizes the KV cache.\n"
-            "Enter for default: 32768\n"
-            "micro-cc reserves ~6000 tokens off this for system prompt/tools/\n"
-            "  dynamic context, then MAX_OUTPUT below, then whatever's left goes\n"
-            "  to conversation history\n"
-            "Stay above MAX_OUTPUT + ~8000 or history trimming hits its 2000-\n"
-            "  token floor: history gets crushed and totals can still exceed\n"
-            "  this window, which Ollama truncates silently rather than erroring\n"
-            "Lower it (e.g. 8192) only if the model doesn't fit your RAM at\n"
-            "  full context, and drop MAX_OUTPUT to match"
-        ),
-        "OLLAMA_MAX_OUTPUT": (
-            "Max tokens generated per response.\n"
-            "Enter for default: 4096\n"
-            "Comes out of NUM_CTX above, on top of the ~6000-token reserve for\n"
-            "  system prompt/tools/dynamic context — a bigger cap here leaves\n"
-            "  less room for conversation history\n"
-            "If NUM_CTX - MAX_OUTPUT < ~8000, history trimming hits its floor"
-        ),
-        "SERPAPI_KEY": "SERPAPI_KEY — optional, Enter to skip",
-    }
+    LOGIN_SEQUENCE = model_registry.LOGIN_SEQUENCE
+    LOGIN_PROMPTS = model_registry.LOGIN_PROMPTS
 
     _current_model = settings_store_.get_setting("model")
     _trim_budget = _initial_trim_budget(_current_model)
@@ -229,7 +165,6 @@ class MicroTui():
         self._keys_values = {}
         ## ask user
         self._ask_questions = None
-        self._question_panel: QuestionPanel | None = None
         self._ask_stage = None
         self._ask_answers = {}
         ## Esc-Esc-to-clear (only while idle — see action_cancel_query)
@@ -338,9 +273,12 @@ class MicroTui():
         # Layout: ambient slot, divider, input, divider, then statusbar/hint/subagent/bgproc lines.
         self.bottom_bar = VStack()
         self.bottom_bar.add(self.working)
-        self.bottom_bar.add(self.ask_question_text)
+        # self.bottom_bar.add(self.ask_question_text)
         self.bottom_bar.add(self.memory_flash)
         self.bottom_bar.add(self.above_input_panels)
+        # Live-filter panel for / and @: always mounted, renders nothing while closed, never takes focus.
+        self._live_panel = OptionPanel(show=lambda _p: self.request_render(), hide=self.request_render)
+        self.bottom_bar.add(self._live_panel)
         self.bottom_bar.add(self.top_rule)
         self.bottom_bar.add(self.prompt)
         self.bottom_bar.add(self.bottom_rule)
@@ -365,59 +303,11 @@ class MicroTui():
         self.tui = TuiAltScreen(self.root)
         self.tui.set_primary_scroll_view(self.messages_scroll)
 
-        # Pickers are persistent components shown as overlays.
-        self.model_picker = ListPicker()
-        self.model_picker.set_items(
-            [PickerItem(o, o) for o in self._startup_model_options()]
+        # Modal panel: replaces the prompt in its slot (model, login, theme, rewind, ask-user, approval, ...).
+        self._option_panel = OptionPanel(
+            show=self._show_modal_panel,
+            hide=lambda: self._swap_into_prompt_slot(self.prompt),
         )
-        self.rewind_picker = ListPicker()
-        self.dangerous_picker = MultiSelectList()
-        self.slash_picker = ListPicker()
-        self.at_picker = ListPicker()
-        self.login_picker = ListPicker()
-        self.login_picker.set_items([
-            PickerItem(name, name) for name in ("Anthropic", "Bad Bunny", "Foundry", "LiteLLM", "OpenAI", "OpenRouter", "Ollama")
-        ])
-        self.ask_user_picker = ListPicker()
-        self.ask_user_select = MultiSelectList()
-        self.bgproc_detail_picker = ListPicker()
-        self.subagents_picker = ListPicker()  # items set per open — see screen_cmds_.cmd_subagents
-        self.theme_picker = ListPicker()
-        self.theme_picker.set_items([
-            PickerItem(n, theme_store_.THEME_LABELS.get(n, n))
-            for n in theme_store_.PRESETS
-        ])
-
-        self.model_picker.on_select = self._on_model_picked
-        self.model_picker.on_cancel = lambda: self._close_picker("_model_picker_overlay")
-        self.rewind_picker.on_select = self._on_rewind_picked
-        self.rewind_picker.on_cancel = lambda: self._close_picker("_rewind_picker_overlay")
-        self.dangerous_picker.on_confirm = self._on_dangerous_confirmed
-        self.dangerous_picker.on_cancel = lambda: self._close_picker("_dangerous_picker_overlay")
-        self.slash_picker.on_select = self._on_slash_picked
-        self.slash_picker.on_cancel = lambda: self._close_picker("_slash_picker_overlay")
-        self.at_picker.on_select = lambda item: self.insert_at_mention(item.value)
-        self.at_picker.on_cancel = lambda: self._close_picker("_at_picker_overlay")
-        self.login_picker.on_select = self._on_login_picked
-        self.login_picker.on_cancel = lambda: self._close_picker("_login_picker_overlay")
-        self.ask_user_picker.on_select = lambda item: self._advance_ask_user(item.label)
-        self.ask_user_select.on_confirm = lambda checked: self._advance_ask_user([it.label for it in checked])
-        # Read-only peek: Enter and Escape both dismiss.
-        self.bgproc_detail_picker.on_select = lambda item: self._hide_bgproc_detail()
-        self.bgproc_detail_picker.on_cancel = self._hide_bgproc_detail
-        self.theme_picker.on_select = self._on_theme_picked
-        self.theme_picker.on_cancel = lambda: self._close_picker("_theme_picker_overlay")
-        self.subagents_picker.on_select = self._on_subagents_picked
-        self.subagents_picker.on_cancel = lambda: self._close_picker("_subagents_picker_overlay")
-
-        self._model_picker_overlay = None
-        self._rewind_picker_overlay = None
-        self._dangerous_picker_overlay = None
-        self._slash_picker_overlay = None
-        self._at_picker_overlay = None
-        self._login_picker_overlay = None
-        self._theme_picker_overlay = None
-        self._subagents_picker_overlay = None
 
     # --- render loop / focus ---------------------------------------------
 
@@ -573,8 +463,7 @@ class MicroTui():
         if (
             self._input_mode in ("idle", "query_active")
             and self.get_focus() is self.prompt
-            and self._slash_picker_overlay is None
-            and self._at_picker_overlay is None
+            and not self._live_panel.is_open
         ):
             if mods_.handle_key(data):
                 self.request_render()
@@ -598,18 +487,14 @@ class MicroTui():
             _SCROLL_KEYS[key_id]()
             return
 
-        # Live filter pickers (slash/at) stay unfocused; intercept their navigation keys.
-        live_picker = (
-            self.slash_picker if self._slash_picker_overlay is not None else
-            self.at_picker if self._at_picker_overlay is not None else
-            None
-        )
+        # Live filter panels (slash/at) stay unfocused; intercept their navigation keys.
+        live_panel = self._live_panel if self._live_panel.is_open else None
 
         # Cycle subagent view [boss, *tracked subagents] on shift+tab.
         if (
             key_id == "shift+tab"
             and self.get_focus() is self.prompt
-            and live_picker is None
+            and live_panel is None
         ):
             if not self._tracked_subagents:
                 self._flash_status("no subagents to switch to", seconds=2.5)
@@ -635,18 +520,18 @@ class MicroTui():
         if (
             key_id == "ctrl+b"
             and self.get_focus() is self.prompt
-            and live_picker is None
+            and live_panel is None
         ):
             self._show_bgproc_detail()
             return
 
-        if live_picker is not None:
+        if live_panel is not None:
             if key_id in ("up", "down"):
-                live_picker.handle_key(key_id)
+                live_panel.handle_key(key_id)
                 self.request_render()
                 return
             if key_id == "enter":
-                live_picker.confirm()
+                live_panel.confirm()
                 self.request_render()
                 return
             # Tab falls through to the prompt: it completes text without submitting.
@@ -666,72 +551,26 @@ class MicroTui():
 
     # --- pickers ---
 
-    def _bottom_bar_height(self) -> int:
-        """Return current row count of bottom_bar content."""
-        width, _ = self.tui._terminal_size()
-        return len(self.bottom_bar.render(width))
-
-    def _open_picker(self, picker, handle_attr: str, steal_focus: bool = True, anchor: str = "bottom-center", **overlay_kw) -> None:
-        """Show picker overlay, auto-positioning to dodge bottom_bar content."""
-        self._close_picker(handle_attr)
-        offset_y = overlay_kw.pop("offset_y", 0)
-        if anchor.startswith("bottom"):
-            offset_y -= self._bottom_bar_height()
-        handle = self.tui.show_overlay(
-            picker, OverlayOptions(anchor=anchor, margin=1, width="100%", offset_y=offset_y, **overlay_kw)
-        )
-        setattr(self, handle_attr, handle)
-        if steal_focus:
-            self.set_focus(picker)
-        self.request_render()
-
-    def _close_picker(self, handle_attr: str) -> None:
-        handle = getattr(self, handle_attr, None)
-        if handle is not None:
-            handle.hide()
-            setattr(self, handle_attr, None)
-        self.request_render()
-
-    def close_all_pickers(self) -> bool:
-        """Close open pickers on ESC; return True if any was closed."""
-        closed = False
-        for handle_attr in (
-            "_model_picker_overlay", "_rewind_picker_overlay", "_dangerous_picker_overlay",
-            "_slash_picker_overlay", "_at_picker_overlay", "_login_picker_overlay",
-        ):
-            if getattr(self, handle_attr, None) is not None:
-                self._close_picker(handle_attr)
-                closed = True
-        if closed:
-            self.set_focus(self.prompt)
-        return closed
-
-    # --- picker selection callbacks --
-
-    def _on_model_picked(self, item: PickerItem) -> None:
+    def _on_model_picked(self, item: PanelItem) -> None:
         self._current_model = item.value
         settings_store_.edit_setting("model", item.value)
+        if item.choices:
+            settings_store_.edit_setting("reasoning_effort", item.chosen)
         endpoint = get_endpoint()
         if endpoint != "Ollama":
             backend = "openrouter" if endpoint == "OpenRouter" else None
             self._trim_budget = model_registry.trim_budget_for(self._current_model, backend=backend)
-        self._close_picker("_model_picker_overlay")
         self._refresh_status()
-        self.set_focus(self.prompt)
 
-    def _on_theme_picked(self, item: PickerItem) -> None:
+    def _on_theme_picked(self, item: PanelItem) -> None:
         """Apply and persist selected theme preset."""
-        self._close_picker("_theme_picker_overlay")
         msg = theme_store_.set_preset(item.value)
         self._flash_status(msg, seconds=3)
-        self.set_focus(self.prompt)
 
-    def _on_subagents_picked(self, item: PickerItem) -> None:
+    def _on_subagents_picked(self, item: PanelItem) -> None:
         """Persist concurrent subagent cap to settings."""
-        self._close_picker("_subagents_picker_overlay")
         settings_store_.edit_setting("max_subagents", int(item.value))
         self._flash_status(f"✓ up to {item.value} subagent(s) at once — applies to the next spawn", seconds=3)
-        self.set_focus(self.prompt)
 
     def _apply_theme(self, _name: str = "") -> None:
         """Repaint UI when color set changes; re-emit terminal defaults and invalidate caches."""
@@ -759,8 +598,7 @@ class MicroTui():
         self._static_hint_text()
         self.request_render()
 
-    def _on_rewind_picked(self, item: PickerItem) -> None:
-        self._close_picker("_rewind_picker_overlay")
+    def _on_rewind_picked(self, item: PanelItem) -> None:
         self._safe_task(self._do_rewind(int(item.value)), "rewind")
 
     async def _do_rewind(self, cut_idx: int) -> None:
@@ -778,46 +616,20 @@ class MicroTui():
     def _on_dangerous_confirmed(self, checked: list) -> None:
         self._dangerous_tools = {it.value for it in checked}
         settings_store_.edit_setting("dangerous", list(self._dangerous_tools))
-        self._close_picker("_dangerous_picker_overlay")
         self._refresh_status()
-        self.set_focus(self.prompt)
 
-    def _on_slash_picked(self, item: PickerItem) -> None:
-        self._close_picker("_slash_picker_overlay")
+    def _on_slash_picked(self, item: PanelItem) -> None:
         self.prompt.clear()
         self.prompt.insert(item.value)
-        self.set_focus(self.prompt)
         self._safe_task(self._on_prompt_submitted(self.prompt.text), "prompt submit")
 
-    def _on_login_picked(self, item: PickerItem) -> None:
-        return login_ui_.on_login_picked(self, item)
 
     # ============================================= pickers
 
     # ============================================= logins
 
-    async def _claude_code_login(self) -> None:
-        return await login_ui_.claude_code_login(self)
-
-    def _handle_login_input(self, query: str) -> None:
-        return login_ui_.handle_login_input(self, query)
-
-    # ============================================= logins
 
     # ============================================= other
-
-    def _handle_keys_input(self, query: str) -> None:
-        return login_ui_.handle_keys_input(self, query)
-
-    def _startup_model_options(self):
-        """Return model options filtered to active backend."""
-        endpoint = get_endpoint()
-        if endpoint in ("Ollama", "OpenRouter"):
-            return [self._current_model] if self._current_model else []
-        backend_key = {"Anthropic": "anthropic", "Foundry": "foundry", "OpenAI": "openai"}.get(
-            endpoint, "litellm"
-        )
-        return model_registry.options_for_backend(backend_key)
 
     async def _mount_row(self, msg: dict) -> MessageRow:
         row = MessageRow(msg)
@@ -849,7 +661,11 @@ class MicroTui():
 
     # ============================================= other
 
-    # ============================================= user questions
+    # ============================================= modal pane
+
+    def _show_modal_panel(self, panel) -> None:
+        self._live_panel.close()  # the prompt is going away; its / and @ panel must not keep the keys
+        self._swap_into_prompt_slot(panel)
 
     def _swap_into_prompt_slot(self, component) -> None:
         """Replace prompt with component in bottom_bar."""
@@ -859,79 +675,7 @@ class MicroTui():
         self.set_focus(component)
         self.request_render()
 
-    def _show_current_ask_question(self):
-        q = self._ask_questions[self._ask_stage]
-
-        # Hide status/hint bars; RichStatic renders [] when empty.
-        self.statusbar.update("")
-        self.static_hintbar.update("")
-        self.ask_question_text.update(q["question"])
-
-        items = [
-            PickerItem(o["label"], o["label"], o.get("description", ""))
-            for o in q["options"]
-        ]
-
-        if q["options"]:
-            picker = self.ask_user_select if q.get("multiSelect") else self.ask_user_picker
-            picker.max_visible, picker.max_desc_lines = self._ask_picker_layout(items)
-            picker.set_items(items)
-            self._swap_into_prompt_slot(picker)
-        else:
-            # Freeform stage — no picker at all, question text already
-            # shown above; the real prompt IS the answer box.
-            self._swap_into_prompt_slot(self.prompt)
-            self.prompt.placeholder = q["question"]
-
-    _ASK_PICKER_MARGIN = 2  # border rows the picker itself adds
-
-    def _ask_picker_layout(self, items: list[PickerItem]) -> tuple[int, int]:
-        """Compute max visible items and description lines to fit in available space."""
-        width, height = self.tui._terminal_size()
-        reserved = (
-            len(self.banner.render(width))
-            + len(self.working.render(width))
-            + len(self.ask_question_text.render(width))
-            + len(self.memory_flash.render(width))
-            + 2  # top_rule + bottom_rule
-            + len(self.statusbar.render(width))
-            + len(self.static_hintbar.render(width))
-            + len(self.subagent_status.render(width))
-            + len(self.bgproc_status.render(width))
-            + self._ASK_PICKER_MARGIN
-        )
-        budget = max(1, height - reserved)
-        num_items = max(1, len(items))
-        has_descriptions = any(it.description for it in items)
-        if not has_descriptions:
-            return max(1, budget), list_picker_.MAX_DESC_LINES
-
-        if budget < num_items:
-            # Too little room even for one line per item — fall back to
-            # scrolling rather than stacking descriptions at all.
-            return max(1, budget), 1
-
-        max_desc_lines = max(1, budget // num_items - 1)  # -1 reserves the label line
-        return num_items, max_desc_lines
-
-    def _hide_ask_ui(self):
-        self._swap_into_prompt_slot(self.prompt)
-        self.ask_question_text.update("")
-        self.prompt.placeholder = ""
-        self._refresh_status()
-        self._static_hint_text()
-
-    def _advance_ask_user(self, answer):
-        q = self._ask_questions[self._ask_stage]
-        self._ask_answers[q["header"]] = answer
-        self._ask_stage += 1
-        if self._ask_stage >= len(self._ask_questions):
-            self._pending_result = self._ask_answers
-            self._pending_input.set()
-        else:
-            self._show_current_ask_question()
-
-    # ============================================= user questions
+    # ============================================= modal pane
 
     # ============================================= clipboard + paste monkey patching + double paste unravel full paste # TODO
 
@@ -965,9 +709,6 @@ class MicroTui():
         shown = lines[: cls._STATUS_STACK_MAX_LINES - 1]
         return shown + [f"… +{len(lines) - len(shown)} more"]
 
-    def get_random_hint(self):
-        return status_bar_.get_random_hint(self)
-
     def _static_hint_text(self) -> None:
         return status_bar_.static_hint_text(self)
 
@@ -975,17 +716,8 @@ class MicroTui():
     _STATUS_LINE_TIMEOUT = 0.3  # must be tight, blocks event loop
     _STATUS_LINE_MAXLEN = 200  # a runaway script can't blow up the bar
 
-    def _ensure_status_script(self) -> str:
-        return status_bar_.ensure_status_script(self)
-
-    async def _status_text(self) -> str:
-        return await status_bar_.status_text(self)
-
     def _refresh_status(self):
         return status_bar_.refresh_status(self)
-
-    async def _update_status_bar(self):
-        return await status_bar_.update_status_bar(self)
 
     def _flash_status(self, text: str, seconds: float = 3.0):
         return status_bar_.flash_status(self, text, seconds)
@@ -996,27 +728,6 @@ class MicroTui():
 
     # ---------------------------------------------------- restart on self-change
     # Detect source changes and relaunch; supervisor catches breaking edits.
-
-    def _init_self_manifest(self) -> None:
-        return self_reload_ui_.init_self_manifest(self)
-
-    async def _self_poll_loop(self) -> None:
-        return await self_reload_ui_.self_poll_loop(self)
-
-    def _poll_self_change_tick(self) -> None:
-        return self_reload_ui_.poll_self_change_tick(self)
-
-    def _self_reload_hint(self) -> str:
-        return self_reload_ui_.self_reload_hint(self)
-
-    def _self_reload_blocker(self) -> str | None:
-        return self_reload_ui_.self_reload_blocker(self)
-
-    async def _maybe_self_reload(self) -> None:
-        return await self_reload_ui_.maybe_self_reload(self)
-
-    async def _restart_self(self, reason: str | None = None) -> None:
-        return await self_reload_ui_.restart_self(self, reason)
 
     def _flash_memory_review(self, text: str, seconds: float = 6.0) -> None:
         """Flash memory review text with separate timer to avoid collision with status flashes."""
@@ -1093,11 +804,11 @@ class MicroTui():
 
     async def _working_timer_loop(self) -> None:
         while True:
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(0.08)
             self._tick_working()
 
     def _tick_working(self):
-        """Update spinner frame and active task label."""
+        """Advance the shimmer one step and refresh the active task label."""
         store = state_store.get_todos(self._project_dir) or {}
         active = next(
             (t for t in store.values() if t.get("status") == "in_progress"), None
@@ -1105,9 +816,8 @@ class MicroTui():
         label = (
             (active.get("activeForm") or active.get("content")) if active else "Working"
         )
-        frame = self._SPINNER[self._spin_i % len(self._SPINNER)]
         self._spin_i += 1
-        self.working.update(f"{frame} {label}…")
+        self.working.update(shimmer(f"{label}…", self._spin_i, theme_store_.get("banner_dim"), theme_store_.get("fg")))
         self.request_render()
 
     # ============================================= terminal busy and status of terminal logic
@@ -1156,24 +866,18 @@ class MicroTui():
     # ============================================= prompt mechanics files slash pickers
 
     def _on_prompt_changed(self, text: str) -> None:
-        """Update slash and at-mention pickers on prompt text change."""
-        self._update_slash_picker(text)
-        self._update_at_picker()
+        """Typing drives the live panel: slash commands first, then @file mentions."""
+        if not (self._open_slash_panel(text) or self._open_at_panel()):
+            self._live_panel.close()
 
-    def _update_slash_picker(self, text: str):
-        """Show/hide filtered slash command panel."""
-        matches = []
-        if text.startswith("/") and "\n" not in text:
-            matches = [
-                (c, d) for c, d in mods_.slash_command_info() if c.startswith(text)
-            ]
+    def _open_slash_panel(self, text: str) -> bool:
+        if not text.startswith("/") or "\n" in text:
+            return False
+        matches = [(c, d) for c, d in mods_.slash_command_info() if c.startswith(text)]
         if not matches:
-            self._close_picker("_slash_picker_overlay")
-            return
-        self.slash_picker.set_items([
-            PickerItem(cmd, f"{cmd:<12}{desc}") for cmd, desc in matches
-        ])
-        self._open_picker(self.slash_picker, "_slash_picker_overlay", steal_focus=False)
+            return False
+        self._live_panel.open([PanelItem(cmd, f"{cmd:<12}{desc}") for cmd, desc in matches], on_select=self._on_slash_picked)
+        return True
 
     _AT_MENTION_MAX_RESULTS = 50
 
@@ -1189,22 +893,15 @@ class MicroTui():
             return None
         return fragment
 
-    def _update_at_picker(self):
-        """Show/hide fuzzy-filtered file picker on '@' mention."""
-        if self._slash_picker_overlay is not None:
-            self._close_picker("_at_picker_overlay")
-            return
+    def _open_at_panel(self) -> bool:
         query = self._current_mention_query()
-        matches = []
-        if query is not None:
-            matches = rank_file_matches(
-                self._project_files, query, self._AT_MENTION_MAX_RESULTS
-            )
+        if query is None:
+            return False
+        matches = rank_file_matches(self._project_files, query, self._AT_MENTION_MAX_RESULTS)
         if not matches:
-            self._close_picker("_at_picker_overlay")
-            return
-        self.at_picker.set_items([PickerItem(f, f) for f in matches])
-        self._open_picker(self.at_picker, "_at_picker_overlay", steal_focus=False)
+            return False
+        self._live_panel.open([PanelItem(f, f) for f in matches], on_select=lambda it: self.insert_at_mention(it.value))
+        return True
 
     def insert_at_mention(self, file_path: str):
         """Replace the '@query' fragment under the cursor with file_path."""
@@ -1213,7 +910,6 @@ class MicroTui():
         at_idx = line.rfind("@", 0, col)
         if at_idx != -1:
             self.prompt.replace(file_path, (row, at_idx), (row, col))
-        self._close_picker("_at_picker_overlay")
         self.set_focus(self.prompt)
 
     def action_scroll_messages_up(self, lines: int = 3):
@@ -1260,7 +956,7 @@ class MicroTui():
             return
 
         if self._input_mode == "login":
-            self._close_picker("_login_picker_overlay")
+            self._option_panel.close()
             self._login_stage = None
             self._login_provider = None
             self._login_values = {}
@@ -1279,9 +975,11 @@ class MicroTui():
             self.set_focus(self.prompt)
             return
 
-        # If a picker is open, ESC just closes it — no cancel
-        if self.close_all_pickers():
-            return
+        # Any open panel cancels itself and runs its own on_cancel (ask-user and approval wake their waiter there).
+        for panel in (self._option_panel, self._live_panel):
+            if panel.is_open:
+                panel.cancel()
+                return
 
         # Mid-approval ESC rejects just this tool; a second ESC (query_active) interrupts.
         if self._input_mode == "awaiting_approval":
@@ -1370,25 +1068,18 @@ class MicroTui():
             return
 
         if self._input_mode == "login":
-            self._handle_login_input(query)
+            login_ui_.handle_login_input(self, query)
             self.prompt.clear()
             return
 
         if self._input_mode == "keys":
-            self._handle_keys_input(query)
+            login_ui_.handle_keys_input(self, query)
             self.prompt.clear()
             return
 
         if self._input_mode == "question_asked":
             if self._pending_input is not None and not self._pending_input.is_set():
-                self._advance_ask_user(query)
-            self.prompt.clear()
-            return
-
-        if self._input_mode == "awaiting_approval":
-            if self._pending_input is not None and not self._pending_input.is_set():
-                self._pending_result = query.lower() in ("", "y", "yes")
-                self._pending_input.set()
+                question_ui_.advance(self, query)
             self.prompt.clear()
             return
 
@@ -1555,7 +1246,7 @@ class MicroTui():
             self._input_mode = "idle"
             # Self-reload only when nothing is queued, so a queued prompt isn't lost.
             if not await self._drain_next_queued():
-                await self._maybe_self_reload()
+                await self_reload_ui_.maybe_self_reload(self)
 
     # ============================================= do query
 
@@ -1586,19 +1277,17 @@ class MicroTui():
         await self._inject_incoming_turn(f"[incoming from {from_dir}]\n{text}")
 
     def _bgproc_picker_items(self, procs: list[dict], watches: list[dict] | None = None) -> list:
-        """One PickerItem per background process or watch; description is the full command.
+        """One PanelItem per background process or watch; description is the full command.
         Watch values are prefixed "watch:<id>" so they never collide with a PID."""
         items = []
         for p in procs:
-            desc = p["command"]
-            if p.get("cwd"):
-                desc += f"\ncwd: {p['cwd']}"
-            items.append(PickerItem(str(p["pid"]), f"PID {p['pid']} · {p['age']}s", desc))
+            desc = f"{p['command']} · in {p['cwd']}" if p.get("cwd") else p["command"]
+            items.append(PanelItem(str(p["pid"]), f"PID {p['pid']} · {p['age']}s", desc))
         for w in (watches or []):
-            items.append(PickerItem(
+            items.append(PanelItem(
                 f"watch:{w['watch_id']}",
                 f"◎ {w['watch_id']} · {w['age']}s",
-                f"{w['description']}\ncommand: {w['command']}",
+                f"{w['description']} · {w['command']}",
             ))
         return items
 
@@ -1614,16 +1303,14 @@ class MicroTui():
             self._flash_status("no background processes or watches", seconds=2.5)
             return
         items = self._bgproc_picker_items(procs, watches)
-        self.bgproc_detail_picker.max_visible, self.bgproc_detail_picker.max_desc_lines = (
-            self._ask_picker_layout(items)
-        )
-        self.bgproc_detail_picker.set_items(items)
         self._bgproc_viewing = True
-        self._swap_into_prompt_slot(self.bgproc_detail_picker)
+        self._option_panel.max_visible, self._option_panel.max_desc_lines = panel_layout_.fit(self, items)
+        # Read-only peek: Enter and Esc both dismiss.
+        self._option_panel.open(items, on_select=lambda _it: self._hide_bgproc_detail(), on_cancel=self._hide_bgproc_detail)
 
     def _hide_bgproc_detail(self) -> None:
         self._bgproc_viewing = False
-        self._swap_into_prompt_slot(self.prompt)
+        self._option_panel.close()
 
     def _refresh_bgproc_detail(self, procs: list[dict], watches: list[dict] | None = None) -> None:
         """Keep the open detail view live off the 3s tick; auto-close when nothing is left."""
@@ -1631,29 +1318,15 @@ class MicroTui():
         if not procs and not watches:
             self._hide_bgproc_detail()
             return
-        selected_value = None
-        if self.bgproc_detail_picker.items:
-            selected_value = self.bgproc_detail_picker.items[
-                self.bgproc_detail_picker.selected_index
-            ].value
-        items = self._bgproc_picker_items(procs, watches)
-        self.bgproc_detail_picker.set_items(items)
-        if selected_value is not None:
-            for i, it in enumerate(items):
-                if it.value == selected_value:
-                    self.bgproc_detail_picker.selected_index = i
-                    break
+        current = self._option_panel.get_selected_item()
+        self._option_panel.set_items(self._bgproc_picker_items(procs, watches))
+        if current is not None:
+            self._option_panel.set_selected_value(current.value)
         self.request_render()
 
     _SUBAGENT_CHECKPOINT_STATUSES = {"DONE", "FAILED", "PAUSED", "NEEDS_INPUT"}
     # Truly final; PAUSED/NEEDS_INPUT still expect a relaunch, so they are never prunable.
     _SUBAGENT_TERMINAL_STATUSES = {"DONE", "FAILED"}
-
-    def _poll_bgprocs_tick(self) -> None:
-        return pollers_.poll_bgprocs_tick(self)
-
-    def _poll_memory_review_tick(self) -> None:
-        return pollers_.poll_memory_review_tick(self)
 
     def enter_subagent_view(self, target: str) -> None:
         """Show a subagent's conversation, read off disk, in the message area."""
@@ -1678,9 +1351,6 @@ class MicroTui():
         if not turn_active:
             self._safe_task(self._reload_messages_from_disk(), "reload after subagent view exit")
 
-    async def _poll_subagents_tick(self, *, cold_start: bool = False) -> None:
-        return await pollers_.poll_subagents_tick(self, cold_start=cold_start)
-
     # Status-agnostic on purpose: /graph and the graph-orchestration skill hold the mechanism;
     # this only re-orients a model that may have lost that context.
     _SUBAGENT_WAKEUP_REMINDER = (
@@ -1700,9 +1370,6 @@ class MicroTui():
         "to reload the full mechanism — then read GRAPH_PLAN.md for the "
         "actual plan. Do not act on the checkpoint below until you have.\n\n"
     )
-
-    async def _wake_for_subagent(self, info: dict, *, cold_start: bool = False) -> None:
-        return await pollers_.wake_for_subagent(self, info, cold_start=cold_start)
 
     # ============================================= subagents
 
@@ -1727,27 +1394,27 @@ class MicroTui():
         # A /theme switch repaints the running UI via this listener (see _apply_theme).
         theme_store_.on_change(self._apply_theme)
         _schedule_rt.set_wake_callback(self._on_monitor_event)
-        _schedule_rt.set_start_tick(self._ensure_schedule_tick)
-        self._ensure_schedule_tick()
+        _schedule_rt.set_start_tick(lambda: pollers_.ensure_schedule_tick(self))
+        pollers_.ensure_schedule_tick(self)
 
         # Resume tracked subagents from disk and poll at once; prune now, since nothing can race a wakeup yet.
         from micro_cc.utils import subagent_tracker_ as _subagent_tracker_
 
         _subagent_tracker_.prune(self._project_dir)
-        self._subagent_poll_timer = asyncio.create_task(self._subagent_poll_loop())
-        self._safe_task(self._poll_subagents_tick(cold_start=True), "subagent poll")
+        self._subagent_poll_timer = asyncio.create_task(pollers_.subagent_poll_loop(self))
+        self._safe_task(pollers_.poll_subagents_tick(self, cold_start=True), "subagent poll")
 
         # Cheap in-memory check; a plain 3s interval is fine.
-        self._bgproc_poll_timer = asyncio.create_task(self._bgproc_poll_loop())
-        self._poll_bgprocs_tick()
+        self._bgproc_poll_timer = asyncio.create_task(pollers_.bgproc_poll_loop(self))
+        pollers_.poll_bgprocs_tick(self)
 
         # Own always-on timer: the review recap isn't tied to the per-round status refresh.
-        self._memory_review_poll_timer = asyncio.create_task(self._memory_review_poll_loop())
+        self._memory_review_poll_timer = asyncio.create_task(pollers_.memory_review_poll_loop(self))
 
         # Restart-on-self-change: baseline the harness source and poll it, on every install type.
         statusline_.migrate()
-        self._init_self_manifest()
-        self._self_poll_timer = asyncio.create_task(self._self_poll_loop())
+        self_reload_ui_.init_self_manifest(self)
+        self._self_poll_timer = asyncio.create_task(self_reload_ui_.self_poll_loop(self))
 
         # Restore a prompt stashed by a self-reload; read-and-delete so it lands once.
         from micro_cc.utils import self_reload_ as _self_reload
@@ -1818,24 +1485,6 @@ class MicroTui():
             self_heal_.note_boot_ok(self._project_dir)
         except Exception:
             pass
-
-    async def _subagent_poll_loop(self) -> None:
-        return await pollers_.subagent_poll_loop(self)
-
-    async def _bgproc_poll_loop(self) -> None:
-        return await pollers_.bgproc_poll_loop(self)
-
-    async def _memory_review_poll_loop(self) -> None:
-        return await pollers_.memory_review_poll_loop(self)
-
-    def _ensure_schedule_tick(self) -> None:
-        return pollers_.ensure_schedule_tick(self)
-
-    async def _schedule_poll_loop(self) -> None:
-        return await pollers_.schedule_poll_loop(self)
-
-    def _poll_schedule_tick(self) -> None:
-        return pollers_.poll_schedule_tick(self)
 
     # ========================================================================== start
 

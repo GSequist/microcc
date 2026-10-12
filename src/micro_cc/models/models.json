@@ -1,0 +1,320 @@
+{
+  "schema": 1,
+  "default_model": "sonnet-5",
+  "providers": {
+    "Anthropic": {
+      "backend": "anthropic",
+      "login": [
+        "ANTHROPIC_API_KEY",
+        "SERPAPI_KEY"
+      ]
+    },
+    "Claude Code": {
+      "backend": "anthropic",
+      "oauth": true
+    },
+    "Foundry": {
+      "backend": "foundry",
+      "login": [
+        "FOUNDRY_BASE_URL",
+        "FOUNDRY_API_KEY",
+        "SERPAPI_KEY"
+      ]
+    },
+    "LiteLLM": {
+      "backend": "litellm",
+      "login": [
+        "LITELLM_BASE_URL",
+        "LITELLM_API_KEY",
+        "SERPAPI_KEY"
+      ]
+    },
+    "OpenAI": {
+      "backend": "openai",
+      "login": [
+        "OPENAI_API_KEY",
+        "SERPAPI_KEY"
+      ]
+    },
+    "OpenRouter": {
+      "backend": "openrouter",
+      "login": [
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_MODEL",
+        "SERPAPI_KEY"
+      ],
+      "free_text_model": true
+    },
+    "Ollama": {
+      "backend": "ollama",
+      "login": [
+        "OLLAMA_BASE_URL",
+        "OLLAMA_MODEL",
+        "OLLAMA_NUM_CTX",
+        "OLLAMA_MAX_OUTPUT",
+        "SERPAPI_KEY"
+      ],
+      "free_text_model": true
+    }
+  },
+  "login_prompts": {
+    "ANTHROPIC_API_KEY": "Paste ANTHROPIC_API_KEY (sk-ant-...)",
+    "OPENAI_API_KEY": "Paste OPENAI_API_KEY (chat backend)",
+    "FOUNDRY_BASE_URL": "Paste your Foundry endpoint base URL",
+    "FOUNDRY_API_KEY": "Paste your FOUNDRY_API_KEY",
+    "LITELLM_BASE_URL": "Paste your LiteLLM proxy base URL",
+    "LITELLM_API_KEY": "Paste your LITELLM_API_KEY",
+    "OPENROUTER_API_KEY": "Paste OPENROUTER_API_KEY (openrouter.ai/keys)",
+    "OPENROUTER_MODEL": "Model slug, author/name — copy exactly from openrouter.ai/models\ne.g. qwen/qwen3-235b-a22b-thinking-2507, deepseek/deepseek-chat,\n  z-ai/glm-4.6, moonshotai/kimi-k2",
+    "OLLAMA_BASE_URL": "Ollama daemon URL.\nRequires the Ollama CLI + daemon running locally:\n  brew install ollama && brew services start ollama\nEnter for default: http://localhost:11434/v1\n(only change this if Ollama runs on another host/port)",
+    "OLLAMA_MODEL": "Model tag to use.\nLocal: pull first with `ollama pull <tag>`, e.g. qwen3:14b\n  Browse sizes/tags per model at ollama.com/library\n  See what you've already pulled: `ollama list`\nCloud (huge models, run on Ollama's servers not your machine):\n  tag ends in :cloud, e.g. kimi-k2.7-code:cloud\n  still needs `ollama pull <tag>:cloud` once, plus `ollama signin`\n  browse at ollama.com/search",
+    "OLLAMA_NUM_CTX": "Context window, in tokens — this is what sizes the KV cache.\nEnter for default: 32768\nmicro-cc reserves ~6000 tokens off this for system prompt/tools/\n  dynamic context, then MAX_OUTPUT below, then whatever's left goes\n  to conversation history\nStay above MAX_OUTPUT + ~8000 or history trimming hits its 2000-\n  token floor: history gets crushed and totals can still exceed\n  this window, which Ollama truncates silently rather than erroring\nLower it (e.g. 8192) only if the model doesn't fit your RAM at\n  full context, and drop MAX_OUTPUT to match",
+    "OLLAMA_MAX_OUTPUT": "Max tokens generated per response.\nEnter for default: 4096\nComes out of NUM_CTX above, on top of the ~6000-token reserve for\n  system prompt/tools/dynamic context — a bigger cap here leaves\n  less room for conversation history\nIf NUM_CTX - MAX_OUTPUT < ~8000, history trimming hits its floor",
+    "SERPAPI_KEY": "SERPAPI_KEY — optional, Enter to skip"
+  },
+  "models": {
+    "sonnet-5": {
+      "anthropic": "claude-sonnet-5",
+      "foundry": "claude-sonnet-5",
+      "litellm": "bedrock.anthropic.claude-sonnet-5",
+      "thinking": true,
+      "summarized_display": true,
+      "context_window": 1000000,
+      "max_output": 128000,
+      "effort_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default_effort": "high"
+    },
+    "sonnet-5.5": {
+      "anthropic": "claude-sonnet-5-5",
+      "foundry": "claude-sonnet-5-5",
+      "litellm": "bedrock.anthropic.claude-sonnet-5-5",
+      "thinking": true,
+      "summarized_display": true,
+      "context_window": 1000000,
+      "max_output": 128000,
+      "server_fallback": true,
+      "effort_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default_effort": "high"
+    },
+    "opus-5": {
+      "anthropic": "claude-opus-5",
+      "foundry": "claude-opus-5",
+      "litellm": "bedrock.anthropic.claude-opus-5",
+      "thinking": true,
+      "summarized_display": true,
+      "context_window": 1000000,
+      "max_output": 128000,
+      "effort_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default_effort": "high"
+    },
+    "opus-5.5": {
+      "anthropic": "claude-opus-5-5",
+      "foundry": "claude-opus-5-5",
+      "litellm": "bedrock.anthropic.claude-opus-5-5",
+      "thinking": true,
+      "summarized_display": true,
+      "context_window": 1000000,
+      "max_output": 128000,
+      "server_fallback": true,
+      "effort_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default_effort": "high"
+    },
+    "opus-4.8": {
+      "anthropic": "claude-opus-4-8",
+      "foundry": "claude-opus-4-8",
+      "litellm": "bedrock.anthropic.claude-opus-4-8",
+      "thinking": true,
+      "summarized_display": true,
+      "context_window": 1000000,
+      "max_output": 128000,
+      "effort_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default_effort": "high"
+    },
+    "opus-4.7": {
+      "anthropic": "claude-opus-4-7",
+      "foundry": "claude-opus-4-7",
+      "litellm": "bedrock.anthropic.claude-opus-4-7",
+      "thinking": true,
+      "summarized_display": true,
+      "context_window": 1000000,
+      "max_output": 128000,
+      "effort_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default_effort": "high"
+    },
+    "opus-4.6": {
+      "anthropic": "claude-opus-4-6",
+      "foundry": "claude-opus-4-6",
+      "litellm": "bedrock.anthropic.claude-opus-4-6",
+      "thinking": true,
+      "summarized_display": false,
+      "context_window": 1000000,
+      "max_output": 128000,
+      "effort_levels": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "default_effort": "high"
+    },
+    "sonnet-4.6": {
+      "anthropic": "claude-sonnet-4-6",
+      "foundry": "claude-sonnet-4-6",
+      "litellm": "bedrock.anthropic.claude-sonnet-4-6",
+      "thinking": true,
+      "summarized_display": false,
+      "context_window": 1000000,
+      "max_output": 128000,
+      "effort_levels": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "default_effort": "high"
+    },
+    "haiku-5.5": {
+      "anthropic": "claude-haiku-5-5",
+      "foundry": "claude-haiku-5-5",
+      "litellm": "bedrock.anthropic.claude-haiku-5-5",
+      "thinking": true,
+      "summarized_display": true,
+      "context_window": 1000000,
+      "max_output": 128000,
+      "effort_levels": [],
+      "default_effort": null
+    },
+    "gpt-5.6-terra": {
+      "litellm": "openai.gpt-5.6-terra",
+      "openai": "gpt-5.6-terra",
+      "thinking": true,
+      "summarized_display": false,
+      "responses_api": true,
+      "context_window": 1050000,
+      "max_output": 128000,
+      "effort_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default_effort": "high"
+    },
+    "gpt-5.6-luna": {
+      "litellm": "openai.gpt-5.6-luna",
+      "openai": "gpt-5.6-luna",
+      "thinking": true,
+      "summarized_display": false,
+      "responses_api": true,
+      "context_window": 1050000,
+      "max_output": 128000,
+      "effort_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default_effort": "high"
+    },
+    "gpt-5.6-sol": {
+      "litellm": "openai.gpt-5.6-sol",
+      "openai": "gpt-5.6-sol",
+      "thinking": true,
+      "summarized_display": false,
+      "responses_api": true,
+      "context_window": 1050000,
+      "max_output": 128000,
+      "effort_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default_effort": "high"
+    },
+    "gpt-6-astra": {
+      "litellm": "openai.gpt-6-astra",
+      "openai": "gpt-6-astra",
+      "thinking": true,
+      "summarized_display": false,
+      "responses_api": true,
+      "context_window": 1050000,
+      "max_output": 128000,
+      "effort_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default_effort": "high"
+    },
+    "gpt-6-sol": {
+      "litellm": "openai.gpt-6-sol",
+      "openai": "gpt-6-sol",
+      "thinking": true,
+      "summarized_display": false,
+      "responses_api": true,
+      "context_window": 1050000,
+      "max_output": 128000,
+      "effort_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default_effort": "high"
+    },
+    "gpt-6-luna": {
+      "litellm": "openai.gpt-6-luna",
+      "openai": "gpt-6-luna",
+      "thinking": true,
+      "summarized_display": false,
+      "responses_api": true,
+      "context_window": 1050000,
+      "max_output": 128000,
+      "effort_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default_effort": "high"
+    }
+  }
+}

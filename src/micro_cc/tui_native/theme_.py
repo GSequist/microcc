@@ -18,6 +18,7 @@ class Theme:
     scroll_info: Callable[[str], str]
     no_match: Callable[[str], str]
     checked: Callable[[str], str]
+    title: Callable[[str], str]
 
 
 def _sgr(hexcode: str) -> str:
@@ -27,15 +28,30 @@ def _sgr(hexcode: str) -> str:
 
 
 def default_theme() -> Theme:
-    """The picker Theme from the active color set; only `checked` is a real color."""
+    """Panel styles from the active color set; read at call time so /theme switches apply."""
     from micro_cc.utils import theme_store_
     return Theme(
-        selected_text=_wrap("\x1b[7m"),        # inverse video — picker cursor row
+        selected_text=_wrap("\x1b[1m", _sgr(theme_store_.get("accent"))),  # bold accent: cursor row
         description=_wrap("\x1b[2m"),          # dim
         scroll_info=_wrap("\x1b[2m"),          # dim
         no_match=_wrap("\x1b[2;3m"),           # dim italic
-        checked=_wrap(_sgr(theme_store_.get("ok"))),  # a checked multi-select item
+        checked=_wrap(_sgr(theme_store_.get("ok"))),
+        title=_wrap("\x1b[1m"),                # bold
     )
 
 
-DEFAULT_THEME = default_theme()
+def _mix(a: str, b: str, t: float) -> str:
+    """Blend two #rrggbb colors; t=0 gives a, t=1 gives b."""
+    pa = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    pb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(pa, pb))
+
+
+def shimmer(text: str, tick: int, base: str, glow: str, band: int = 4) -> str:
+    """Rich markup with a `glow` band sweeping across `text` over `base`; one step per tick."""
+    from rich.markup import escape
+    pos = tick % (len(text) + 2 * band) - band  # band centre; enters and leaves off-screen
+    return "".join(
+        f"[{_mix(base, glow, max(0, 1 - abs(i - pos) / band))}]{escape(ch)}[/]"
+        for i, ch in enumerate(text)
+    )

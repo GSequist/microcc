@@ -17,20 +17,21 @@ def get_random_hint(app):
 
 
 def static_hint_text(app) -> None:
-    # Skip while question is active (bars hidden); _hide_ask_ui will restore.
+    # Skip while question is active (bars hidden); question_ui_.hide will restore.
     if app._input_mode == "question_asked":
         return
     text = f"[dim]{glyph('project')} {app._shorten_path(app._project_dir, app._PROJECT_DIR_DISPLAY_MAXLEN)}[/dim]"
     if app._reload_pending and not app._restarting:
         # Reload queued; report delay so user knows something is happening.
-        text += f" [dim]·[/dim] [{theme_store_.get('accent')}]{app._self_reload_hint()}[/{theme_store_.get('accent')}]"
+        from micro_cc.tui_native import self_reload_ui_  # local: it imports screen_cmds_
+        text += f" [dim]·[/dim] [{theme_store_.get('accent')}]{self_reload_ui_.self_reload_hint(app)}[/{theme_store_.get('accent')}]"
     elif app._update_available:
         text += f" [dim]·[/dim] [{theme_store_.get('accent')}]⚠ micro-cc {app._update_available} available — run /update[/{theme_store_.get('accent')}]"
     elif settings_store_.was_reset_for_corruption():
         text += f" [dim]·[/dim] [{theme_store_.get('error')}]⚠ ~/.micro-cc/settings.json was corrupt — reset to defaults[/{theme_store_.get('error')}]"
     else:
         # newline_hint_text() returns None once user learns newlines; fall back to rotation.
-        hint = newline_hint_text() or app.get_random_hint()
+        hint = newline_hint_text() or get_random_hint(app)
         hue = app._banner_hue
         text += f" [dim]·[/dim] [{hue}]{hint}[/{hue}]"
     app.static_hintbar.update(
@@ -42,7 +43,7 @@ def ensure_status_script(app) -> str:
     return statusline_.resolve()
 
 async def status_text(app) -> str:
-    script = app._ensure_status_script()
+    script = ensure_status_script(app)
     import json
     payload = json.dumps(
         {"tokens": dict(token_stats), "project_dir": app._project_dir}
@@ -69,10 +70,10 @@ async def status_text(app) -> str:
 def refresh_status(app):
     # Mods re-render on this cadence; _safe_task guards against exception dumps.
     mods_.bump()
-    app._safe_task(app._update_status_bar(), "status bar update")
+    app._safe_task(update_status_bar(app), "status bar update")
 
 async def update_status_bar(app):
-    # Skip while question is active; _hide_ask_ui will restore.
+    # Skip while question is active; question_ui_.hide will restore.
     if app._input_mode == "question_asked":
         return
     # load_checkpoint() returns None until compaction runs; use app._last_checkpoint_index.
@@ -86,7 +87,7 @@ async def update_status_bar(app):
         )
         return
 
-    text = await app._status_text()
+    text = await status_text(app)
     app.statusbar.update(text)
     app.request_render()
 

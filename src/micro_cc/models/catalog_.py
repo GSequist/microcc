@@ -9,7 +9,7 @@ import urllib.request
 
 from micro_cc.models.registry import remote_cache_path, validate_catalog
 
-CATALOG_URL = "https://raw.githubusercontent.com/GSequist/microcc/main/models.json"
+CATALOG_URL = "https://raw.githubusercontent.com/GSequist/microcc/main/src/micro_cc/models/models.json"
 MIN_REFRESH_SECONDS = 6 * 3600
 TIMEOUT_SECONDS = 2
 

@@ -19,7 +19,7 @@ async def self_poll_loop(app) -> None:
         await asyncio.sleep(2.0)
         # Swallow exceptions; unguarded tick would kill loop forever.
         try:
-            app._poll_self_change_tick()
+            poll_self_change_tick(app)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -40,7 +40,7 @@ def poll_self_change_tick(app) -> None:
 
     # Restart only once the model asked for it (reload_harness_); drain every tick so a blocked request self-heals.
     if self_reload_.reload_requested() and app._input_mode == "idle":
-        app._safe_task(app._maybe_self_reload(), "self reload")
+        app._safe_task(maybe_self_reload(app), "self reload")
 
 def self_reload_hint(app) -> str:
     """Short hint: one file name, many files count, blocker reason if blocked."""
@@ -55,7 +55,7 @@ def self_reload_hint(app) -> str:
     else:
         base = f"↻ {n} files — {tail}"
     # Name the blocker if any, so stalls report themselves.
-    blocker = app._self_reload_blocker()
+    blocker = self_reload_blocker(app)
     if blocker:
         base += f" ({blocker})"
     return base
@@ -92,7 +92,7 @@ async def maybe_self_reload(app) -> None:
         return
     if _pending_subagents(app._project_dir):
         return
-    await app._restart_self()
+    await restart_self(app)
 
 async def restart_self(app, reason: str | None = None) -> None:
     """Relaunch with changed code; stash prompt, tear down terminal, execv."""
@@ -105,7 +105,7 @@ async def restart_self(app, reason: str | None = None) -> None:
     self_reload_.save_pending_prompt(app._project_dir, app.prompt.text)
 
     # Reuse _self_reload_hint so text has one definition, stays in sync.
-    msg = reason or app._self_reload_hint()
+    msg = reason or self_reload_hint(app)
     app.static_hintbar.update(f"[{theme_store_.get('accent')}]{msg}[/{theme_store_.get('accent')}]")
     app.request_render()
     try:

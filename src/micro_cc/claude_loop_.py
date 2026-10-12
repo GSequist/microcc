@@ -10,6 +10,7 @@ from jsonschema.exceptions import best_match
 from micro_cc.execute_tool import execute_tool_call
 from micro_cc.models import model_call
 from micro_cc.models.registry import DEFAULT_MODEL, DEFAULT_TRIM_BUDGET
+from micro_cc.utils import settings_store_
 from micro_cc.utils.tool_limits import cap_for, MAX_TOOL_RESULTS_PER_MESSAGE
 from micro_cc.utils.tool_result_storage import persist_and_preview
 from micro_cc.models.schema import function_to_schema
@@ -426,6 +427,7 @@ whole conversation history, including compacted turns.
                 endpoint=end_resp,
                 tools=tool_schemas,
                 thinking=True,
+                reasoning_effort=settings_store_.get_setting("reasoning_effort"),
                 stream=True,
             )
 

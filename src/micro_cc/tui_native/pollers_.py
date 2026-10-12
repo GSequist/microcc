@@ -146,7 +146,7 @@ async def poll_subagents_tick(app, *, cold_start: bool = False) -> None:
     app.request_render()
 
     for target, info in wakeups:
-        await app._wake_for_subagent(info, cold_start=cold_start)
+        await wake_for_subagent(app, info, cold_start=cold_start)
         subagent_tracker_.mark_notified(app._project_dir, target)
 
     # Reap every tick; prune only drops entries already notified, so it can't race mark_notified.
@@ -166,30 +166,30 @@ async def wake_for_subagent(app, info: dict, *, cold_start: bool = False) -> Non
 async def subagent_poll_loop(app) -> None:
     while True:
         await asyncio.sleep(3.0)
-        await app._poll_subagents_tick()
+        await poll_subagents_tick(app)
 
 async def bgproc_poll_loop(app) -> None:
     while True:
         await asyncio.sleep(3.0)
-        app._poll_bgprocs_tick()
+        poll_bgprocs_tick(app)
 
 async def memory_review_poll_loop(app) -> None:
     while True:
         await asyncio.sleep(3.0)
-        app._poll_memory_review_tick()
+        poll_memory_review_tick(app)
 
 # --- scheduled prompts (tools/monitor_schedule_) -------------------------
 def ensure_schedule_tick(app) -> None:
     """Start the schedule tick if not already running (idempotent)."""
     if app._schedule_poll_timer is not None and not app._schedule_poll_timer.done():
         return
-    app._schedule_poll_timer = asyncio.create_task(app._schedule_poll_loop())
+    app._schedule_poll_timer = asyncio.create_task(schedule_poll_loop(app))
 
 async def schedule_poll_loop(app) -> None:
     # 5s is well under the 1-minute cron floor.
     while True:
         await asyncio.sleep(5.0)
-        app._poll_schedule_tick()
+        poll_schedule_tick(app)
 
 def poll_schedule_tick(app) -> None:
     """Fire every due schedule; a bad spec must not kill the tick task."""

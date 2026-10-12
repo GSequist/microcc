@@ -8,7 +8,7 @@ import os
 
 from micro_cc.models.adapters.anthropic import response as wrap_response, stream_response
 from micro_cc.models.priming import prime_stream, first_event_timeout
-from micro_cc.models.registry import DEFAULT_MODEL, resolve, supports_thinking, wants_summarized_display, anthropic_beta_headers, fallback_params, max_output_for
+from micro_cc.models.registry import DEFAULT_MODEL, resolve, supports_thinking, wants_summarized_display, anthropic_beta_headers, fallback_params, max_output_for, resolve_effort
 
 load_dotenv(os.path.expanduser("~/.micro-cc/.env"))
 load_dotenv()
@@ -143,6 +143,7 @@ async def a_model_call(
     tools: Optional[List[Dict[str, Any]]] = None,
     stream: bool = False,
     thinking=False,
+    reasoning_effort=None,
     max_tokens: int | None = None,
     client_timeout: int = 480,
     pdf: str = None,
@@ -313,7 +314,9 @@ async def a_model_call(
         api_parameters["thinking"] = {"type": "adaptive"}
         if wants_summarized_display(alias):
             api_parameters["thinking"]["display"] = "summarized"
-        api_parameters["output_config"] = {"effort": "high"}
+        effort = resolve_effort(alias, reasoning_effort)
+        if effort:
+            api_parameters["output_config"] = {"effort": effort}
 
     api_parameters["messages"] = messages
     api_parameters["stream"] = stream

@@ -22,6 +22,8 @@ def _defaults() -> dict:
         "dangerous": _DEFAULT_DANGEROUS,
         "model": model_registry.DEFAULT_MODEL,
         "tokens_budget": model_registry.DEFAULT_TRIM_BUDGET,
+        # Reasoning effort picked in /model; None = the model's own default_effort.
+        "reasoning_effort": None,
         # Max concurrent subagents (enforced at spawn; /subagents changes it).
         "max_subagents": DEFAULT_MAX_SUBAGENTS,
         # Mod side pane open at exit, {"name", "width"}; {} = none. Reopened at TUI start.

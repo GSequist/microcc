@@ -16,16 +16,15 @@ import asyncio
 import json
 import os
 
-from micro_cc.models.adapters import chat, responses
+from micro_cc.models.adapters import responses
 from micro_cc.models.priming import prime_stream, first_event_timeout
-from micro_cc.models.schema import tools_to_chat, tools_to_responses
+from micro_cc.models.schema import tools_to_responses
 
 from micro_cc.models.registry import (
     DEFAULT_MODEL,
     resolve,
-    supports_thinking,
-    uses_responses_api,
     max_output_for,
+    resolve_effort,
 )
 
 load_dotenv(os.path.expanduser("~/.micro-cc/.env"))
@@ -39,130 +38,8 @@ FIRST_EVENT_TIMEOUT = 120
 
 
 # ---------------------------------------------------------------------------
-# Format converters — chat.completions path
-# ---------------------------------------------------------------------------
-
-
-def _msgs_to_openai(anthropic_msgs):
-    """Convert Anthropic-format message list to OpenAI chat format.
-
-    Handles: system, user (string/multimodal/tool_result),
-    assistant (string/tool_use blocks). Images converted to OpenAI
-    image_url format. Thinking blocks are dropped on this path — OpenAI's
-    real chat-completions API doesn't return or accept reasoning traces;
-    only the Responses API (see _msgs_to_responses below) surfaces those.
-    """
-    out = []
-    for msg in anthropic_msgs:
-        role = msg.get("role")
-        content = msg.get("content", "")
-
-        if role == "system":
-            out.append({"role": "system", "content": content})
-            continue
-
-        # --- Assistant with content blocks (tool_use, text) ---
-        if role == "assistant" and isinstance(content, list):
-            text_parts = []
-            tool_calls = []
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "text":
-                    text_parts.append(block["text"])
-                elif block.get("type") == "tool_use":
-                    tool_calls.append({
-                        "id": block["id"],
-                        "type": "function",
-                        "function": {
-                            "name": block["name"],
-                            "arguments": json.dumps(block["input"]),
-                        },
-                    })
-
-            m = {
-                "role": "assistant",
-                "content": "\n".join(text_parts) if text_parts else None,
-            }
-            if tool_calls:
-                m["tool_calls"] = tool_calls
-            out.append(m)
-            continue
-
-        # --- User with content blocks (tool_result, text, image, document) ---
-        if role == "user" and isinstance(content, list):
-            tool_results = []
-            other_parts = []
-
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "tool_result":
-                    tr_content = block.get("content", "")
-                    if isinstance(tr_content, list):
-                        # Same shape/reasoning as litellm.py's tool_result
-                        # handling: OpenAI's "tool" role message doesn't
-                        # support image content parts uniformly, so a
-                        # placeholder satisfies the required
-                        # tool_call_id/content pair and the actual image
-                        # rides in `other_parts` as a following user-turn
-                        # image.
-                        tool_results.append({
-                            "role": "tool",
-                            "tool_call_id": block["tool_use_id"],
-                            "content": "[image attached — see following message]",
-                        })
-                        for item in tr_content:
-                            if item.get("type") == "image":
-                                source = item.get("source", {})
-                                media = source.get("media_type", "image/jpeg")
-                                other_parts.append({
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:{media};base64,{source.get('data', '')}"},
-                                })
-                    else:
-                        tool_results.append({
-                            "role": "tool",
-                            "tool_call_id": block["tool_use_id"],
-                            "content": tr_content,
-                        })
-                elif block.get("type") == "text":
-                    other_parts.append({"type": "text", "text": block["text"]})
-                elif block.get("type") == "image":
-                    source = block.get("source", {})
-                    media = source.get("media_type", "image/jpeg")
-                    other_parts.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{media};base64,{source.get('data', '')}",
-                        },
-                    })
-                elif block.get("type") == "document":
-                    other_parts.append({
-                        "type": "text",
-                        "text": "[PDF document attached]",
-                    })
-
-            out.extend(tool_results)
-
-            if other_parts:
-                if len(other_parts) == 1 and other_parts[0].get("type") == "text":
-                    out.append({"role": "user", "content": other_parts[0]["text"]})
-                else:
-                    out.append({"role": "user", "content": other_parts})
-            continue
-
-        # --- Simple string content ---
-        out.append({"role": role, "content": content})
-
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Responses API converters — reasoning OpenAI models (gpt-5.6-*) reject
-# function tools on /v1/chat/completions while reasoning is active, same
-# constraint documented in litellm.py. They go through client.responses.create
-# instead, which supports reasoning + tools together. See registry.uses_responses_api.
+# Responses API converters. Every OpenAI model goes through client.responses.create:
+# reasoning models reject function tools on /v1/chat/completions while reasoning is active.
 # ---------------------------------------------------------------------------
 
 
@@ -370,9 +247,7 @@ def _add_cache_breakpoints(input_list: list) -> list:
     not fields the Responses API recognizes.
 
     Every model that reaches this function via _responses_call already
-    supports prompt_cache_breakpoint (see registry.uses_responses_api —
-    only the gpt-5.6-*/gpt-6-astra family has responses_api: True), so
-    there's no per-call model check needed here.
+    supports prompt_cache_breakpoint so there's no per-call model check needed here.
     """
     if not input_list:
         return input_list
@@ -410,8 +285,9 @@ async def _responses_call(
     pdf,
     retries,
     base_sleep,
+    effort,
 ):
-    """Reasoning-model call path via client.responses.create (see registry.uses_responses_api)."""
+    """Reasoning-model call path via client.responses.create ."""
     # Explicit prompt caching only applies to the main conversational path
     # (not the one-shot pdf/encoded_image/bare-string calls below, which are
     # single small requests with nothing worth caching) — see
@@ -443,7 +319,7 @@ async def _responses_call(
         "input": resp_input,
         "max_output_tokens": max_tokens,
         "stream": stream,
-        "reasoning": {"effort": "high", "summary": "auto"},
+        "reasoning": {"effort": effort, "summary": "auto"},
         # Needed to get the reasoning item's encrypted_content back at all —
         # without it, _msgs_to_responses has only the item id to replay,
         # which OpenAI can only resolve server-side when store isn't forced
@@ -494,6 +370,7 @@ async def oai_model_call(
     tools: Optional[List[Dict[str, Any]]] = None,
     stream: bool = False,
     thinking=False,
+    reasoning_effort=None,
     max_tokens: int | None = None,
     client_timeout: int = 480,
     pdf: str = None,
@@ -513,84 +390,17 @@ async def oai_model_call(
     max_tokens = max_tokens or max_output_for(alias) or 120000
     model = resolve(alias, "openai")
 
-    if uses_responses_api(alias):
-        return await _responses_call(
-            client=client,
-            model=model,
-            input=input,
-            encoded_image=encoded_image,
-            tools=tools,
-            stream=stream,
-            max_tokens=max_tokens,
-            pdf=pdf,
-            retries=retries,
-            base_sleep=base_sleep,
-        )
+    return await _responses_call(
+        client=client,
+        model=model,
+        input=input,
+        encoded_image=encoded_image,
+        tools=tools,
+        stream=stream,
+        max_tokens=max_tokens,
+        pdf=pdf,
+        retries=retries,
+        base_sleep=base_sleep,
+        effort=resolve_effort(alias, reasoning_effort) or "high",
+    )
 
-    # ---- Build messages ----
-    messages = []
-
-    if pdf:
-        # No native PDF block on chat.completions — pass as note.
-        messages = [{"role": "user", "content": f"[PDF document attached]\n\n{input}"}]
-    elif encoded_image:
-        content = []
-        imgs = [encoded_image] if isinstance(encoded_image, str) else encoded_image
-        for img in imgs:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{img}"},
-            })
-        content.append({"type": "text", "text": input})
-        messages = [{"role": "user", "content": content}]
-    elif isinstance(input, str):
-        messages = [{"role": "user", "content": input}]
-    else:
-        messages = _msgs_to_openai(input)
-        # strip the helper flag — the OpenAI client rejects unknown message keys
-        for m in messages:
-            m.pop("_ephemeral", None)
-
-    # ---- API parameters ----
-    api_params = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "stream": stream,
-        "messages": messages,
-    }
-
-    if stream:
-        api_params["stream_options"] = {"include_usage": True}
-
-    if thinking and supports_thinking(alias):
-        api_params["reasoning_effort"] = "high"
-
-    if tools:
-        openai_tools = tools_to_chat(tools)
-        if openai_tools:
-            api_params["tools"] = openai_tools
-            api_params["tool_choice"] = "auto"
-
-    # ---- Call with retries ----
-    for attempt in range(retries):
-        try:
-            response = await client.chat.completions.create(**api_params)
-            if stream:
-                return await prime_stream(chat.stream_response(response), first_event_timeout(FIRST_EVENT_TIMEOUT))
-            else:
-                return chat.response(response)
-
-        except Exception as e:
-            import traceback
-            print(f"\n[openai model_call]: {e}", flush=True)
-            traceback.print_exc()
-            if attempt < retries - 1:
-                sleep_time = base_sleep * (2 ** attempt)
-                print(
-                    f"\n[openai model_call]: Retrying in {sleep_time}s (attempt {attempt + 1}/{retries})..."
-                )
-                await asyncio.sleep(sleep_time)
-            else:
-                print(f"\n[openai model_call]: Failed after {retries} attempts")
-
-    return None

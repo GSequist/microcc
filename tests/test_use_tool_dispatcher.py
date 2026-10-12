@@ -74,7 +74,7 @@ class Scripted:
         self.tools_bytes = []
         self.inputs = []
 
-    async def __call__(self, *, input, model, endpoint, tools, thinking, stream):
+    async def __call__(self, *, input, model, endpoint, tools, thinking, stream, reasoning_effort=None):
         self.tools_bytes.append(json.dumps(tools, sort_keys=True))
         self.inputs.append(json.loads(json.dumps(input, default=str)))
         resp = self.responses.pop(0)

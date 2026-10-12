@@ -111,7 +111,7 @@ scope = "The manifest/diff and prompt-stash logic run for real against temp dirs
 
 [[contract]]
 id = "model-catalog-import-is-local-and-cache-write-is-atomic"
-statement = "Importing models.registry reads only local files (cache + user models.json) and never touches the network; a missing/corrupt/invalid layer is ignored without breaking the builtin catalog. The remote cache is replaced atomically (unique tmp + os.replace) so a concurrent process never reads a partial file, and the refresh is throttled by cache age. Only the interactive supervisor (self_heal_.main) starts the refresh, as a daemon thread whose failures are swallowed; headless subagents never do."
+statement = "Importing models.registry reads only local files (cache + user models.json) and never touches the network; a missing/corrupt/invalid layer is ignored without breaking the shipped catalog. The remote cache is replaced atomically (unique tmp + os.replace) so a concurrent process never reads a partial file, and the refresh is throttled by cache age. Only the interactive supervisor (self_heal_.main) starts the refresh, as a daemon thread whose failures are swallowed; headless subagents never do."
 anchors = ["src/micro_cc/models/registry.py::build_catalog", "src/micro_cc/models/catalog_.py::refresh_remote_catalog", "src/micro_cc/models/catalog_.py::_write_atomic", "src/micro_cc/self_heal_.py::_start_catalog_refresh"]
 assumptions = [
   "The catalog is built once at import and never mutated afterwards, so the refresh thread only touches the file, not in-process state.",
@@ -127,7 +127,7 @@ scenarios = ["model-catalog"]
 id = "model-catalog"
 command = ["{python}", "tests/test_model_catalog.py"]
 timeout = 60
-inputs = ["tests/test_model_catalog.py", "models.json"]
+inputs = ["tests/test_model_catalog.py", "src/micro_cc/models/models.json"]
 scope = "Real registry merge/validation and catalog_ refresh against a temp HOME; urlopen is mocked (no network); concurrent atomic writers race a reader on a real temp file."
 
 # --- Subagent lifecycle + bounded tools --------------------------------------

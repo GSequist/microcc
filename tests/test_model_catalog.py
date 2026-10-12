@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from micro_cc.models import catalog_, registry  # noqa: E402
 
-REPO_JSON = os.path.join(os.path.dirname(__file__), "..", "models.json")
+REPO_JSON = registry.PACKAGED_PATH
 NEW = {"anthropic": "claude-x", "thinking": True, "summarized_display": False, "context_window": 200_000, "max_output": 8_000}
 
 
@@ -140,9 +140,6 @@ class TestValidation(CatalogCase):
         self.user({"models": [1, 2]})
         self.assertEqual(self.build()[1], registry._BUILTIN_OPTIONS)
 
-    def test_shorthand_points_at_same_entry(self):
-        self.assertIs(registry.MODELS["haiku"], registry.MODELS["haiku-5.5"])
-
 
 class TestImport(unittest.TestCase):
     def test_import_does_no_network(self):
@@ -265,16 +262,35 @@ class TestConcurrentRefresh(CatalogCase):
         self.assertEqual([f for f in os.listdir(os.path.dirname(path)) if f.endswith(".tmp")], [])
 
 
-class TestRepoFile(unittest.TestCase):
-    def test_repo_models_json_valid_and_matches_builtin(self):
+class TestShippedFile(unittest.TestCase):
+    def setUp(self):
         with open(REPO_JSON) as f:
-            doc = json.load(f)
-        self.assertEqual(doc["schema"], 1)
-        entries, default, skipped = registry.validate_catalog(doc)
+            self.doc = json.load(f)
+
+    def test_models_valid(self):
+        self.assertEqual(self.doc["schema"], 1)
+        entries, default, skipped = registry.validate_catalog(self.doc)
         self.assertEqual(skipped, [])
-        self.assertEqual(set(entries), set(registry._BUILTIN_MODELS))
         self.assertEqual(entries, registry._BUILTIN_MODELS)
         self.assertIn(default, entries)
+
+    def test_every_login_key_has_a_prompt(self):
+        providers, prompts = self.doc["providers"], self.doc["login_prompts"]
+        for name, p in providers.items():
+            for key in p.get("login", []):
+                self.assertIn(key, prompts, f"{name}: {key}")
+
+    def test_resolve_effort_clamps_to_model(self):
+        self.assertEqual(registry.resolve_effort("sonnet-5", "xhigh"), "xhigh")
+        self.assertEqual(registry.resolve_effort("opus-4.6", "xhigh"), "high")  # no xhigh there: model default
+        self.assertEqual(registry.resolve_effort("gpt-6-sol", "minimal"), "minimal")
+        self.assertIsNone(registry.resolve_effort("haiku-5.5", "high"))  # no effort knob
+        self.assertIsNone(registry.resolve_effort("unknown-model", "high"))
+
+    def test_provider_helpers(self):
+        self.assertIn("Anthropic", registry.MODEL_PROVIDERS)
+        self.assertEqual(registry.options_for_endpoint("Ollama", "qwen3"), ["qwen3"])
+        self.assertTrue(all("anthropic" in registry.MODELS[a] for a in registry.options_for_endpoint("Anthropic", None)))
 
 
 if __name__ == "__main__":

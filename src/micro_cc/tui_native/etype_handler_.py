@@ -6,6 +6,8 @@ from micro_cc.utils import theme_store_
 from micro_cc.utils.msg_store_ import store_msgs
 from micro_cc.utils.tokenization_simple import CACHE_TTL_S
 from micro_cc.tui_native.message_row_ import MessageRow, StreamingRow
+from micro_cc.tui_native import question_ui_
+from micro_cc.tui_native import approval_ui_
 
 
 async def handle_done(app, event, container, tool_call_rows, approval_rows):
@@ -116,14 +118,16 @@ async def handle_approval_request(app, event, container, tool_call_rows, approva
     approval_rows[tool_id] = row
     app._msg_rows.append(msg)
     container.add(row)
+
     app._scroll_to_bottom()
 
-    app.set_focus(app.prompt)
     app._pending_input = asyncio.Event()
     app._pending_result = None
+    approval_ui_.show(app, name, inp)
     await app._pending_input.wait()
 
     approval["approved"] = app._pending_result
+
     if tool_id in approval_rows:
         arow = approval_rows.pop(tool_id)
         if not app._pending_result:
@@ -138,6 +142,7 @@ async def handle_approval_request(app, event, container, tool_call_rows, approva
             app._msg_rows = [m for m in app._msg_rows if not (m.get("type") == "approval" and m.get("id") == tool_id)]
     app._pending_input = None
     app._input_mode = "query_active"
+    approval_ui_.hide(app)
 
 
 async def handle_question_asked(app, event, container, tool_call_rows, approval_rows):
@@ -147,21 +152,16 @@ async def handle_question_asked(app, event, container, tool_call_rows, approval_
     answered = event.get("answered")
     inp = event.get("input", {})
 
-    app._ask_questions = inp.get("questions", [])
-    app._ask_stage = 0
-    app._ask_answers = {}
-
-    app._show_current_ask_question()
-
     app._pending_input = asyncio.Event()
     app._pending_result = None
+    question_ui_.start(app, inp.get("questions", []))
     await app._pending_input.wait()
 
     answered["answered"] = app._pending_result
     app._pending_input = None
     # Reset _input_mode BEFORE _hide_ask_ui to unblock bar repainting.
     app._input_mode = "query_active"
-    app._hide_ask_ui()
+    question_ui_.hide(app)
 
 
 async def handle_cache_invalidate(app, event, container, tool_call_rows, approval_rows):

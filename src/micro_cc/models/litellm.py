@@ -28,6 +28,7 @@ from micro_cc.models.registry import (
     uses_responses_api,
     anthropic_beta_headers,
     max_output_for,
+    resolve_effort,
 )
 
 load_dotenv(os.path.expanduser("~/.micro-cc/.env"))
@@ -312,6 +313,7 @@ async def _responses_call(
     pdf,
     retries,
     base_sleep,
+    effort,
 ):
     """gpt-5.6-* call path via client.responses.create (see uses_responses_api)."""
     instructions = None
@@ -339,7 +341,7 @@ async def _responses_call(
         "input": resp_input,
         "max_output_tokens": max_tokens,
         "stream": stream,
-        "reasoning": {"effort": "high", "summary": "auto"},
+        "reasoning": {"effort": effort, "summary": "auto"},
     }
     if instructions:
         api_params["instructions"] = instructions
@@ -385,6 +387,7 @@ async def l_model_call(
     tools: Optional[List[Dict[str, Any]]] = None,
     stream: bool = False,
     thinking=False,
+    reasoning_effort=None,
     max_tokens: int | None = None,
     client_timeout: int = 480,
     pdf: str = None,
@@ -420,6 +423,7 @@ async def l_model_call(
             pdf=pdf,
             retries=retries,
             base_sleep=base_sleep,
+            effort=resolve_effort(alias, reasoning_effort) or "high",
         )
 
     # ---- Build messages ----
@@ -499,10 +503,10 @@ async def l_model_call(
         api_params["stream_options"] = {"include_usage": True}
 
     if thinking and supports_thinking(alias):
-        api_params["extra_body"] = {
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": "high"},
-        }
+        api_params["extra_body"] = {"thinking": {"type": "adaptive"}}
+        effort = resolve_effort(alias, reasoning_effort)
+        if effort:
+            api_params["extra_body"]["output_config"] = {"effort": effort}
         if wants_summarized_display(alias):
             api_params["extra_body"]["thinking"]["display"] = "summarized"
 

@@ -15,12 +15,14 @@ from micro_cc.utils.msg_store_ import (
 )
 from micro_cc.tools.browser_tool_ import close_browser
 from micro_cc.utils.tokenization_simple import erase_token_stats
-from micro_cc.utils.helpers import has_configured_endpoint
-from micro_cc.utils import hidden_prompts, command_registry, settings_store_
-from micro_cc.tui_native.list_picker_ import PickerItem
+from micro_cc.utils.helpers import get_endpoint, has_configured_endpoint
+from micro_cc.models import registry as model_registry
+from micro_cc.utils import hidden_prompts, command_registry, settings_store_, theme_store_
 from micro_cc.tui_native.glyphs_ import glyph
 from micro_cc.tui_native.detect_images_ import delete_all_kitty_images
 import sys
+from micro_cc.tui_native.option_panel_ import PanelItem
+from micro_cc.tui_native import login_ui_
 
 
 async def cmd_clear(app):
@@ -55,15 +57,24 @@ async def cmd_clear(app):
     app.prompt.clear()
 
 
+def model_panel_items(endpoint: str, current_model: str | None, saved_effort: str | None) -> list:
+    """One PanelItem per model the endpoint serves; ←/→ cycles its effort levels, starting at the saved/default one."""
+    items = []
+    for alias in model_registry.options_for_endpoint(endpoint, current_model):
+        levels = model_registry.effort_levels_for(alias)
+        effort = model_registry.resolve_effort(alias, saved_effort)
+        items.append(PanelItem(alias, alias, choices=levels, choice=levels.index(effort) if effort in levels else 0))
+    return items
+
+
 async def cmd_model(app):
-    app._open_picker(app.model_picker, "_model_picker_overlay")
-    app.prompt.clear()
+    items = model_panel_items(get_endpoint(), app._current_model, settings_store_.get_setting("reasoning_effort"))
+    app._option_panel.open(items, on_select=app._on_model_picked, selected=app._current_model)
 
 
 async def cmd_theme(app):
-    """Open the theme picker."""
-    app._open_picker(app.theme_picker, "_theme_picker_overlay")
-    app.prompt.clear()
+    items = [PanelItem(n, theme_store_.THEME_LABELS.get(n, n)) for n in theme_store_.PRESETS]
+    app._option_panel.open(items, on_select=app._on_theme_picked)
 
 
 async def cmd_copy(app):
@@ -91,10 +102,12 @@ async def cmd_copy(app):
 
 
 async def cmd_dangerous(app):
-    app.dangerous_picker.set_items([PickerItem(name, name) for name in GATEABLE_TOOLS])
-    app.dangerous_picker.checked = set(app._dangerous_tools) & set(GATEABLE_TOOLS)
-    app._open_picker(app.dangerous_picker, "_dangerous_picker_overlay")
-    app.prompt.clear()
+    app._option_panel.open(
+        [PanelItem(name, name) for name in GATEABLE_TOOLS],
+        on_select=app._on_dangerous_confirmed,
+        multi=True,
+        checked=set(app._dangerous_tools) & set(GATEABLE_TOOLS),
+    )
 
 
 SUBAGENT_CAP_CHOICES = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16)
@@ -103,37 +116,27 @@ SUBAGENT_CAP_CHOICES = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16)
 async def cmd_subagents(app):
     """Pick the concurrent-subagent cap (settings "max_subagents")."""
     current = settings_store_.max_subagents()
-    choices = sorted(set(SUBAGENT_CAP_CHOICES) | {current})
     default = settings_store_.DEFAULT_MAX_SUBAGENTS
-    app.subagents_picker.set_items([
-        PickerItem(str(n), f"{n} at once" + (" (default)" if n == default else "") + ("  ← current" if n == current else ""))
-        for n in choices
-    ])
-    app.subagents_picker.selected_index = choices.index(current)
-    app._open_picker(app.subagents_picker, "_subagents_picker_overlay")
-    app.prompt.clear()
+    items = [
+        PanelItem(str(n), f"{n} at once" + (" (default)" if n == default else "") + ("  ← current" if n == current else ""))
+        for n in sorted(set(SUBAGENT_CAP_CHOICES) | {current})
+    ]
+    app._option_panel.open(items, on_select=app._on_subagents_picked, selected=str(current))
 
 
 async def cmd_rewind(app):
-    msgs = load_msgs(app._project_dir)
-    options = app.get_rewind_options(msgs)
-    # id carries JSONL index so duplicate-label turns stay distinct.
-    app.rewind_picker.set_items([
-        PickerItem(str(idx), f"{n:>3}. {label}") for n, (idx, label) in enumerate(options, 1)
-    ])
-    if options:
-        app.rewind_picker.selected_index = len(options) - 1
-    app._open_picker(app.rewind_picker, "_rewind_picker_overlay")
-    app.prompt.clear()
+    options = app.get_rewind_options(load_msgs(app._project_dir))
+    # value carries the JSONL index so duplicate-label turns stay distinct.
+    app._option_panel.open(
+        [PanelItem(str(idx), f"{n:>3}. {label}") for n, (idx, label) in enumerate(options, 1)],
+        on_select=app._on_rewind_picked,
+        selected=str(options[-1][0]) if options else None,
+    )
 
 
 async def cmd_login(app):
     app._input_mode = "login"
-    app.login_picker.set_items([
-        PickerItem(name, name) for name in ("Anthropic", "Bad Bunny", "Foundry", "LiteLLM", "OpenAI", "OpenRouter", "Ollama")
-    ])
-    app._open_picker(app.login_picker, "_login_picker_overlay")
-    app.prompt.clear()
+    app._option_panel.open([PanelItem(n, n) for n in model_registry.MODEL_PROVIDERS], on_select=lambda it: login_ui_.on_login_picked(app, it))
 
 
 async def cmd_exit(app):
@@ -220,16 +223,17 @@ async def _run_update(app):
 async def cmd_reload(app):
     """Re-exec to pick up source edits; /update installs from PyPI instead."""
     # Separate from auto-reload to force restart now rather than waiting for next idle.
+    from micro_cc.tui_native import self_reload_ui_  # local: self_reload_ui_ imports this module
     app.prompt.clear()
     if app._input_mode != "idle":
         app._flash_status("⏳ busy — esc first", seconds=3)
         return
     # Use same blocker check as auto-reload to avoid restarting under live subagents or GUI.
-    blocker = app._self_reload_blocker()
+    blocker = self_reload_ui_.self_reload_blocker(app)
     if blocker:
         app._flash_status(f"↻ can't reload — {blocker} active", seconds=4)
         return
-    await app._restart_self()
+    await self_reload_ui_.restart_self(app)
 
 
 async def cmd_author(app):
@@ -413,9 +417,6 @@ async def cmd_keys(app):
     app.prompt.placeholder = "Env var name to store (e.g. AZURE_CLIENT_SECRET) — blank to finish"
     app.set_focus(app.prompt)
 
-async def cmd_config(app):
-
-
 PREFIX_COMMANDS = {
     "/setup": cmd_setup,
     "/new-skill": cmd_new_skill,
@@ -446,7 +447,6 @@ SLASH_COMMANDS = {
     "/reload": cmd_reload,
     "/author": cmd_author,
     "/gui": cmd_gui,
-    "/config": cmd_config,
 }
 
 _registry_prompt_names = {c["name"] for c in command_registry.COMMANDS if c["kind"] == "prompt"}

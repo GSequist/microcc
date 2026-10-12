@@ -5,7 +5,7 @@ import os
 import threading
 
 from micro_cc.models import registry as model_registry
-from micro_cc.tui_native.list_picker_ import PickerItem
+from micro_cc.tui_native.option_panel_ import PanelItem
 from micro_cc.utils import settings_store_
 from micro_cc.utils.claude_subscription import discover_claude_code_token, oauth_login_flow
 from micro_cc.utils.helpers import (
@@ -30,50 +30,46 @@ def ollama_trim_budget(num_ctx: int = None, max_output: int = None) -> int:
 
 
 
-def on_login_picked(app, item: PickerItem) -> None:
+def on_login_picked(app, item: PanelItem) -> None:
     provider = item.value
-    app._close_picker("_login_picker_overlay")
-    if provider == "Bad Bunny":
+    if provider == "Claude Code":
         # Runs as its own task, not via _login_stage machinery.
-        app.set_focus(app.prompt)
-        app._safe_task(app._claude_code_login(), "OAuth login")
+        app._safe_task(claude_code_login(app), "OAuth login")
         return
     app._login_provider = provider
     app._login_stage = app.LOGIN_SEQUENCE[provider][0]
     app._input_mode = "login"
     app.prompt.placeholder = app.LOGIN_PROMPTS[app._login_stage]
     app._refresh_status()
-    app.set_focus(app.prompt)
 
 async def claude_code_login(app) -> None:
-    """Handle OAuth authentication via Bad Bunny (Claude Code)."""
+    """Handle OAuth authentication via Claude Code."""
     app._input_mode = "query_active"
     app._oauth_cancel_event = threading.Event()
     try:
         token = discover_claude_code_token()
         if token:
-            app._flash_status("found existing Bad Bunny login")
+            app._flash_status("found existing Claude Code login")
         else:
-            app._flash_status("opening browser for Bad Bunny login...")
+            app._flash_status("opening browser for Claude Code login...")
             token = await oauth_login_flow(cancel_event=app._oauth_cancel_event)
         apply_login({"ANTHROPIC_OAUTH_TOKEN": token})
 
-        # OAuth reaches Anthropic models same as pasted API key; refresh picker options.
+        # OAuth reaches Anthropic models same as pasted API key; refresh options.
         options = model_registry.options_for_backend("anthropic")
-        app.model_picker.set_items([PickerItem(o, o) for o in options])
         if app._current_model not in options:
             app._current_model = model_registry.DEFAULT_MODEL
             settings_store_.edit_setting("model", app._current_model)
         app._trim_budget = model_registry.trim_budget_for(app._current_model)
 
-        app._flash_status("Bad Bunny configured")
+        app._flash_status("Claude Code configured")
     except asyncio.CancelledError:
         app._oauth_cancel_event.set()
-        app._flash_status("Bad Bunny login cancelled")
+        app._flash_status("Claude Code login cancelled")
         raise
     except Exception as e:
         app._flash_status(
-            f"Bad Bunny login failed: {e}"
+            f"Claude Code login failed: {e}"
         )
     finally:
         app._input_mode = "idle"
@@ -136,24 +132,15 @@ def handle_login_input(app, query: str) -> None:
             num_ctx=int(num_ctx_input) if num_ctx_input else None,
             max_output=int(max_output_input) if max_output_input else None,
         )
-        app.model_picker.set_items([PickerItem(model, model)])
     elif app._login_provider == "OpenRouter":
         # No fixed alias table — free-text model, same as Ollama above.
         model = app._login_values.get("OPENROUTER_MODEL", "").strip()
         app._current_model = model
         settings_store_.edit_setting("model", model)
         app._trim_budget = model_registry.trim_budget_for(model, backend="openrouter")
-        app.model_picker.set_items([PickerItem(model, model)])
     elif app._login_provider in ("Anthropic", "Foundry", "LiteLLM", "OpenAI"):
-        # Filter picker to backend-specific models (some backends can't reach all aliases).
-        backend_key = {
-            "Anthropic": "anthropic",
-            "Foundry": "foundry",
-            "LiteLLM": "litellm",
-            "OpenAI": "openai",
-        }[app._login_provider]
-        options = model_registry.options_for_backend(backend_key)
-        app.model_picker.set_items([PickerItem(o, o) for o in options])
+        # Backend-specific models only (some backends can't reach all aliases).
+        options = model_registry.options_for_endpoint(app._login_provider, app._current_model)
         if app._current_model not in options:
             app._current_model = model_registry.DEFAULT_MODEL
             # Update settings.json to avoid reloading stale pre-switch model on next launch.

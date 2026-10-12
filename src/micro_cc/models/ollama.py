@@ -160,6 +160,7 @@ async def o_model_call(
     tools: Optional[List[Dict[str, Any]]] = None,
     stream: bool = False,
     thinking: bool = False,
+    reasoning_effort: str | None = None,  # unused: Ollama has no effort knob
     max_tokens: int = None,
     client_timeout: int = 480,
     pdf: str = None,
