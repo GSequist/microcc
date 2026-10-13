@@ -54,7 +54,7 @@ def _has_gui_browser() -> bool:
 def serve(project_dir, *, model=None, dangerous=(), trim_budget=None,
           host=HOST, port=PORT, open_browser=True):
     """Boot the server. Returns (url, shutdown) — call shutdown() to stop it."""
-    from micro_cc.models.registry import DEFAULT_MODEL, DEFAULT_TRIM_BUDGET
+    from micro_cc.models.catalog import DEFAULT_MODEL, DEFAULT_TRIM_BUDGET
     from micro_cc.webui.server import app  # deferred: pulls in fastapi
 
     session.init(

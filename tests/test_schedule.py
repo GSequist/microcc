@@ -2,7 +2,7 @@
 
 Run directly:  python tests/test_schedule.py   (exit 0 = held, 1 = failed)
 
-Covers design/architecture.toml's schedule contracts:
+Covers the schedule guarantees:
   * interval and cron specs parse with standard cron field syntax,
     dom/dow OR semantics and human labels;
   * jitter is deterministic and bounded;

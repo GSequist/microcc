@@ -169,7 +169,7 @@ def _start_catalog_refresh() -> None:
     try:
         import threading
 
-        from micro_cc.models.catalog_ import refresh_remote_catalog
+        from micro_cc.models.catalog_sync import refresh_remote_catalog
 
         threading.Thread(target=refresh_remote_catalog, name="catalog-refresh", daemon=True).start()
     except Exception:

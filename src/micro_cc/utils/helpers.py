@@ -2,61 +2,35 @@ from dotenv import load_dotenv
 from PIL import Image
 import base64
 import hashlib
-import json
 import os
 import io
-import sys
 import warnings
 
 
 load_dotenv(os.path.expanduser("~/.micro-cc/.env"))
 load_dotenv()
 
-def get_endpoint() -> str:
-    """Infer endpoint from env vars (proxies before bare keys)."""
-    if os.getenv("OLLAMA_BASE_URL"):
-        return "Ollama"
-    if os.getenv("ANTHROPIC_OAUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY"):
-        return "Anthropic"
-    if os.getenv("FOUNDRY_BASE_URL") and os.getenv("FOUNDRY_API_KEY"):
-        return "Foundry"
-    if os.getenv("LITELLM_BASE_URL") and os.getenv("LITELLM_API_KEY"):
-        return "LiteLLM"
-    if os.getenv("OPENROUTER_API_KEY"):
-        return "OpenRouter"
-    if os.getenv("OPENAI_API_KEY"):
-        return "OpenAI"
-    return "Anthropic"
 
-
-def has_configured_endpoint() -> bool:
-    return bool(
-        os.getenv("ANTHROPIC_OAUTH_TOKEN")
-        or os.getenv("ANTHROPIC_API_KEY")
-        or (os.getenv("FOUNDRY_BASE_URL") and os.getenv("FOUNDRY_API_KEY"))
-        or (os.getenv("LITELLM_BASE_URL") and os.getenv("LITELLM_API_KEY"))
-        or os.getenv("OLLAMA_BASE_URL")
-        or os.getenv("OPENROUTER_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-    )
-
-
-############################################################################################################
-
-_ROUTING_KEYS = ["OLLAMA_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "FOUNDRY_BASE_URL", "FOUNDRY_API_KEY", "LITELLM_BASE_URL", "LITELLM_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_BASE_URL", "OPENAI_API_KEY"]
-# OPENAI_API_KEY is an ordinary routing var now (tool discovery is embedding-free), cleared on /login.
-
-
-def apply_login(values: dict):
-    """Recreate ~/.micro-cc/.env with new provider keys."""
-    for key in _ROUTING_KEYS:
+def apply_login(values: dict, provider: str):
+    """Recreate ~/.micro-cc/.env with `provider`'s keys and pin it as the active provider."""
+    from micro_cc.models.providers import PROVIDER_ENV, routing_env_keys
+    for key in routing_env_keys():
         os.environ.pop(key, None)  # clear this session's env, not just the file
+    values = {**values, PROVIDER_ENV: provider}
     os.environ.update(values)
 
+    # Owner-only from the first byte, swapped in atomically so no reader sees a half-written file.
     env_path = os.path.expanduser("~/.micro-cc/.env")
-    with open(env_path, "w") as f:
-        for k, v in values.items():
-            f.write(f"{k}={v}\n")
+    tmp = f"{env_path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            for k, v in values.items():
+                f.write(f"{k}={v}\n")
+        os.replace(tmp, env_path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def apply_project_keys(project_dir: str, values: dict):
@@ -275,33 +249,3 @@ def check_openrouter(model: str, base_url: str = None) -> str:
         return f"Model '{model}' not found on OpenRouter — browse exact slugs at openrouter.ai/models"
 
     return ""
-
-
-OLLAMA_PROMPT_RESERVE = 6000  # History only; system, tools, context uncounted
-OLLAMA_MIN_TRIM_BUDGET = 2000
-
-
-def compute_ollama_trim_budget(num_ctx: int, max_output: int) -> int:
-    """Compute history budget from context window with safety floors."""
-    return max(OLLAMA_MIN_TRIM_BUDGET, num_ctx - max_output - OLLAMA_PROMPT_RESERVE)
-
-
-def effective_trim_budget(model: str) -> int:
-    """Get active model's trim budget (respects OLLAMA_NUM_CTX)."""
-    override = os.getenv("MICRO_CC_TRIM_BUDGET")
-    if override:
-        return int(override)
-    endpoint = get_endpoint()
-    if endpoint == "Ollama":
-        num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
-        max_output = int(os.getenv("OLLAMA_MAX_OUTPUT", "4096"))
-        return compute_ollama_trim_budget(num_ctx, max_output)
-    from micro_cc.models.registry import trim_budget_for
-    backend = {
-        "Anthropic": "anthropic",
-        "Foundry": "foundry",
-        "LiteLLM": "litellm",
-        "OpenAI": "openai",
-        "OpenRouter": "openrouter",
-    }.get(endpoint)
-    return trim_budget_for(model, backend=backend)

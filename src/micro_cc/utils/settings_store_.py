@@ -1,8 +1,7 @@
-import datetime
 import json
 import os
 from pathlib import Path
-from micro_cc.models import registry as model_registry
+from micro_cc.models import catalog as model_catalog
 from micro_cc.postgres_store import pg_store_
 
 _SETTINGS_PATH = Path.home() / ".micro-cc" / "settings.json"
@@ -20,8 +19,8 @@ def _use_postgres() -> bool:
 def _defaults() -> dict:
     return {
         "dangerous": _DEFAULT_DANGEROUS,
-        "model": model_registry.DEFAULT_MODEL,
-        "tokens_budget": model_registry.DEFAULT_TRIM_BUDGET,
+        "model": model_catalog.DEFAULT_MODEL,
+        "tokens_budget": model_catalog.DEFAULT_TRIM_BUDGET,
         # Reasoning effort picked in /model; None = the model's own default_effort.
         "reasoning_effort": None,
         # Max concurrent subagents (enforced at spawn; /subagents changes it).

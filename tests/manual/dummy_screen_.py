@@ -59,7 +59,7 @@ ASK_MULTI = [{"header": "env", "question": "Which environments should this deplo
               "options": [{"label": "dev", "description": "auto-deploys on merge"}, {"label": "staging"}, {"label": "prod", "description": "needs approval"}]}]
 ASK_FREE = [{"header": "name", "question": "What should the new branch be called?", "options": []}]
 ENDPOINTS = {"Anthropic": {"ANTHROPIC_API_KEY": "dummy"}, "LiteLLM": {"LITELLM_BASE_URL": "x", "LITELLM_API_KEY": "x"}, "Ollama": {"OLLAMA_BASE_URL": "x"}}
-_ENDPOINT_VARS = {k for env in ENDPOINTS.values() for k in env}
+_ENDPOINT_VARS = {k for env in ENDPOINTS.values() for k in env} | {"MICROCC_PROVIDER"}
 
 PROCS = [{"pid": 4821, "age": 312, "command": "npm run dev -- --host 0.0.0.0 --port 5173", "cwd": "/Users/george/dev/site"},
          {"pid": 5110, "age": 41, "command": "python -m http.server 8000", "cwd": None}]

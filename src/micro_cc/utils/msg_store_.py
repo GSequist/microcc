@@ -6,8 +6,8 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 from micro_cc.models import model_call
-from micro_cc.utils.helpers import project_hash, effective_trim_budget
-from micro_cc.models.registry import compaction_trigger_for, summary_cap_for
+from micro_cc.utils.helpers import project_hash
+from micro_cc.models.catalog import compaction_trigger_for, effective_trim_budget, summary_cap_for
 from micro_cc.utils.tokenization_simple import CHARS_PER_TOKEN, _approx_tokens, _msg_tokens, total_tokens, _drop_orphaned_tool_blocks, token_stats, save_token_stats
 from micro_cc.utils.msg_normalize_ import normalize_message, reconstruct_message, repair_dangling_tool_use, is_valid_message, log_dropped_message
 from micro_cc.postgres_store import pg_store_

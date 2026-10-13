@@ -40,13 +40,13 @@ of named tasks predeclared upfront in one manifest file).
 You can pick a different --model per subagent if the task calls for it (e.g.
 a cheaper/faster model for a simple fan-out step, a stronger one for the
 synthesis step) — but what counts as a valid value depends on the currently
-logged-in backend, not always models/registry.py's MODEL_OPTIONS:
+logged-in provider, not always models/catalog.py's MODEL_OPTIONS:
 
-- Anthropic/Foundry/LiteLLM/OpenAI: --model takes an exact alias from
-  MODEL_OPTIONS, not a family name or a guess. Read the live list before
+- Anthropic/Claude Code/Foundry/LiteLLM/OpenAI: --model takes an exact alias
+  the provider serves, not a family name or a guess. Read the live list before
   spawning (from the package base dir resolved in "Finding mechanism
   internals" below):
-  `bash_("python3 -c 'from micro_cc.models.registry import MODEL_OPTIONS; print(MODEL_OPTIONS)'")`.
+  `bash_("python3 -c 'from micro_cc.models import catalog, providers; print(catalog.models_for(providers.active_provider(), None))'")`.
   Do not hardcode or remember a list from an earlier turn — it drifts.
   resolve() passes an unrecognized alias straight through to the API
   unchanged (by design, so a typo fails loudly instead of silently

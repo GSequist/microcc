@@ -9,7 +9,7 @@ from jsonschema.exceptions import best_match
 
 from micro_cc.execute_tool import execute_tool_call
 from micro_cc.models import model_call
-from micro_cc.models.registry import DEFAULT_MODEL, DEFAULT_TRIM_BUDGET
+from micro_cc.models.catalog import DEFAULT_MODEL, DEFAULT_TRIM_BUDGET
 from micro_cc.utils import settings_store_
 from micro_cc.utils.tool_limits import cap_for, MAX_TOOL_RESULTS_PER_MESSAGE
 from micro_cc.utils.tool_result_storage import persist_and_preview
@@ -39,7 +39,7 @@ from micro_cc.tools.mcp_client_ import resolve_mcp_tools, call_mcp_tool
 from micro_cc.utils.msg_store_ import load_summary, load_checkpoint, compact_checkpoint, store_msgs
 from micro_cc.utils.tokenization_simple import token_cutter, token_stats, save_token_stats, detect_cache_miss, record_prompt_segments
 from micro_cc.utils.claude_md_loader import load_claude_md_file
-from micro_cc.utils.helpers import get_endpoint
+from micro_cc.models.providers import active_provider
 from micro_cc.utils.tool_safety_ import READ_ONLY_TOOLS, read_only_by_input
 
 
@@ -190,7 +190,7 @@ async def claude_loop(
 
     dangerous = DEFAULT_DANGEROUS if dangerous_tools is None else set(dangerous_tools)
     ask_user = ASK_USER_QUESTION_TOOL
-    end_resp = get_endpoint()
+    provider = active_provider()  # pinned for the whole turn
 
     skills_summary = get_skill_summary(project_dir)
     claude_md_content = load_claude_md_file(project_dir)
@@ -424,7 +424,7 @@ whole conversation history, including compacted turns.
             stream = await model_call(
                 input=trimmed_loop_msgs,
                 model=model,
-                endpoint=end_resp,
+                provider=provider,
                 tools=tool_schemas,
                 thinking=True,
                 reasoning_effort=settings_store_.get_setting("reasoning_effort"),

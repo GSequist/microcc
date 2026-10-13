@@ -15,7 +15,7 @@ def _blocks_from_item(item) -> list:
         text = "\n".join(getattr(s, "text", "") for s in summary)
         # id/encrypted_content are kept even with no summary text — the
         # reasoning item itself is still needed on replay (see
-        # models/openai.py's _msgs_to_responses).
+        # apis/openai_responses.py's to_responses).
         return [ContentBlock(
             type="thinking",
             thinking=text,

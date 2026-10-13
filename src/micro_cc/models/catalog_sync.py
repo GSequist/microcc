@@ -7,9 +7,9 @@ import time
 import urllib.error
 import urllib.request
 
-from micro_cc.models.registry import remote_cache_path, validate_catalog
+from micro_cc.models.catalog import SCHEMA, remote_cache_path, validate_catalog
 
-CATALOG_URL = "https://raw.githubusercontent.com/GSequist/microcc/main/src/micro_cc/models/models.json"
+CATALOG_URL = "https://raw.githubusercontent.com/GSequist/microcc/main/src/micro_cc/models/catalog.json"
 MIN_REFRESH_SECONDS = 6 * 3600
 TIMEOUT_SECONDS = 2
 
@@ -36,7 +36,7 @@ def _write_atomic(path: str, doc: dict) -> None:
 
 
 def refresh_remote_catalog(url: str = CATALOG_URL, force: bool = False) -> str:
-    """Fetch remote models.json into the cache; returns a short outcome, never raises."""
+    """Fetch remote catalog.json into the cache; returns a short outcome, never raises."""
     try:
         path = remote_cache_path()
         if not force:
@@ -58,7 +58,7 @@ def refresh_remote_catalog(url: str = CATALOG_URL, force: bool = False) -> str:
                 return "not-modified"
             return f"http-{e.code}"
         doc = json.loads(body)
-        if not isinstance(doc, dict) or doc.get("schema") != 1 or validate_catalog(doc)[2] == ["malformed document"]:
+        if not isinstance(doc, dict) or doc.get("schema") != SCHEMA or validate_catalog(doc)[2] == ["malformed document"]:
             return "invalid"
         if new_etag:
             doc["_etag"] = new_etag

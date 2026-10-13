@@ -15,8 +15,8 @@ from micro_cc.utils.msg_store_ import (
 )
 from micro_cc.tools.browser_tool_ import close_browser
 from micro_cc.utils.tokenization_simple import erase_token_stats
-from micro_cc.utils.helpers import get_endpoint, has_configured_endpoint
-from micro_cc.models import registry as model_registry
+from micro_cc.models import catalog as model_catalog
+from micro_cc.models.providers import active_provider, any_configured
 from micro_cc.utils import hidden_prompts, command_registry, settings_store_, theme_store_
 from micro_cc.tui_native.glyphs_ import glyph
 from micro_cc.tui_native.detect_images_ import delete_all_kitty_images
@@ -57,18 +57,18 @@ async def cmd_clear(app):
     app.prompt.clear()
 
 
-def model_panel_items(endpoint: str, current_model: str | None, saved_effort: str | None) -> list:
-    """One PanelItem per model the endpoint serves; ←/→ cycles its effort levels, starting at the saved/default one."""
+def model_panel_items(provider: str, current_model: str | None, saved_effort: str | None) -> list:
+    """One PanelItem per model the provider serves; ←/→ cycles its effort levels, starting at the saved/default one."""
     items = []
-    for alias in model_registry.options_for_endpoint(endpoint, current_model):
-        levels = model_registry.effort_levels_for(alias)
-        effort = model_registry.resolve_effort(alias, saved_effort)
+    for alias in model_catalog.models_for(provider, current_model):
+        levels = model_catalog.effort_levels_for(alias)
+        effort = model_catalog.resolve_effort(alias, saved_effort)
         items.append(PanelItem(alias, alias, choices=levels, choice=levels.index(effort) if effort in levels else 0))
     return items
 
 
 async def cmd_model(app):
-    items = model_panel_items(get_endpoint(), app._current_model, settings_store_.get_setting("reasoning_effort"))
+    items = model_panel_items(active_provider(), app._current_model, settings_store_.get_setting("reasoning_effort"))
     app._option_panel.open(items, on_select=app._on_model_picked, selected=app._current_model)
 
 
@@ -136,7 +136,7 @@ async def cmd_rewind(app):
 
 async def cmd_login(app):
     app._input_mode = "login"
-    app._option_panel.open([PanelItem(n, n) for n in model_registry.MODEL_PROVIDERS], on_select=lambda it: login_ui_.on_login_picked(app, it))
+    app._option_panel.open([PanelItem(pid, p["name"]) for pid, p in model_catalog.PROVIDERS.items()], on_select=lambda it: login_ui_.on_login_picked(app, it))
 
 
 async def cmd_exit(app):
@@ -274,7 +274,7 @@ async def _run_hidden_setup(app, prompt_body: str, extra: str, busy_msg: str):
         + "</system-reminder>"
     )
     app.prompt.clear()
-    if not has_configured_endpoint():
+    if not any_configured():
         err = {"type": "error", "content": "No API endpoint configured — run /login"}
         await app._mount_row(err)
         return
@@ -367,7 +367,7 @@ async def cmd_gui(app):
         )
         return
 
-    if not has_configured_endpoint():
+    if not any_configured():
         await app._mount_row({"type": "error", "content": "No API endpoint configured — run /login"})
         return
 

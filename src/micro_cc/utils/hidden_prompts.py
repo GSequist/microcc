@@ -3,7 +3,7 @@
 import os
 
 import micro_cc
-from micro_cc.models.registry import MODEL_OPTIONS
+from micro_cc.models.catalog import MODEL_OPTIONS
 
 # Absolute base for file pointers — model would timeout searching if left relative.
 _PKG_DIR = os.path.dirname(os.path.abspath(micro_cc.__file__))

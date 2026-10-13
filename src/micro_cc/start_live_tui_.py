@@ -13,9 +13,7 @@ from micro_cc.utils.msg_normalize_ import cut_short_calls
 from micro_cc.utils.msg_store_ import load_msgs, rewind_msgs, store_msgs
 from micro_cc.utils.session_ipc_ import start_listener, stop_listener
 from micro_cc.utils.helpers import (
-    has_configured_endpoint,
     check_ollama,
-    get_endpoint,
     ollama_daemon_up,
     start_ollama_daemon,
     extract_image_paths,
@@ -37,7 +35,8 @@ from micro_cc.tui_native.self_update_ import check_and_update
 from micro_cc.tui_native.self_terminal_setup_ import _background_terminal_setup_check
 from micro_cc.tui_native.etype_handler_ import ETYPES
 from micro_cc.utils.project_files_ import list_project_files, rank_file_matches
-from micro_cc.models import registry as model_registry
+from micro_cc.models import catalog as model_catalog
+from micro_cc.models.providers import active_provider, any_configured
 from micro_cc.utils import settings_store_
 from micro_cc.utils.tokenization_simple import load_token_stats
 from micro_cc.claude_loop_ import claude_loop
@@ -53,7 +52,6 @@ from micro_cc.tui_native.stdin_buffer_ import StdinBuffer, Paste
 from micro_cc.tui_native.keys_ import parse_key, is_key_release
 from micro_cc.utils.msg_store_ import load_checkpoint, load_memory_review_recap
 from micro_cc.tui_native.option_panel_ import OptionPanel, PanelItem
-from micro_cc.tui_native.login_ui_ import ollama_trim_budget as _ollama_trim_budget  # noqa: E402
 
 # --------------- background noise: discard, don't persist ---------------
 # Background-thread logging to stderr corrupts the alt-screen; swallow it.
@@ -98,28 +96,12 @@ def _allow_sleep(handle):
 
 
 
-def _initial_trim_budget(model_alias: str):
-    """Get trim budget for model context window."""
-    endpoint = get_endpoint()
-    if endpoint == "Ollama":
-        return _ollama_trim_budget()
-    override = os.getenv("MICRO_CC_TRIM_BUDGET")
-    if override:
-        return int(override)
-    backend = "openrouter" if endpoint == "OpenRouter" else None
-    return model_registry.trim_budget_for(model_alias, backend=backend)
-
 # Render loop heartbeat ~30ms; dirty flag marks what repaints.
 
 class MicroTui():
 
-    MODEL_OPTIONS = model_registry.MODEL_OPTIONS
-
-    LOGIN_SEQUENCE = model_registry.LOGIN_SEQUENCE
-    LOGIN_PROMPTS = model_registry.LOGIN_PROMPTS
-
     _current_model = settings_store_.get_setting("model")
-    _trim_budget = _initial_trim_budget(_current_model)
+    _trim_budget = model_catalog.effective_trim_budget(_current_model)
 
     ALLOW_SELECT = True
 
@@ -556,10 +538,7 @@ class MicroTui():
         settings_store_.edit_setting("model", item.value)
         if item.choices:
             settings_store_.edit_setting("reasoning_effort", item.chosen)
-        endpoint = get_endpoint()
-        if endpoint != "Ollama":
-            backend = "openrouter" if endpoint == "OpenRouter" else None
-            self._trim_budget = model_registry.trim_budget_for(self._current_model, backend=backend)
+        self._trim_budget = model_catalog.effective_trim_budget(self._current_model)
         self._refresh_status()
 
     def _on_theme_picked(self, item: PanelItem) -> None:
@@ -1148,13 +1127,13 @@ class MicroTui():
         await self._mount_row({"type": "user", "content": query})
         self.prompt.clear()
 
-        if not has_configured_endpoint():
+        if not any_configured():
             err = {"type": "error", "content": "No API endpoint configured — run /login"}
             await self._mount_row(err)
             return
 
         # The Ollama daemon can die or the tag be removed between logins.
-        if get_endpoint() == "Ollama":
+        if active_provider() == "ollama":
             base_url = os.getenv("OLLAMA_BASE_URL")
             model = os.getenv("OLLAMA_MODEL", "")
 
@@ -1171,11 +1150,11 @@ class MicroTui():
                     "type": "error",
                     "content": f"{error}\n\nFalling back to /login — reconfigure Ollama below.",
                 })
-                self._login_provider = "Ollama"
-                self._login_stage = self.LOGIN_SEQUENCE["Ollama"][0]
+                self._login_provider = "ollama"
+                self._login_stage = model_catalog.login_sequence("ollama")[0]
                 self._login_values = {}
                 self._input_mode = "login"
-                self.prompt.placeholder = self.LOGIN_PROMPTS[self._login_stage]
+                self.prompt.placeholder = model_catalog.login_prompt(self._login_stage)
                 self.prompt.clear()
                 self._refresh_status()
                 return
@@ -1444,8 +1423,8 @@ class MicroTui():
             ))
 
         # Surface mod load errors and the legacy sweep once.
-        for _s in model_registry.CATALOG_STATUS["skipped"]:
-            mods_.record_error("models.json", _s)
+        for _s in model_catalog.CATALOG_STATUS["skipped"]:
+            mods_.record_error("catalog.json", _s)
         _uerrs = mods_.errors()
         if self._legacy_moved:
             _uerrs.insert(0, f"moved old {', '.join(self._legacy_moved)} to ~/.micro-cc/legacy/ (now mods/, ask Claude to port)")

@@ -71,7 +71,7 @@ where = ["src"]
 exclude = ["*pyarmor_runtime*", "build_obf*"]
 
 [tool.setuptools.package-data]
-"micro_cc.models" = ["models.json"]
+"micro_cc.models" = ["catalog.json"]
 "micro_cc.skills" = ["**/*.md", "**/scripts/*", "**/canvas-fonts/*", "hairline-create/*.js", "hairline-create/*.mjs", "hairline-create/*.html", "hairline-create/examples/*", "hairline-create/LICENSE-lib"]
 # Built by `npm run build` in frontend/ (see publish.sh) — the wheel ships the
 # compiled GUI, never the TSX sources, so installing needs no node.

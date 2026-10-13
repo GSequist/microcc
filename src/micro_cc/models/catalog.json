@@ -1,0 +1,503 @@
+{
+  "schema": 2,
+  "default_model": "sonnet-5.5",
+  "routing": ["ollama", "claude-code", "anthropic", "foundry", "litellm", "openrouter", "openai", "bedrock", "vertex", "azure", "groq", "deepseek", "xai", "together", "fireworks"],
+  "login_optional": {
+    "SERPAPI_KEY": "SERPAPI_KEY — optional, Enter to skip"
+  },
+  "providers": {
+    "anthropic": {
+      "name": "Anthropic",
+      "api": "anthropic-messages",
+      "requires": ["ANTHROPIC_API_KEY"],
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "login": {
+        "ANTHROPIC_API_KEY": "Paste ANTHROPIC_API_KEY (sk-ant-...)"
+      },
+      "first_event_timeout": 120,
+      "compat": {
+        "betas": true
+      }
+    },
+    "claude-code": {
+      "name": "Claude Code",
+      "api": "anthropic-messages",
+      "requires": ["ANTHROPIC_OAUTH_TOKEN"],
+      "api_key_env": "ANTHROPIC_OAUTH_TOKEN",
+      "auth": "oauth",
+      "ids_from": "anthropic",
+      "first_event_timeout": 120,
+      "compat": {
+        "betas": true
+      }
+    },
+    "bedrock": {
+      "name": "Amazon Bedrock",
+      "api": "anthropic-messages",
+      "client": "bedrock",
+      "requires": ["AWS_BEARER_TOKEN_BEDROCK"],
+      "api_key_env": "AWS_BEARER_TOKEN_BEDROCK",
+      "region_env": "AWS_REGION",
+      "region": "us-east-1",
+      "login": {
+        "AWS_BEARER_TOKEN_BEDROCK": "Paste a Bedrock API key (AWS console → Amazon Bedrock → API keys)",
+        "AWS_REGION": "AWS region with Claude enabled.\nEnter for default: us-east-1"
+      },
+      "first_event_timeout": 120
+    },
+    "vertex": {
+      "name": "Google Vertex AI",
+      "api": "anthropic-messages",
+      "client": "vertex",
+      "requires": ["ANTHROPIC_VERTEX_PROJECT_ID"],
+      "project_env": "ANTHROPIC_VERTEX_PROJECT_ID",
+      "region_env": "CLOUD_ML_REGION",
+      "region": "global",
+      "package": {
+        "import": "google.auth",
+        "pip": "google-auth[requests]>=2,<3"
+      },
+      "login": {
+        "ANTHROPIC_VERTEX_PROJECT_ID": "GCP project id with Claude enabled in Vertex AI Model Garden.\nAuth uses your gcloud login: run `gcloud auth application-default login` first",
+        "CLOUD_ML_REGION": "Vertex region.\nEnter for default: global"
+      },
+      "first_event_timeout": 120
+    },
+    "foundry": {
+      "name": "Foundry",
+      "api": "anthropic-messages",
+      "requires": ["FOUNDRY_BASE_URL", "FOUNDRY_API_KEY"],
+      "base_url_env": "FOUNDRY_BASE_URL",
+      "api_key_env": "FOUNDRY_API_KEY",
+      "login": {
+        "FOUNDRY_BASE_URL": "Paste your Foundry endpoint base URL",
+        "FOUNDRY_API_KEY": "Paste your FOUNDRY_API_KEY"
+      },
+      "first_event_timeout": 120
+    },
+    "litellm": {
+      "name": "LiteLLM",
+      "api": "openai-chat",
+      "requires": ["LITELLM_BASE_URL", "LITELLM_API_KEY"],
+      "base_url_env": "LITELLM_BASE_URL",
+      "api_key_env": "LITELLM_API_KEY",
+      "login": {
+        "LITELLM_BASE_URL": "Paste your LiteLLM proxy base URL",
+        "LITELLM_API_KEY": "Paste your LITELLM_API_KEY"
+      },
+      "first_event_timeout": 300,
+      "compat": {
+        "reasoning": "litellm",
+        "cache_control": true,
+        "betas": true
+      }
+    },
+    "openai": {
+      "name": "OpenAI",
+      "api": "openai-responses",
+      "requires": ["OPENAI_API_KEY"],
+      "base_url_env": "OPENAI_BASE_URL",
+      "api_key_env": "OPENAI_API_KEY",
+      "login": {
+        "OPENAI_API_KEY": "Paste OPENAI_API_KEY (chat backend)"
+      },
+      "first_event_timeout": 120,
+      "compat": {
+        "replay_reasoning": true,
+        "explicit_cache": true
+      }
+    },
+    "azure": {
+      "name": "Azure OpenAI",
+      "api": "openai-responses",
+      "requires": ["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY"],
+      "base_url_env": "AZURE_OPENAI_BASE_URL",
+      "api_key_env": "AZURE_OPENAI_API_KEY",
+      "free_text": true,
+      "model_env": "AZURE_OPENAI_DEPLOYMENT",
+      "login": {
+        "AZURE_OPENAI_BASE_URL": "Azure OpenAI v1 endpoint, e.g.\n  https://YOUR-RESOURCE.openai.azure.com/openai/v1/",
+        "AZURE_OPENAI_API_KEY": "Paste your AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_DEPLOYMENT": "Deployment name of a reasoning model (gpt-5 family or newer)"
+      },
+      "first_event_timeout": 180
+    },
+    "openrouter": {
+      "name": "OpenRouter",
+      "api": "openai-chat",
+      "requires": ["OPENROUTER_API_KEY"],
+      "base_url_env": "OPENROUTER_BASE_URL",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "free_text": true,
+      "model_env": "OPENROUTER_MODEL",
+      "login": {
+        "OPENROUTER_API_KEY": "Paste OPENROUTER_API_KEY (openrouter.ai/keys)",
+        "OPENROUTER_MODEL": "Model slug, author/name — copy exactly from openrouter.ai/models\ne.g. qwen/qwen3-235b-a22b-thinking-2507, deepseek/deepseek-chat,\n  z-ai/glm-4.6, moonshotai/kimi-k2"
+      },
+      "first_event_timeout": 180,
+      "compat": {
+        "reasoning": "openrouter"
+      }
+    },
+    "groq": {
+      "name": "Groq",
+      "api": "openai-chat",
+      "requires": ["GROQ_API_KEY"],
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "free_text": true,
+      "model_env": "GROQ_MODEL",
+      "login": {
+        "GROQ_API_KEY": "Paste GROQ_API_KEY (console.groq.com/keys)",
+        "GROQ_MODEL": "Model id, copy exactly from console.groq.com/docs/models"
+      },
+      "first_event_timeout": 120,
+      "compat": {
+        "reasoning": "read",
+        "omit_max_tokens": true
+      }
+    },
+    "deepseek": {
+      "name": "DeepSeek",
+      "api": "openai-chat",
+      "requires": ["DEEPSEEK_API_KEY"],
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "free_text": true,
+      "model_env": "DEEPSEEK_MODEL",
+      "login": {
+        "DEEPSEEK_API_KEY": "Paste DEEPSEEK_API_KEY (platform.deepseek.com/api_keys)",
+        "DEEPSEEK_MODEL": "Model id, e.g. deepseek-chat or deepseek-reasoner (api-docs.deepseek.com)"
+      },
+      "first_event_timeout": 180,
+      "compat": {
+        "reasoning": "read",
+        "omit_max_tokens": true
+      }
+    },
+    "xai": {
+      "name": "xAI",
+      "api": "openai-chat",
+      "requires": ["XAI_API_KEY"],
+      "base_url": "https://api.x.ai/v1",
+      "api_key_env": "XAI_API_KEY",
+      "free_text": true,
+      "model_env": "XAI_MODEL",
+      "login": {
+        "XAI_API_KEY": "Paste XAI_API_KEY (console.x.ai)",
+        "XAI_MODEL": "Model id, copy exactly from docs.x.ai/docs/models"
+      },
+      "first_event_timeout": 180,
+      "compat": {
+        "reasoning": "read",
+        "omit_max_tokens": true
+      }
+    },
+    "together": {
+      "name": "Together AI",
+      "api": "openai-chat",
+      "requires": ["TOGETHER_API_KEY"],
+      "base_url": "https://api.together.xyz/v1",
+      "api_key_env": "TOGETHER_API_KEY",
+      "free_text": true,
+      "model_env": "TOGETHER_MODEL",
+      "login": {
+        "TOGETHER_API_KEY": "Paste TOGETHER_API_KEY (api.together.ai/settings/api-keys)",
+        "TOGETHER_MODEL": "Model id, copy exactly from api.together.ai/models"
+      },
+      "first_event_timeout": 180,
+      "compat": {
+        "reasoning": "read",
+        "omit_max_tokens": true
+      }
+    },
+    "fireworks": {
+      "name": "Fireworks AI",
+      "api": "openai-chat",
+      "requires": ["FIREWORKS_API_KEY"],
+      "base_url": "https://api.fireworks.ai/inference/v1",
+      "api_key_env": "FIREWORKS_API_KEY",
+      "free_text": true,
+      "model_env": "FIREWORKS_MODEL",
+      "login": {
+        "FIREWORKS_API_KEY": "Paste FIREWORKS_API_KEY (fireworks.ai/account/api-keys)",
+        "FIREWORKS_MODEL": "Model id, e.g. accounts/fireworks/models/<name> (fireworks.ai/models)"
+      },
+      "first_event_timeout": 180,
+      "compat": {
+        "reasoning": "read",
+        "omit_max_tokens": true
+      }
+    },
+    "ollama": {
+      "name": "Ollama",
+      "api": "openai-chat",
+      "requires": ["OLLAMA_BASE_URL"],
+      "base_url_env": "OLLAMA_BASE_URL",
+      "base_url": "http://localhost:11434/v1",
+      "api_key": "ollama",
+      "free_text": true,
+      "model_env": "OLLAMA_MODEL",
+      "login": {
+        "OLLAMA_BASE_URL": "Ollama daemon URL.\nRequires the Ollama CLI + daemon running locally:\n  brew install ollama && brew services start ollama\nEnter for default: http://localhost:11434/v1\n(only change this if Ollama runs on another host/port)",
+        "OLLAMA_MODEL": "Model tag to use.\nLocal: pull first with `ollama pull <tag>`, e.g. qwen3:14b\n  Browse sizes/tags per model at ollama.com/library\n  See what you've already pulled: `ollama list`\nCloud (huge models, run on Ollama's servers not your machine):\n  tag ends in :cloud, e.g. kimi-k2.7-code:cloud\n  still needs `ollama pull <tag>:cloud` once, plus `ollama signin`\n  browse at ollama.com/search",
+        "OLLAMA_NUM_CTX": "Context window, in tokens — this is what sizes the KV cache.\nEnter for default: 32768\nmicro-cc reserves ~6000 tokens off this for system prompt/tools/\n  dynamic context, then MAX_OUTPUT below, then whatever's left goes\n  to conversation history\nStay above MAX_OUTPUT + ~8000 or history trimming hits its 2000-\n  token floor: history gets crushed and totals can still exceed\n  this window, which Ollama truncates silently rather than erroring\nLower it (e.g. 8192) only if the model doesn't fit your RAM at\n  full context, and drop MAX_OUTPUT to match",
+        "OLLAMA_MAX_OUTPUT": "Max tokens generated per response.\nEnter for default: 4096\nComes out of NUM_CTX above, on top of the ~6000-token reserve for\n  system prompt/tools/dynamic context — a bigger cap here leaves\n  less room for conversation history\nIf NUM_CTX - MAX_OUTPUT < ~8000, history trimming hits its floor"
+      },
+      "first_event_timeout": 180,
+      "compat": {
+        "reasoning": "ollama"
+      }
+    }
+  },
+  "models": {
+    "sonnet-5": {
+      "name": "Claude Sonnet 5",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["low", "medium", "high", "xhigh", "max"],
+        "default": "high",
+        "summarized": true
+      },
+      "ids": {
+        "anthropic": "claude-sonnet-5",
+        "foundry": "claude-sonnet-5",
+        "litellm": "bedrock.anthropic.claude-sonnet-5",
+        "bedrock": "anthropic.claude-sonnet-5",
+        "vertex": "claude-sonnet-5"
+      }
+    },
+    "sonnet-5.5": {
+      "name": "Claude Sonnet 5.5",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["low", "medium", "high", "xhigh", "max"],
+        "default": "high",
+        "summarized": true
+      },
+      "server_fallback": true,
+      "ids": {
+        "anthropic": "claude-sonnet-5-5",
+        "foundry": "claude-sonnet-5-5",
+        "litellm": "bedrock.anthropic.claude-sonnet-5-5",
+        "bedrock": "anthropic.claude-sonnet-5-5",
+        "vertex": "claude-sonnet-5-5"
+      }
+    },
+    "opus-5": {
+      "name": "Claude Opus 5",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["low", "medium", "high", "xhigh", "max"],
+        "default": "high",
+        "summarized": true
+      },
+      "ids": {
+        "anthropic": "claude-opus-5",
+        "foundry": "claude-opus-5",
+        "litellm": "bedrock.anthropic.claude-opus-5",
+        "bedrock": "anthropic.claude-opus-5",
+        "vertex": "claude-opus-5"
+      }
+    },
+    "opus-5.5": {
+      "name": "Claude Opus 5.5",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["low", "medium", "high", "xhigh", "max"],
+        "default": "high",
+        "summarized": true
+      },
+      "server_fallback": true,
+      "ids": {
+        "anthropic": "claude-opus-5-5",
+        "foundry": "claude-opus-5-5",
+        "litellm": "bedrock.anthropic.claude-opus-5-5",
+        "bedrock": "anthropic.claude-opus-5-5",
+        "vertex": "claude-opus-5-5"
+      }
+    },
+    "opus-4.8": {
+      "name": "Claude Opus 4.8",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["low", "medium", "high", "xhigh", "max"],
+        "default": "high",
+        "summarized": true
+      },
+      "ids": {
+        "anthropic": "claude-opus-4-8",
+        "foundry": "claude-opus-4-8",
+        "litellm": "bedrock.anthropic.claude-opus-4-8",
+        "bedrock": "anthropic.claude-opus-4-8",
+        "vertex": "claude-opus-4-8"
+      }
+    },
+    "opus-4.7": {
+      "name": "Claude Opus 4.7",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["low", "medium", "high", "xhigh", "max"],
+        "default": "high",
+        "summarized": true
+      },
+      "ids": {
+        "anthropic": "claude-opus-4-7",
+        "foundry": "claude-opus-4-7",
+        "litellm": "bedrock.anthropic.claude-opus-4-7",
+        "bedrock": "anthropic.claude-opus-4-7",
+        "vertex": "claude-opus-4-7"
+      }
+    },
+    "opus-4.6": {
+      "name": "Claude Opus 4.6",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["low", "medium", "high", "max"],
+        "default": "high"
+      },
+      "ids": {
+        "anthropic": "claude-opus-4-6",
+        "foundry": "claude-opus-4-6",
+        "litellm": "bedrock.anthropic.claude-opus-4-6",
+        "vertex": "claude-opus-4-6"
+      }
+    },
+    "sonnet-4.6": {
+      "name": "Claude Sonnet 4.6",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["low", "medium", "high", "max"],
+        "default": "high"
+      },
+      "ids": {
+        "anthropic": "claude-sonnet-4-6",
+        "foundry": "claude-sonnet-4-6",
+        "litellm": "bedrock.anthropic.claude-sonnet-4-6",
+        "bedrock": "anthropic.claude-sonnet-4-6",
+        "vertex": "claude-sonnet-4-6"
+      }
+    },
+    "haiku-5.5": {
+      "name": "Claude Haiku 5.5",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": [],
+        "default": null,
+        "summarized": true
+      },
+      "ids": {
+        "anthropic": "claude-haiku-5-5",
+        "foundry": "claude-haiku-5-5",
+        "litellm": "bedrock.anthropic.claude-haiku-5-5",
+        "bedrock": "anthropic.claude-haiku-5-5"
+      }
+    },
+    "gpt-5.6-terra": {
+      "name": "GPT-5.6 Terra",
+      "context_window": 1050000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["minimal", "low", "medium", "high"],
+        "default": "high"
+      },
+      "ids": {
+        "litellm": {
+          "id": "openai.gpt-5.6-terra",
+          "api": "openai-responses"
+        },
+        "openai": "gpt-5.6-terra"
+      }
+    },
+    "gpt-5.6-luna": {
+      "name": "GPT-5.6 Luna",
+      "context_window": 1050000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["minimal", "low", "medium", "high"],
+        "default": "high"
+      },
+      "ids": {
+        "litellm": {
+          "id": "openai.gpt-5.6-luna",
+          "api": "openai-responses"
+        },
+        "openai": "gpt-5.6-luna"
+      }
+    },
+    "gpt-5.6-sol": {
+      "name": "GPT-5.6 Sol",
+      "context_window": 1050000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["minimal", "low", "medium", "high"],
+        "default": "high"
+      },
+      "ids": {
+        "litellm": {
+          "id": "openai.gpt-5.6-sol",
+          "api": "openai-responses"
+        },
+        "openai": "gpt-5.6-sol"
+      }
+    },
+    "gpt-6-astra": {
+      "name": "GPT-6 Astra",
+      "context_window": 1050000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["minimal", "low", "medium", "high"],
+        "default": "high"
+      },
+      "ids": {
+        "litellm": {
+          "id": "openai.gpt-6-astra",
+          "api": "openai-responses"
+        },
+        "openai": "gpt-6-astra"
+      }
+    },
+    "gpt-6-sol": {
+      "name": "GPT-6 Sol",
+      "context_window": 1050000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["minimal", "low", "medium", "high"],
+        "default": "high"
+      },
+      "ids": {
+        "litellm": {
+          "id": "openai.gpt-6-sol",
+          "api": "openai-responses"
+        },
+        "openai": "gpt-6-sol"
+      }
+    },
+    "gpt-6-luna": {
+      "name": "GPT-6 Luna",
+      "context_window": 1050000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["minimal", "low", "medium", "high"],
+        "default": "high"
+      },
+      "ids": {
+        "litellm": {
+          "id": "openai.gpt-6-luna",
+          "api": "openai-responses"
+        },
+        "openai": "gpt-6-luna"
+      }
+    }
+  }
+}

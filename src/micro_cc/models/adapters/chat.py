@@ -1,4 +1,4 @@
-"""OpenAI Chat Completions output, including LiteLLM/Ollama/OpenRouter reasoning.
+"""OpenAI Chat Completions output, including LiteLLM/Ollama/OpenRouter/generic reasoning.
 
 The wire protocol is shared; only reasoning extraction varies by provider.
 These functions consume streams in the caller's task without prefetch/retry.
@@ -9,12 +9,15 @@ from typing import Literal
 
 from micro_cc.models.types import ContentBlock, Response, ResponseStream, Usage
 
-Reasoning = Literal["none", "litellm", "ollama", "openrouter"]
+Reasoning = Literal["none", "litellm", "ollama", "openrouter", "read"]
 
 
 def _reasoning_text(obj, reasoning: Reasoning) -> str:
     if reasoning == "litellm":
         return getattr(obj, "reasoning_content", None) or ""
+    if reasoning == "read":
+        # DeepSeek/xAI use reasoning_content; Groq-style providers use reasoning.
+        return getattr(obj, "reasoning_content", None) or _reasoning_text(obj, "openrouter")
     if reasoning in ("ollama", "openrouter"):
         # Same plain "reasoning" string field on both.
         text = getattr(obj, "reasoning", None)

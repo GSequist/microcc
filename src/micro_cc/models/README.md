@@ -1,58 +1,59 @@
 # Models
 
-Application code calls `from micro_cc.models import model_call`. It should not
-import a provider or decode an SDK response.
+Application code calls `from micro_cc.models import model_call`. It never imports
+an SDK or decodes a provider response.
+
+Three concepts, kept apart:
+
+| term | what it is | examples |
+|---|---|---|
+| **provider** | who you authenticate with: env vars, base URL, auth, compat flags | `anthropic`, `claude-code`, `bedrock`, `vertex`, `foundry`, `litellm`, `openai`, `azure`, `openrouter`, `groq`, `deepseek`, `xai`, `together`, `fireworks`, `ollama` |
+| **api** | the wire protocol a request is built for | `anthropic-messages`, `openai-chat`, `openai-responses` |
+| **model** | an alias plus capabilities and one id per provider that serves it | `sonnet-5.5` → `claude-sonnet-5-5` on anthropic |
 
 ```text
 claude_loop_ / summary / memory review / vision / image captions
                          │
-                    model_call                 client.py
-                         │                     lazy provider selection
-          ┌──────────────┼─────────────────────────┐
-       anthropic     foundry     litellm / openai / ollama / openrouter
-          │              │                │
-          └──────┬───────┘                ├── adapters/chat.py
-         adapters/anthropic.py            └── adapters/responses.py
+                    model_call                       client.py
+                         │   provider = active_provider()        providers.py
+                         │   (id, api) = resolve(alias, provider) catalog.py
+          ┌──────────────┼───────────────────┐
+ apis/anthropic_messages  apis/openai_chat  apis/openai_responses
+          │                    │                    │
+ adapters/anthropic       adapters/chat       adapters/responses
                          │
-                 Response / StreamEvent        types.py
+                 Response / StreamEvent              types.py
 ```
 
-- **`client.py`** selects a provider using the existing endpoint precedence. An
-  explicit `endpoint=` pins it for a turn. Imports stay lazy; there is no SDK
-  singleton, background task, extra buffering, or second retry layer.
-- **`registry.py`** is the model catalog: aliases, backend IDs, capabilities,
-  context windows and UI options. It does not load providers or call APIs.
-- **Provider modules** own authentication, request conversion, cache policy,
-  generation defaults and request retries. Request converters remain separate
-  where similar-looking protocols differ (signed thinking, explicit OpenAI
-  caching, proxy metadata, Ollama options, OpenRouter's unified `reasoning`
-  param).
-- **`adapters/`** decode SDK output by wire protocol, not by provider. They have
-  no SDK imports. Chat reasoning extraction is selected explicitly by providers.
-- **`types.py`** defines the application's response and event shapes. Non-stream
-  calls return `Response(content, usage)` or `None` after exhausted retries.
-  Streams emit text/thinking deltas followed by a final response event. Usage
-  is an `input`/`output` dictionary in both paths; input includes cached tokens.
-  Anthropic's non-stream SDK content blocks are retained intact, but its outer
-  Message/usage object is normalized. SDK-only response metadata is not exposed.
-- **`schema.py`** converts Python functions into tool schemas and translates
-  those schemas into Chat Completions/Responses tool formats. It is unrelated
-  to response types.
+- **`catalog.json`** is the source of truth: providers, models, login prompts. The
+  website's model table reads the same file from GitHub.
+- **`catalog.py`** merges the layers (packaged → `~/.micro-cc/cache/catalog.json` →
+  legacy `~/.micro-cc/models.json` → `~/.micro-cc/catalog.json`) once at import, with
+  no network access. It also holds the lookups (`resolve`, `models_for`, effort,
+  budgets). A user can add an OpenAI-compatible provider purely in their own catalog.json.
+- **`catalog_sync.py`** refreshes the cache from GitHub in a daemon thread started by
+  the supervisor only, with an atomic write.
+- **`providers.py`** picks the active provider. `MICROCC_PROVIDER` (written by `/login`)
+  wins when that provider's `requires` env vars are set. Otherwise the first configured
+  provider in `routing` order wins.
+- **`apis/`** build requests per wire protocol. Provider differences are data in
+  `compat` (betas, reasoning dialect, cache flags) or `client` (the SDK's Bedrock/Vertex
+  clients), not separate modules. A provider's optional SDK dependency (`package`, e.g.
+  google-auth for Vertex) is installed on demand at `/login` and again at call time if missing.
+- **Credentials** live in `~/.micro-cc/.env` (0600, rewritten atomically by `/login`). Keys a
+  child can reload from that file are hidden from the model's `bash_` shell.
+- **`adapters/`** decode SDK output per protocol. They have no SDK imports.
+- **`retry.py`** holds the shared retry loop and first-event stream priming. There is no
+  retry after visible output.
+- **`schema.py`** turns Python functions into tool schemas.
 
-Streams are consumed in the caller's task. Cancellation and iteration errors
-propagate from adapters; a partial stream is not retried. This refactor does not
-change HTTP client/stream closing policy, provider timeouts, malformed-output
-policy, or compaction task ownership. Tests use SDK-shaped fixtures, not live APIs.
+`models.json` (schema 1) is frozen: installs older than catalog.json still fetch it
+from GitHub main, so it stays, but it no longer changes. New models reach updated
+installs only.
 
 ```python
-response = await model_call(messages, model="sonnet-5")
-stream = await model_call(messages, model="sonnet-5", stream=True)
+response = await model_call(messages, model="sonnet-5.5")
+stream = await model_call(messages, model="gpt-6-sol", provider="litellm", stream=True)
 ```
 
-Omit model/output limits to retain each provider's existing defaults (including
-Ollama environment settings). Supplying a model passes its alias unchanged to
-the provider, which resolves it through the registry. No automatic model fallback
-is introduced. Provider call functions remain available, but internal consumers
-use the package entry point.
-
-Run regression tests: `env/bin/python -m unittest discover -s tests -p 'test_*.py'`.
+Run regression tests: `env/bin/python tests/test_model_catalog.py`.

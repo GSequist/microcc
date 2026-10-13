@@ -24,7 +24,7 @@ class ContentBlock:
     input: dict = field(default_factory=dict)
     # tool_use: the call id. OpenAI Responses API "thinking" blocks: reused
     # to carry the reasoning item's own id, needed to replay it ahead of the
-    # function_call items it preceded (see adapters/responses.py, models/openai.py).
+    # function_call items it preceded (see adapters/responses.py, apis/openai_responses.py).
     id: str = ""
     # Set (to the JSONDecodeError message) when a tool_use block's streamed
     # arguments didn't parse as JSON. `input` is left {} rather than the
@@ -41,8 +41,8 @@ class Usage(TypedDict, total=False):
     output: int
     # Split of `input` for cache-miss detection (utils/tokenization_simple.py's
     # detect_cache_miss). Absent, not zero, when a provider doesn't report
-    # prompt-cache activity at all — the two adapters that do (anthropic.py)
-    # always set both, even when a value is legitimately 0.
+    # prompt-cache activity at all — the adapter that does (adapters/anthropic.py)
+    # always sets both, even when a value is legitimately 0.
     cache_read: int
     cache_write: int
 

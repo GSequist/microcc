@@ -4,7 +4,7 @@ Plain script, no pytest needed — run directly:
     python tests/test_self_reload.py
 Exit 0 = every property held for the exercised case, 1 = a failure.
 
-Covers the three declared contracts (design/architecture.toml):
+Covers three guarantees:
   * boot-failure recovery is bounded (self_heal_ never reinstalls forever);
   * the manifest/diff detects a real source change and ignores noise;
   * a restart stashes+restores exactly one unsent prompt.

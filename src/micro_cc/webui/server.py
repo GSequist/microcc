@@ -5,8 +5,6 @@ TUI handed over at /gui time, so there is no user id, no conversation id and no
 tenancy — the process IS the session.
 """
 
-import asyncio
-import json
 import os
 import uuid
 from pathlib import Path
@@ -16,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from micro_cc.claude_loop_ import claude_loop, GATEABLE_TOOLS
-from micro_cc.models import registry as model_registry
+from micro_cc.models import catalog as model_catalog
 from micro_cc.utils import command_registry, hidden_prompts, hints, settings_store_
 from micro_cc.utils.msg_store_ import (
     store_msgs,
@@ -138,11 +136,11 @@ async def get_session():
         "session": {
             "project_dir": _project_dir(),
             "version": pkg_version("micro-cc"),
-            "model": settings.get("model", model_registry.DEFAULT_MODEL),
-            "models": model_registry.MODEL_OPTIONS,
+            "model": settings.get("model", model_catalog.DEFAULT_MODEL),
+            "models": model_catalog.MODEL_OPTIONS,
             "dangerous": settings.get("dangerous", []),
             "gateable": GATEABLE_TOOLS,
-            "tokens_budget": settings.get("tokens_budget", model_registry.DEFAULT_TRIM_BUDGET),
+            "tokens_budget": settings.get("tokens_budget", model_catalog.DEFAULT_TRIM_BUDGET),
         },
         "commands": COMMANDS,
         # Same registry the TUI's hint bar rotates — utils/hints.py.
@@ -325,7 +323,7 @@ async def post_chat(request: Request):
             query=query,
             msgs=msgs,
             project_dir=project_dir,
-            model=settings_store_.get_setting("model") or model_registry.DEFAULT_MODEL,
+            model=settings_store_.get_setting("model") or model_catalog.DEFAULT_MODEL,
             max_tokens=session.STATE["trim_budget"],
             dangerous_tools=set(settings_store_.get_setting("dangerous") or []),
             surface="gui",

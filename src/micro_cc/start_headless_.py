@@ -11,8 +11,8 @@ import time
 
 from micro_cc.claude_loop_ import claude_loop
 from micro_cc.utils.msg_store_ import load_msgs, store_msgs, _get_storage_dir
-from micro_cc.utils.helpers import has_configured_endpoint, effective_trim_budget
-from micro_cc.models.registry import DEFAULT_MODEL
+from micro_cc.models.catalog import DEFAULT_MODEL, effective_trim_budget
+from micro_cc.models.providers import any_configured
 from micro_cc.utils import status_marker
 from micro_cc.utils.inbox_store_ import peek_mail, ack_mail
 from micro_cc.utils.settings_store_ import get_setting
@@ -446,7 +446,7 @@ def start_headless_():
     # this run's own bash_ children never inherit it.
     verdict_fd = os.environ.pop(_VERDICT_FD_ENV, None)
 
-    if not has_configured_endpoint():
+    if not any_configured():
         if verdict_fd is not None:
             _send_verdict(int(verdict_fd), "REFUSED no API endpoint configured — run `microcc` once and use /login")
         print("No API endpoint configured — run `microcc` once and use /login", file=sys.stderr)

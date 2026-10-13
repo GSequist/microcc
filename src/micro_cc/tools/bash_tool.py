@@ -16,13 +16,14 @@ from micro_cc.utils.msg_store_ import _get_storage_dir
 
 _SHELL = shutil.which("bash") or "/bin/bash"
 
-# Secrets stripped from every bash_ subprocess env. Built-ins cover microcc's
-# own; MICROCC_BASH_ENV_DENYLIST (comma-separated) adds an embedding app's own.
+# Secrets stripped from every bash_ subprocess env: these built-ins, every provider key
+# the model catalog names, and MICROCC_BASH_ENV_DENYLIST (comma-separated) for an embedding app's own.
 _DENIED_ENV = {"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "MICRO_CC_POSTGRES_URL", "MICRO_CC_MIRROR_POSTGRES_URL"}
 
 
 def _bash_env() -> dict:
-    denied = _DENIED_ENV | {n for n in os.environ.get("MICROCC_BASH_ENV_DENYLIST", "").split(",") if n}
+    from micro_cc.models.providers import secret_env_keys
+    denied = _DENIED_ENV | secret_env_keys() | {n for n in os.environ.get("MICROCC_BASH_ENV_DENYLIST", "").split(",") if n}
     return {k: v for k, v in os.environ.items() if k not in denied}
 
 # Supported platforms are macOS and WSL — both are real POSIX/bash

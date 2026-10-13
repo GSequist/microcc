@@ -173,8 +173,5 @@ build_obf/
 frontend/node_modules/
 src/micro_cc/webui/dist/
 
-# Revision-bound local design-review artifacts (declarations live in design/)
-.design/
-
 # local Postgres for tests
 docker-compose.yml

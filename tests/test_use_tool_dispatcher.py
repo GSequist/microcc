@@ -5,13 +5,10 @@ checkpoint/memory/token-stats storage, and one fake catalog tool (get_weather)
 so no browser or other real tool runs.
 """
 
-import asyncio
 import json
-import os
 from pathlib import Path
 import sys
 import tempfile
-from types import SimpleNamespace as NS
 from typing import Literal
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -20,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from micro_cc import claude_loop_ as loop_mod
 from micro_cc.models import ContentBlock, Response
-from micro_cc.models.anthropic import _stealth_tools, _unstealth_name
+from micro_cc.models.apis.anthropic_messages import _stealth_tools, _unstealth_name
 from micro_cc.models.schema import function_to_schema
 from micro_cc.tools import search_tool_
 from micro_cc.tools.use_tool_ import resolve_call, use_tool_
@@ -74,7 +71,7 @@ class Scripted:
         self.tools_bytes = []
         self.inputs = []
 
-    async def __call__(self, *, input, model, endpoint, tools, thinking, stream, reasoning_effort=None):
+    async def __call__(self, *, input, model, provider, tools, thinking, stream, reasoning_effort=None):
         self.tools_bytes.append(json.dumps(tools, sort_keys=True))
         self.inputs.append(json.loads(json.dumps(input, default=str)))
         resp = self.responses.pop(0)
