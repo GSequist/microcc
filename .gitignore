@@ -175,3 +175,6 @@ src/micro_cc/webui/dist/
 
 # local Postgres for tests
 docker-compose.yml
+
+# local publish script
+publish.sh
