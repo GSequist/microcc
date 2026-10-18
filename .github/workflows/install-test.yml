@@ -71,6 +71,11 @@ jobs:
         run: apt-get update && apt-get install -y curl ca-certificates xvfb xauth
       - name: install via real URL
         run: curl -fsSL $RAW/install.sh | sh
+      # test this commit's code, not whatever PyPI currently serves
+      - name: overlay checkout
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv tool install --python 3.12 --force --reinstall .
       # the fix the browser tool prints when apt libs are missing (container runs as root)
       - name: chromium system deps
         run: |
@@ -133,8 +138,15 @@ jobs:
       - name: browser + computer inside WSL
         shell: pwsh
         run: |
-          # Windows Chrome over CDP if reachable, else Linux Chromium (needs apt libs)
-          wsl -d Ubuntu -e sh -c 'export PATH=$HOME/.local/bin:$PATH; PY="$(uv tool dir)/micro-cc/bin/python"; S=$([ "$(id -u)" = 0 ] || echo "sudo -n"); $S "$PY" -m playwright install-deps chromium && "$PY" tests/smoke_browser.py'
+          # this commit's code, not PyPI's
+          wsl -d Ubuntu -e sh -c 'export PATH=$HOME/.local/bin:$PATH; uv tool install --python 3.12 --force --reinstall .'
+          if ($LASTEXITCODE -ne 0) { throw "overlay install failed in WSL" }
+          $py = (wsl -d Ubuntu -e sh -c 'export PATH=$HOME/.local/bin:$PATH; echo "$(uv tool dir)/micro-cc/bin/python"').Trim()
+          # runneradmin has no passwordless sudo; apt libs go in as root
+          wsl -d Ubuntu -u root -e $py -m playwright install-deps chromium
+          if ($LASTEXITCODE -ne 0) { throw "playwright install-deps failed in WSL" }
+          # Windows Chrome over CDP if reachable, else Linux Chromium
+          wsl -d Ubuntu -e $py tests/smoke_browser.py
           if ($LASTEXITCODE -ne 0) { throw "browser smoke failed in WSL" }
           $global:LASTEXITCODE = 0
       - name: re-run install.ps1 (existing distro path)

@@ -8,7 +8,7 @@ from micro_cc.tools.computer_tool_ import computer
 
 async def main():
     if platform.system() != "Darwin":
-        out = await computer("pass", project_dir=".", model="")
+        out = await computer("pass", "smoke test", project_dir=".", model="")
         assert "macOS-only" in out, out
         print("computer: refused cleanly")
     page = await _ensure_browser()

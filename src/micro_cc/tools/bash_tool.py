@@ -9,7 +9,6 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
 
 from micro_cc.utils.helpers import _IMAGE_EXTENSIONS, sanitize_and_encode_image_
 from micro_cc.utils.msg_store_ import _get_storage_dir
@@ -428,19 +427,19 @@ def _newly_created_image(cwd: str, before: dict[str, float]) -> str | None:
 
 async def bash_(
     command: str,
+    description: str,
     *,
     project_dir: str,
     path: str = None,
     timeout: int = 120,
-    description: Optional[str] = None
 ) -> str:
     """Execute a bash command.
 
     Args:
         command: The bash command to execute
+        description: What this does, in plain words for a non-technical user who may have to approve it (5-12 words, e.g. "Convert the report to PDF")
         path: Working directory (default: last cwd for this project, initially project_dir); relative paths resolve to project_dir
         timeout: Max seconds before the process is killed (default 120)
-        description: Short description of what you are about to do, in active voice
     """
     if platform.system() == "Windows":
         return _WINDOWS_MSG

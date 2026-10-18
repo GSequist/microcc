@@ -4,13 +4,14 @@ import subprocess
 import time
 
 
-async def computer(code: str, *, project_dir: str, model: str) -> str:
+async def computer(code: str, description: str, *, project_dir: str, model: str) -> str:
     """Run PyAutoGUI code to control the Mac desktop; `pyautogui` and `time` are pre-imported.
 
     Every run auto-captures a screenshot and describes it via vision.
 
     Args:
         code: Python code using pyautogui
+        description: What this does, in plain words for a non-technical user who may have to approve it (5-12 words, e.g. "Click Save in the Word window")
     """
     # Mac-only: AX element scoping and screencapture; search_tool_ also hides this tool elsewhere.
     if platform.system() != "Darwin":

@@ -199,7 +199,7 @@ class GuiTests(unittest.TestCase):
         p = Path(self.proj)
         (p / "seed.txt").write_text("alpha\nbeta\n")
         steps = [
-            ("bash_", {"command": "echo bashed"}, "bashed"),
+            ("bash_", {"command": "echo bashed", "description": "test"}, "bashed"),
             ("write_", {"file_path": "w.txt", "content": "one\ntwo\n"}, None),
             ("read_", {"file_path": "w.txt"}, "two"),
             ("edit_", {"file_path": "w.txt", "old_string": "two", "new_string": "TWO"}, None),
@@ -242,7 +242,7 @@ class GuiTests(unittest.TestCase):
     def test_background_process_shows_in_status_pill(self):
         from micro_cc.tools.bash_tool import kill_background_processes
         try:
-            ev = _events(self.chat("bg", [{"tool": "bash_", "args": {"command": "sleep 60 &"}}, {"text": "ok"}]))
+            ev = _events(self.chat("bg", [{"tool": "bash_", "args": {"command": "sleep 60 &", "description": "test"}}, {"text": "ok"}]))
             self.assertFalse([e for e in ev if e["type"] == "error"], ev)
             parts = [e for e in ev if e["type"] == "data-bgprocs"]
             self.assertTrue(parts and any("sleep 60" in p["command"] for p in parts[-1]["data"]["processes"]), parts)
@@ -258,7 +258,7 @@ class GuiTests(unittest.TestCase):
 
     def test_approval_approve_resumes_the_parked_loop(self):
         self._gate(["bash_"])
-        ev = _events(self.chat("go", [{"tool": "bash_", "args": {"command": "echo gated"}}, {"text": "finished"}]))
+        ev = _events(self.chat("go", [{"tool": "bash_", "args": {"command": "echo gated", "description": "test"}}, {"text": "finished"}]))
         self.assertEqual(ev[-1]["type"], "finish")
         self.assertTrue(any(e["type"] == "tool-approval-request" for e in ev))
         self.assertEqual(session.STATE["pending_kind"], "approval")
@@ -271,7 +271,7 @@ class GuiTests(unittest.TestCase):
     def test_approval_deny_skips_tool_and_model_replies(self):
         self._gate(["bash_"])
         marker = Path(self.proj) / "ran.txt"
-        self.chat("go", [{"tool": "bash_", "args": {"command": f"touch {marker}"}}, {"text": "what instead?"}])
+        self.chat("go", [{"tool": "bash_", "args": {"command": f"touch {marker}", "description": "test"}}, {"text": "what instead?"}])
         self.assertEqual(self.client.post("/api/chat/deny").json(), {"ok": True})
         ev = _events(self.client.post("/api/chat", json={"messages": [{"role": "assistant", "parts": []}]}))
         out = [e for e in ev if e["type"] == "tool-output-available"]
@@ -338,7 +338,7 @@ class GuiTests(unittest.TestCase):
 
     def test_deny_waits_for_the_turn_lock(self):
         self._gate(["bash_"])
-        self.chat("go", [{"tool": "bash_", "args": {"command": "echo x"}}, {"text": "x"}])
+        self.chat("go", [{"tool": "bash_", "args": {"command": "echo x", "description": "test"}}, {"text": "x"}])
         self.assertEqual(self.client.post("/api/chat/deny").json(), {"ok": True})
         self.assertFalse(session.STATE["lock"].locked())
 

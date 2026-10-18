@@ -263,7 +263,7 @@ class _FakeChat(http.server.BaseHTTPRequestHandler):
         chunks = [
             {"choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": [{
                 "index": 0, "id": "call_1", "type": "function",
-                "function": {"name": "bash_", "arguments": json.dumps({"command": cmd})},
+                "function": {"name": "bash_", "arguments": json.dumps({"command": cmd, "description": "test"})},
             }]}, "finish_reason": None}]},
             {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
         ]

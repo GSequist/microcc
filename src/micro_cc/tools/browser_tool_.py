@@ -109,13 +109,14 @@ async def close_browser():
     _playwright = _browser = _page = None
 
 
-async def browser(code: str, *, project_dir: str, model: str) -> str:
+async def browser(code: str, description: str, *, project_dir: str, model: str) -> str:
     """Run Playwright async Python code against a persistent single-page browser (created on first call).
 
     Every run auto-captures a screenshot and describes it via vision.
 
     Args:
         code: Playwright async Python code, `page` in scope; return a value to see it as output
+        description: What this does, in plain words for a non-technical user who may have to approve it (5-12 words, e.g. "Open the bank's login page")
     """
     try:
         page = await _ensure_browser()

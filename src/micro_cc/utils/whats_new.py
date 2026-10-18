@@ -4,9 +4,9 @@ from importlib.metadata import version
 
 from micro_cc.utils import settings_store_
 
-# Add an entry per release; versions without one show nothing.
+# Key = the version publish.sh will ship (pyproject + 1); versions without an entry show nothing.
 NOTES = {
-    "0.2.110": [
+    "0.2.112": [
         "Auto gate: a model check can allow gated calls it judges safe (turn on in /dangerous)",
         "Approval prompts now explain each call in plain language and show a risk badge",
         "Deleting files, sudo, uploads, system settings and git push always ask, even in Auto",
