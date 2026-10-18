@@ -24,7 +24,7 @@ COMMANDS = [
         "hint": "orchestrate multiple headless subagents toward a goal — diagram first, then spawn/monitor/adjust",
         "kind": "prompt",
         "takes_args": True,
-        "gui": False,  # TUI-only: subagent checkpoint wakeup is TUI-only (set_interval).
+        "gui": False,  # TUI-only: the orchestration flow is terminal-driven.
     },
     {
         "name": "/message-session",

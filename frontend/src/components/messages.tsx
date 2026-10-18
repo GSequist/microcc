@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { UIMessage } from 'ai';
 import { PreviewMessage, PendingMessage } from './message';
 import { Greeting } from './greeting';
+import { WhatsNew } from './whats-new';
+import { useSession } from '../contexts/SessionContext';
 import type { UseChatHelpers } from '@ai-sdk/react';
 import { useMessages } from '../hooks/use-messages';
 import { ArrowDownIcon, ChevronDownIcon } from './icons';
@@ -44,6 +46,12 @@ function PureMessages({
   const { containerRef, contentRef, isAtBottom, scrollToBottom } = useMessages({ chatId, status });
   const [isTodosExpanded, setTodosExpanded]=useState(false);
   const t = getCopy();
+  const { whatsNew, dismissWhatsNew } = useSession();
+
+  // First message sent: the release note has done its job.
+  useEffect(() => {
+    if (whatsNew && status === 'submitted') void dismissWhatsNew();
+  }, [status, whatsNew, dismissWhatsNew]);
 
   const items  = todos ? Object.values(todos) : [];
   const active = items.find((td) => td.status === 'in_progress');
@@ -100,6 +108,8 @@ function PureMessages({
               onApproval={onApproval}
             />
           ))}
+
+          {whatsNew && <WhatsNew note={whatsNew} />}
 
           {status === 'submitted' &&
             messages.length > 0 &&

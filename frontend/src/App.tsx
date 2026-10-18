@@ -1,5 +1,6 @@
 import { Toaster } from 'sonner';
 import { Chat } from './components/chat';
+import { GuiGate } from './components/gui-gate';
 import { SessionProvider } from './contexts/SessionContext';
 import { TooltipProvider } from './components/ui/tooltip';
 
@@ -11,6 +12,7 @@ export default function App() {
       <TooltipProvider delayDuration={400} skipDelayDuration={300}>
         <Chat />
       </TooltipProvider>
+      <GuiGate />
       <Toaster position="top-center" theme="dark" richColors />
     </SessionProvider>
   );

@@ -8,13 +8,7 @@ from typing import Optional
 
 from micro_cc.utils.helpers import _IMAGE_EXTENSIONS, sanitize_and_encode_image_
 
-# Self-scoped external-change tracking: mirrors bash_tool.py's
-# _background_procs — only paths WE'VE read/written via these tools ever
-# land here, so format_external_changes (consumed directly by
-# claude_loop_.py's per-loop status block) only ever flags changes to
-# files Claude itself is already tracking, never ambient noise from the
-# rest of the filesystem (this replaced a recursive watchdog Observer over
-# the whole project_dir, which was unusable when project_dir was $HOME).
+# Mtimes of files this module read or wrote; format_external_changes diffs them against disk.
 _touched_files: dict[str, float] = {}
 
 
@@ -27,9 +21,7 @@ def _touch(file_path: str) -> None:
 
 
 def format_external_changes() -> str | None:
-    """Diff tracked files against disk; flag ones changed or deleted since
-    we last touched them ourselves. Refreshes state after reporting so each
-    change is only surfaced once."""
+    """Report tracked files changed or deleted on disk since we last touched them; each reported once."""
     lines = []
     for path in list(_touched_files):
         try:
@@ -47,16 +39,7 @@ def format_external_changes() -> str | None:
 
 
 def _resolve_whitespace_lookalike(file_path: str) -> str | None:
-    """When file_path doesn't exist, check whether a sibling in the same
-    directory matches it once every whitespace run is collapsed to a plain
-    ASCII space. Handles the model retyping a path it only ever *saw* in a
-    prior tool result — e.g. a macOS screenshot filename has a narrow
-    no-break space (U+202F) between the time and AM/PM ("12.55.41 AM.png"),
-    which is visually identical to a regular space in rendered text, so the
-    model composes the next call with an ordinary space and gets a false
-    File-not-found. Only fires as a fallback after the exact path already
-    failed, and only resolves when exactly one directory entry matches, so
-    it can't silently pick the wrong file among several near-duplicates."""
+    """Return the one sibling whose whitespace runs match `file_path`'s (e.g. macOS narrow no-break space), else None."""
     dirname, basename = os.path.split(file_path)
     dirname = dirname or "."
     try:
@@ -77,14 +60,12 @@ def read_(
     offset: int = 0,
     limit: int = 2000
 ) -> str | dict:
-    """Read file contents with optional line range. Also handles image files
-    (png/jpg/gif/webp/bmp) — shows the image directly, offset/limit are
-    ignored for those.
+    """Read file lines, or an image (png/jpg/gif/webp/bmp), which ignores offset/limit.
 
     Args:
-        file_path: Absolute or relative path to file
-        offset: Line number to start from (0-indexed)
-        limit: Max lines to read (default 2000)
+        file_path: Absolute or relative path
+        offset: Line to start from (0-indexed)
+        limit: Max lines (default 2000)
     """
     offset, limit = int(offset), int(limit)
 
@@ -102,21 +83,14 @@ def read_(
         return f"[Path is a directory, not a file: {file_path}]"
 
     if file_path.lower().endswith(_IMAGE_EXTENSIONS):
-        # claude_loop_.py's tool-result loop special-cases this exact shape
-        # (isinstance(result, dict) and result["type"] == "image") — builds
-        # a real image tool_result block from it instead of the generic
-        # str(result) path, so the image lands directly in THIS
-        # conversation, no separate vision-style tool or isolated sub-call
-        # needed. Read is multimodal by extension — images are embedded
-        # directly without a dedicated image tool.
+        # Dict result: claude_loop_ turns it into an image block in this conversation.
         encoded = sanitize_and_encode_image_(file_path)
         if encoded is None:
             return f"[Could not read/encode image: {file_path}]"
         _touch(file_path)
         return {"type": "image", "data": encoded}
 
-    # open() on a FIFO/socket/device blocks or never hits EOF — say so instead
-    # of hanging the turn; bash_ is the right tool if that's really intended.
+    # Refuse FIFOs/sockets/devices: open() would block forever.
     try:
         mode = os.stat(file_path).st_mode
     except OSError as e:
@@ -129,8 +103,7 @@ def read_(
         )
 
     try:
-        # Stream instead of readlines(): only the requested window is kept in
-        # memory; the rest is just counted for the "more lines" footer.
+        # Stream; only the requested window stays in memory.
         output_lines = []
         total_lines = 0
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
@@ -169,7 +142,6 @@ def write_(
         file_path = os.path.join(project_dir, file_path)
 
     try:
-        # Create parent directories if needed
         parent = os.path.dirname(file_path)
         if parent and not os.path.exists(parent):
             os.makedirs(parent)
@@ -193,16 +165,13 @@ def edit_(
     project_dir: str,
     replace_all: bool = False
 ) -> str:
-    """Surgical string replacement in file.
-
-    Finds exact match of old_string and replaces with new_string.
-    Fails if old_string not found or not unique (unless replace_all=True).
+    """Replace old_string with new_string in a file; fails if not found or not unique unless replace_all.
 
     Args:
         file_path: Absolute or relative path
-        old_string: Exact text to find and replace
+        old_string: Exact text to find
         new_string: Replacement text
-        replace_all: If True, replace all occurrences (default False)
+        replace_all: Replace every occurrence (default False)
     """
     if not os.path.isabs(file_path):
         file_path = os.path.join(project_dir, file_path)
@@ -222,13 +191,11 @@ def edit_(
         if count > 1 and not replace_all:
             return f"[String found {count} times - use replace_all=True or provide more context]"
 
-        # Find line number(s) before replacement
         if not replace_all:
             pos = content.find(old_string)
             start_line = content[:pos].count('\n') + 1
             end_line = start_line + old_string.count('\n')
 
-        # Perform replacement
         if replace_all:
             new_content = content.replace(old_string, new_string)
         else:
@@ -239,7 +206,6 @@ def edit_(
 
         _touch(file_path)
 
-        # Build return message
         if replace_all:
             return f"Replaced {count} occurrence(s) in {file_path}"
         else:
@@ -250,14 +216,8 @@ def edit_(
         return f"[Edit error: {type(e).__name__}: {e}]"
 
 
-# --- bounded, interruptible glob walk (shared by glob_ and grep_) -----------
-# glob.glob can't be interrupted: it only returns (or, for iglob, yields) on a
-# match, so a deadline check never runs while it walks a huge tree finding
-# nothing. This is the same **-aware algorithm over os.scandir, checking the
-# deadline once per directory. Semantics match glob.glob(recursive=True):
-# `*`/`**` skip dot-entries unless the segment itself starts with ".".
-# Symlinked dirs are followed, but each real dir is entered once per `**`
-# expansion, so a symlink cycle can't loop.
+# Bounded, interruptible glob walk shared by glob_ and grep_ (glob.glob can't check a deadline).
+# Matches glob.glob(recursive=True); symlink cycles are guarded by (dev, inode).
 _GLOB_MAGIC = re.compile(r"[*?[]")
 GLOB_DEADLINE_S = 30
 GLOB_SCAN_CAP = 2000   # matches collected before stopping early
@@ -374,13 +334,11 @@ def glob_(
     project_dir: str,
     path: str = None
 ) -> str:
-    """Find files matching glob pattern, newest first. Walks at most ~30s /
-    2000 matches — if it stops early it says so, and tells you how to get
-    the complete list with bash_.
+    """Find files matching a glob, newest first. Stops at ~30s or 2000 matches and says so; bash_ find gives the full list.
 
     Args:
-        pattern: Glob pattern (e.g., "**/*.py", "src/*.ts")
-        path: Directory to search in (default: project_dir)
+        pattern: Glob pattern; ** matches any depth
+        path: Directory to search (default: project_dir)
     """
     base_path = path if path and os.path.isabs(path) else project_dir
     if path and not os.path.isabs(path):
@@ -433,17 +391,14 @@ def grep_(
     ignore_case: bool = False,
     context_lines: int = 0
 ) -> str:
-    """Search file contents with regex pattern. Searches every file (binary
-    and large ones included) but stops at ~45s / 500 matches / 50k chars of
-    output — when it stops early it says exactly where and tells you how to
-    run the complete search with bash_ (rg/grep).
+    """Regex search over file contents, binary and large files included. Stops at ~45s, 500 matches or 50k chars and says so; use bash_ rg for the complete search.
 
     Args:
-        pattern: Regex pattern to search for
+        pattern: Regex pattern
         path: File or directory to search (default: project_dir)
-        file_pattern: Glob pattern to filter files (e.g., "*.py")
+        file_pattern: Glob filter for files
         ignore_case: Case-insensitive search
-        context_lines: Lines of context before/after match
+        context_lines: Lines of context before and after each match
     """
     base_path = path if path and os.path.isabs(path) else project_dir
     if path and not os.path.isabs(path):
@@ -476,9 +431,7 @@ def grep_(
         return f"{prefix}{num:6d}: {line}"
 
     def search_file(filepath):
-        """Stream the file so a huge/binary file never sits in memory whole;
-        before-context comes from a small deque, after-context from groups
-        still waiting on their trailing lines."""
+        """Stream one file, keeping only a before-context deque and pending after-context groups."""
         nonlocal matches_found, unreadable_files
         groups = []      # finished context groups for this file
         pending = []     # [lines, after_remaining]

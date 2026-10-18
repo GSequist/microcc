@@ -1,22 +1,6 @@
-"""
-Skill Loader - Parses YAML frontmatter from SKILL.md files and provides skill discovery.
+"""Skill discovery: SKILL.md frontmatter from built-in, global (~/.micro-cc/skills) and project-local skills/.
 
-Skills are loaded from three places and merged, each tier overriding the last
-on name collision:
-1. Built-in: {this package}/skills/*/SKILL.md
-2. Global (user-level): ~/.micro-cc/skills/*/SKILL.md — applies across ALL
-   projects, same home as memory.json. For skills a user wants everywhere
-   regardless of which project_dir micro-cc is pointed at.
-3. Project-local: {project_dir}/skills/*/SKILL.md — lets a user drop a
-   skills/ folder at the root of whatever project they point micro-cc at,
-   scoped to just that project (e.g. checked into that project's own repo).
-
-All three use the exact same SKILL.md format as the built-ins.
-
-Progressive disclosure pattern:
-1. Level 1: Skill metadata (name+description) injected into system prompt
-2. Level 2: Agent calls read_skill() to load full SKILL.md content
-3. Level 3: Agent reads reference files or executes scripts via kernel
+Later tiers override earlier ones on name collision. Name and description go in the system prompt; the body loads on demand.
 """
 
 import re
@@ -31,11 +15,7 @@ GLOBAL_SKILLS_DIR = Path.home() / ".micro-cc" / "skills"
 
 
 def _parse_yaml_frontmatter(content: str) -> tuple[dict, str]:
-    """Parse YAML frontmatter from markdown content.
-
-    Returns:
-        tuple of (frontmatter_dict, remaining_content)
-    """
+    """Return (frontmatter dict, body) from a ---delimited YAML header."""
     frontmatter = {}
     body = content
 
@@ -47,14 +27,13 @@ def _parse_yaml_frontmatter(content: str) -> tuple[dict, str]:
         yaml_content = match.group(1)
         body = match.group(2)
 
-        # Simple YAML parsing (name: value pairs)
+        # Flat key: value pairs only, not full YAML.
         for line in yaml_content.split('\n'):
             line = line.strip()
             if ':' in line:
                 key, value = line.split(':', 1)
                 key = key.strip()
                 value = value.strip()
-                # Remove quotes if present
                 if value.startswith('"') and value.endswith('"'):
                     value = value[1:-1]
                 elif value.startswith("'") and value.endswith("'"):
@@ -101,12 +80,7 @@ def _scan_skills_dir(skills_dir: Path) -> dict:
 
 
 def _load_skills(project_dir: str = "") -> dict:
-    """Load built-in + global (~/.micro-cc/skills/) + project-local skills/, merged.
-
-    Later tiers override earlier ones on name collision:
-    built-in -> global (all projects) -> project-local (this project_dir only).
-    Cached per project_dir so repeated calls within the same project are free.
-    """
+    """Merge built-in, global, then project-local skills (later wins); cached per project_dir."""
     cache_key = project_dir or ""
     if cache_key in _skills_cache_by_dir:
         return _skills_cache_by_dir[cache_key]
@@ -115,7 +89,6 @@ def _load_skills(project_dir: str = "") -> dict:
     skills.update(_scan_skills_dir(GLOBAL_SKILLS_DIR))
 
     if project_dir:
-        # Project-local skills override built-in/global with the same name.
         skills.update(_scan_skills_dir(Path(project_dir) / "skills"))
 
     _skills_cache_by_dir[cache_key] = skills
@@ -123,11 +96,7 @@ def _load_skills(project_dir: str = "") -> dict:
 
 
 def get_available_skills(project_dir: str = "") -> list[dict]:
-    """Get list of available skills with name and description.
-
-    Returns:
-        List of dicts with 'name' and 'description' keys.
-    """
+    """Available skills as [{name, description}]."""
     skills = _load_skills(project_dir)
     return [
         {'name': skill['name'], 'description': skill['description']}
@@ -136,11 +105,7 @@ def get_available_skills(project_dir: str = "") -> list[dict]:
 
 
 def get_skill_summary(project_dir: str = "") -> str:
-    """Get formatted summary of all skills for injection into system prompt.
-
-    Returns:
-        Formatted string listing all available skills.
-    """
+    """Skill list formatted for the system prompt."""
     skills = _load_skills(project_dir)
 
     if not skills:
@@ -154,31 +119,17 @@ def get_skill_summary(project_dir: str = "") -> str:
 
 
 def get_skill_content(skill_name: str, project_dir: str = "") -> Optional[str]:
-    """Get the full content of a skill's SKILL.md file.
-
-    Args:
-        skill_name: Name of the skill to load.
-
-    Returns:
-        Full SKILL.md content or None if skill not found.
-    """
+    """Body of a skill's SKILL.md (frontmatter stripped), or None."""
     skills = _load_skills(project_dir)
 
     skill = skills.get(skill_name)
     if skill:
-        return skill['body']  # Return body without frontmatter
+        return skill['body']
     return None
 
 
 def get_skill_path(skill_name: str, project_dir: str = "") -> Optional[str]:
-    """Get the filesystem path to a skill's folder.
-
-    Args:
-        skill_name: Name of the skill.
-
-    Returns:
-        Path to skill folder or None if not found.
-    """
+    """Filesystem path of a skill's folder, or None."""
     skills = _load_skills(project_dir)
 
     skill = skills.get(skill_name)
@@ -188,14 +139,7 @@ def get_skill_path(skill_name: str, project_dir: str = "") -> Optional[str]:
 
 
 def list_skill_files(skill_name: str, project_dir: str = "") -> list[str]:
-    """List all files in a skill's folder.
-
-    Args:
-        skill_name: Name of the skill.
-
-    Returns:
-        List of relative file paths within the skill folder.
-    """
+    """Relative paths of all files in a skill's folder."""
     skills = _load_skills(project_dir)
 
     skill = skills.get(skill_name)

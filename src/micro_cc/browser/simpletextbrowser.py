@@ -57,7 +57,6 @@ class SimpleTextBrowser:
         # TODO: Handle anchors
         self.history.append((uri_or_path, time.time()))
 
-        # Handle special URIs
         if uri_or_path == "about:blank":
             self._set_page_content("")
         elif uri_or_path.startswith("google:"):
@@ -73,7 +72,6 @@ class SimpleTextBrowser:
                 if len(self.history) > 1:
                     prior_address = self.history[-2][0]
                     uri_or_path = urljoin(prior_address, uri_or_path)
-                    # Update the address with the fully-qualified path
                     self.history[-1] = (uri_or_path, self.history[-1][1])
             self._fetch_page(uri_or_path)
 
@@ -110,15 +108,13 @@ class SimpleTextBrowser:
     def find_on_page(self, query: str) -> Union[str, None]:
         """Searches for the query from the current viewport forward, looping back to the start if necessary."""
 
-        # Did we get here via a previous find_on_page search with the same query?
-        # If so, map to find_next
+        # Same query as the last search: continue from its position via find_next.
         if (
             query == self._find_on_page_query
             and self.viewport_current_page == self._find_on_page_last_result
         ):
             return self.find_next()
 
-        # Ok it's a new search start from the current viewport
         self._find_on_page_query = query
         viewport_match = self._find_next_viewport(query, self.viewport_current_page)
         if viewport_match is None:
@@ -162,7 +158,6 @@ class SimpleTextBrowser:
         if query is None:
             return None
 
-        # Normalize the query, and convert to a regular expression
         nquery = re.sub(r"\*", "__STAR__", query)
         nquery = " " + (" ".join(re.split(r"\W+", nquery))).strip() + " "
         nquery = nquery.replace(
@@ -199,12 +194,10 @@ class SimpleTextBrowser:
             self.viewport_pages = [(0, len(self._page_content))]
             return
 
-        # Handle empty pages
         if len(self._page_content) == 0:
             self.viewport_pages = [(0, 0)]
             return
 
-        # Break the viewport into pages
         self.viewport_pages = []
         start_idx = 0
         while start_idx < len(self._page_content):
@@ -293,7 +286,6 @@ class SimpleTextBrowser:
                 self.page_title = res.title
                 self._set_page_content(res.text_content)
             else:
-                # Prepare the request parameters
                 request_kwargs = (
                     self.request_kwargs.copy()
                     if self.request_kwargs is not None
@@ -301,21 +293,16 @@ class SimpleTextBrowser:
                 )
                 request_kwargs["stream"] = True
 
-                # Send a HTTP request to the URL
                 response = requests.get(url, **request_kwargs)
                 response.raise_for_status()
 
-                # If the HTTP request was successful
                 content_type = response.headers.get("content-type", "")
 
-                # Text or HTML
                 if "text/" in content_type.lower():
                     res = self._mdconvert.convert_response(response)
                     self.page_title = res.title
                     self._set_page_content(res.text_content)
-                # A download
                 else:
-                    # Try producing a safe filename
                     fname = None
                     download_path = None
                     try:
@@ -338,7 +325,6 @@ class SimpleTextBrowser:
                     except NameError:
                         pass
 
-                    # No suitable name, so make one
                     if fname is None:
                         extension = mimetypes.guess_extension(content_type)
                         if extension is None:
@@ -348,16 +334,15 @@ class SimpleTextBrowser:
                             os.path.join(self.downloads_folder, fname)
                         )
 
-                    # Open a file for writing
                     with open(download_path, "wb") as fh:
                         for chunk in response.iter_content(chunk_size=512):
                             fh.write(chunk)
 
-                    # Render it first (while local file exists)
+                    # Render before the file is removed below.
                     local_uri = pathlib.Path(download_path).as_uri()
                     self.set_address(local_uri)
 
-                    # For visit_url, just delete immediately (no S3 storage needed)
+                    # Temp download; removed once rendered.
                     try:
                         os.remove(download_path)
                     except Exception as e:
@@ -365,7 +350,6 @@ class SimpleTextBrowser:
 
         except UnsupportedFormatException as e:
             print(e)
-            # Clean up the useless downloaded file
             try:
                 if os.path.exists(download_path):
                     os.remove(download_path)
@@ -377,7 +361,6 @@ class SimpleTextBrowser:
             )
         except FileConversionException as e:
             print(e)
-            # Clean up the useless downloaded file
             try:
                 if os.path.exists(download_path):
                     os.remove(download_path)
@@ -388,7 +371,6 @@ class SimpleTextBrowser:
                 f"## Conversion Failed\n\nFailed to convert file: {str(e)}"
             )
         except FileNotFoundError:
-            # Clean up any partial download
             try:
                 if os.path.exists(download_path):
                     os.remove(download_path)
@@ -397,7 +379,6 @@ class SimpleTextBrowser:
             self.page_title = "Error 404"
             self._set_page_content(f"## Error 404\n\nFile not found")
         except requests.exceptions.RequestException as request_exception:
-            # Clean up any partial download
             try:
                 if os.path.exists(download_path):
                     os.remove(download_path)
@@ -406,8 +387,6 @@ class SimpleTextBrowser:
 
             try:
                 self.page_title = f"Error {response.status_code}"
-
-                # If the error was rendered in HTML we might as well render it
                 content_type = response.headers.get("content-type", "")
                 if content_type is not None and "text/html" in content_type.lower():
                     res = self._mdconvert.convert(response)
@@ -436,7 +415,7 @@ class SimpleTextBrowser:
         total_pages = len(self.viewport_pages)
 
         address = self.address
-        for i in range(len(self.history) - 2, -1, -1):  # Start from the second last
+        for i in range(len(self.history) - 2, -1, -1):
             if self.history[i][0] == address:
                 header += f"You previously visited this page {round(time.time() - self.history[i][1])} seconds ago.\n"
                 break

@@ -1,16 +1,6 @@
-"""Client-side MCP tool resolution — used for ALL backends.
-
-Real 3rd-party MCP servers (Azure MCP, Graph MCP, etc.) are executed by us,
-not proxied through a vendor's server-side MCP connector: their auth (API
-keys, OAuth bearer tokens) is ours to hold, and should never transit a model
-provider's infrastructure. So regardless of which model backend is active:
-  1. Connect to MCP server → fetch tool schemas via tools/list
-  2. Convert to Anthropic tool-schema format (the format tool_schemas already
-     use everywhere in claude_loop_) → append into the normal tools array
-  3. Route tool_use calls back to MCP server via tools/call
-
-Uses the `mcp` package (pip install mcp).
-Tries streamable HTTP first, falls back to SSE for older servers.
+"""Client-side MCP tool resolution for all backends. Auth stays local: servers are called
+directly, never through a model provider's connector.
+Flow: tools/list -> Anthropic tool schemas -> tools/call on use. Streamable HTTP first, SSE fallback.
 """
 
 from contextlib import asynccontextmanager
@@ -22,8 +12,7 @@ _tool_cache = {}
 
 
 def _auth_headers(entry: dict) -> dict:
-    """Build request headers from an entry's `auth_env` (env var holding a
-    bearer token) — keeps credentials local, never sent to a model provider."""
+    """Bearer header from the env var named in `auth_env`; credentials stay local."""
     auth_env = entry.get("auth_env")
     if not auth_env:
         return {}
@@ -33,15 +22,8 @@ def _auth_headers(entry: dict) -> dict:
 
 @asynccontextmanager
 async def _streamable_streams(server_url: str, headers: dict):
-    """Streamable-HTTP transport, across both `mcp` API generations.
-
-    `mcp` 2.x renamed `streamablehttp_client` -> `streamable_http_client`,
-    dropped its `headers=` kwarg (headers now ride on a preconfigured httpx
-    client), and shrank the yielded tuple from `(read, write, _)` to
-    `(read, write)`. pyproject's floor still allows 1.x, so support both
-    rather than pinning — an upstream rename must not take every MCP server
-    down with it, which is exactly what happened here.
-    """
+    """Streamable-HTTP transport; supports mcp 1.x and 2.x (2.x renamed the client, dropped the
+    headers kwarg, and changed the yielded tuple)."""
     import mcp.client.streamable_http as sh
 
     new = getattr(sh, "streamable_http_client", None)
@@ -66,8 +48,7 @@ async def _streamable_streams(server_url: str, headers: dict):
 
 @asynccontextmanager
 async def _sse_streams(server_url: str, headers: dict):
-    """SSE transport — the older protocol, which servers like Manifold still
-    speak. Signature is unchanged across the 1.x -> 2.x rename."""
+    """SSE transport, the older protocol; same signature in mcp 1.x and 2.x."""
     from mcp.client.sse import sse_client
     async with sse_client(server_url, headers=headers or None) as (read, write):
         yield read, write
@@ -75,21 +56,8 @@ async def _sse_streams(server_url: str, headers: dict):
 
 @asynccontextmanager
 async def _connect(server_url: str, headers: dict = None):
-    """Connect to an MCP server: streamable HTTP first, SSE as fallback.
-
-    `mcp` is imported lazily inside each transport, not at module level —
-    importing the bare package drags in its whole server-side stack
-    (fastmcp, uvicorn, starlette) even though only the client bits are used,
-    and this module is imported eagerly at app startup whether or not any
-    MCP server is ever touched this session.
-
-    Only SETUP is guarded per transport: a transport that fails to open (a
-    missing import, a refused connection, a server that doesn't speak that
-    protocol) falls through to the next. The consumer's body is deliberately
-    NOT guarded — a tool call that raises must propagate. The previous shape
-    wrapped the `yield` in `try/except: pass`, so a consumer error silently
-    re-connected over the next transport instead of surfacing.
-    """
+    """Connect via streamable HTTP, falling back to SSE. Only setup is guarded;
+    errors raised in the consumer body propagate."""
     from mcp import ClientSession
 
     headers = dict(headers or {})
@@ -129,12 +97,7 @@ async def _connect(server_url: str, headers: dict = None):
 
 
 def _mcp_tool_to_anthropic(t) -> dict:
-    """Convert a single MCP Tool to Anthropic tool-schema format.
-
-    Field name moved with the 2.x rename too: the Tool model now exposes
-    `input_schema` (snake_case) where 1.x had `inputSchema`. Read both so
-    the same build works against either.
-    """
+    """Convert an MCP Tool to Anthropic tool schema; reads `input_schema` (2.x) or `inputSchema` (1.x)."""
     raw = getattr(t, "input_schema", None)
     if raw is None:
         raw = getattr(t, "inputSchema", None)
@@ -197,21 +160,9 @@ async def call_mcp_tool(server_url: str, tool_name: str, arguments: dict, header
 
 
 async def resolve_mcp_tools(mcp_catalog_entries: list[dict]) -> tuple[list[dict], dict[str, dict], list[str]]:
-    """Given MCP_CATALOG entries, fetch all tools client-side.
-
-    Args:
-        mcp_catalog_entries: list of MCP_CATALOG values, each with a "server"
-            key and an optional "auth_env" (env var name holding a bearer
-            token for that server).
-
-    Returns:
-        (all_anthropic_tools, routing_map, failures) — failures is a list of
-        human-readable strings, one per server that couldn't be reached, for
-        the caller to surface (claude_loop_ yields them as "error" events —
-        never printed here: this runs inside a TUI's alt screen, and a bare
-        print() lands wherever the cursor happens to be instead of the
-        transcript).
-    """
+    """Fetch tools for each catalog entry: `server` plus optional `auth_env` (bearer token env var).
+    Returns (all_anthropic_tools, routing_map, failures). Failures are strings for the caller to
+    surface; never print them here (it lands in the TUI alt screen)."""
     all_tools = []
     all_routing = {}
     failures = []

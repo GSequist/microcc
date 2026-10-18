@@ -1,4 +1,4 @@
-"""Layout engine: flexible sizing model with grow/shrink and bounds; concrete VStack."""
+"""Layout engine: grow/shrink sizing with bounds; concrete VStack."""
 
 import os
 import sys
@@ -14,7 +14,7 @@ _last_logged: dict[int, str] = {}  # id(component) -> last error signature logge
 
 
 def _log_render_error(component) -> None:
-    """Log error once per distinct failure per component (deduped to 1/sec max)."""
+    """Log each distinct failure per component once."""
     sig = traceback.format_exc()
     if _last_logged.get(id(component)) == sig:
         return
@@ -47,7 +47,6 @@ class Entry:
     shrink: int = 1
     min_size: int = 0
     max_size: int = MAX_SIZE
-    # No size field; allocate_stack_sizes returns sizes separately (VStack.last_sizes).
 
 
 def clamp_size(size: int, e: Entry) -> int:
@@ -120,9 +119,8 @@ class VStack:
     def __init__(self, gap: int = 0):
         self.gap = gap
         self.entries: list[Entry] = []
-        # Sizes from most recent render; recomputed each call.
+        # Set by render(); used by find_offset and find_component_at.
         self.last_sizes: list[int] = []
-        # Row offsets of each entry's output in this VStack's composed output.
         self.last_offsets: list[int] = []
 
     def add(self, component, *, basis="auto", grow=0, shrink=1,
@@ -133,7 +131,7 @@ class VStack:
         rendered = [_safe_render(e.component, width) for e in self.entries]
         intrinsic = [len(lines) for lines in rendered]
         sizes = allocate_stack_sizes(self.entries, intrinsic, available_size=None, gap=self.gap)
-        # available_size=None: clamped intrinsic sizes, no grow/shrink. Root passes height.
+        # No grow/shrink without available_size; the root uses render_in().
         self.last_sizes = sizes
         return self._compose(rendered, sizes)
 
@@ -154,7 +152,7 @@ class VStack:
             component = self.entries[i].component
             get_scrolled_lines = getattr(component, "get_scrolled_lines", None)
             if get_scrolled_lines is not None:
-                # ScrollView picks its own scroll window; treat separately from plain truncation.
+                # ScrollView chooses its own window, so skip plain truncation.
                 try:
                     lines = get_scrolled_lines(lines, h)
                 except Exception:
@@ -233,7 +231,7 @@ def _keep_images(left: str, out: str, left_w: int) -> str:
 
 
 class HSplit:
-    """Conversation plus an optional mod pane on its right, top or bottom; collapses to the conversation alone when too small or closed."""
+    """Conversation plus an optional right/top/bottom mod pane; collapses when too small or closed."""
 
     MIN_LEFT = 60     # conversation columns kept beside a right pane
     MIN_PANE = 24     # narrowest right pane

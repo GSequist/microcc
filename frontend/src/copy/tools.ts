@@ -2,8 +2,6 @@
 // Consumed inline by TOOL_LABELS in components/tool-registry.ts via getCopy().
 export const toolsCopy = {
   en: {
-    tool_approval_ask: 'Run',
-    tool_approval_hint: 'Enable tools in ⌘Preferences',
     todo_tool_: 'Scratchpad..',
     memory: 'Memory',
     search_tools: 'Finding the right tool',

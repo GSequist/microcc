@@ -10,6 +10,9 @@ export interface Session {
   models: string[];
   dangerous: string[];
   gateable: string[];
+  presets: { key: string; label: string; description: string }[];
+  preset: string; // current preset key, or 'custom'
+
   tokens_budget: number;
 }
 
@@ -28,11 +31,15 @@ interface SessionCtx {
   /** Tips from the server's shared registry (utils/hints.py) — same copy the
    *  TUI rotates through its hint bar. */
   hints: string[];
+  /** One-time release note for the installed version; null once dismissed. */
+  whatsNew: { version: string; lines: string[] } | null;
+  dismissWhatsNew: () => Promise<void>;
   files: string[];
   refresh: () => Promise<void>;
   refreshFiles: () => Promise<void>;
   setModel: (model: string) => Promise<void>;
   setDangerous: (tools: string[]) => Promise<void>;
+  setPreset: (preset: string) => Promise<void>;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -47,6 +54,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [hints, setHints] = useState<string[]>([]);
+  const [whatsNew, setWhatsNew] = useState<SessionCtx['whatsNew']>(null);
   const [files, setFiles] = useState<string[]>([]);
 
   const refresh = useCallback(async () => {
@@ -56,6 +64,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setSession(data.session);
     setCommands(data.commands);
     setHints(data.hints ?? []);
+    setWhatsNew(data.whats_new ?? null);
   }, []);
 
   // Backs the @ mention dropdown. The server walks project_dir honouring
@@ -87,11 +96,27 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       body: JSON.stringify({ dangerous }),
     });
     setSession((s) => (s ? { ...s, dangerous } : s));
+    await refresh(); // the matching preset is computed server-side
+  }, [refresh]);
+
+  // A preset also flips auto_gate server-side, so re-read the session instead of patching it locally.
+  const setPreset = useCallback(async (preset: string) => {
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preset }),
+    });
+    await refresh();
+  }, [refresh]);
+
+  const dismissWhatsNew = useCallback(async () => {
+    setWhatsNew(null);
+    await fetch('/api/whats-new/seen', { method: 'POST' });
   }, []);
 
   const value = useMemo(
-    () => ({ session, commands, hints, files, refresh, refreshFiles, setModel, setDangerous }),
-    [session, commands, hints, files, refresh, refreshFiles, setModel, setDangerous]
+    () => ({ session, commands, hints, whatsNew, dismissWhatsNew, files, refresh, refreshFiles, setModel, setDangerous, setPreset }),
+    [session, commands, hints, whatsNew, dismissWhatsNew, files, refresh, refreshFiles, setModel, setDangerous, setPreset]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

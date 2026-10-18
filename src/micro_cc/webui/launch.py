@@ -1,24 +1,9 @@
-"""Start the GUI server in a background thread and open a browser at it.
-
-Deliberately a thread, not a subprocess: the whole design rests on the server
-and claude_loop sharing one process, so the suspended generator that carries a
-pending approval is reachable from both.
-
-The `serve()` entry point is also what a future desktop shell would call —
-swap `webbrowser.open` for `webview.create_window(...)` (pywebview) and nothing
-else in this file, or anywhere else, has to change.
-
-## Binding
-
-Always 0.0.0.0:8765. micro-cc is usually launched inside a sandbox container
-that pulls it from PyPI and starts it — we don't control that container's run
-flags, and it already publishes 8765. Binding loopback there would make the
-GUI unreachable: inside a container 127.0.0.1 is the container's own loopback,
-and published ports forward to its eth0 address instead. 0.0.0.0 covers both.
-"""
+"""Start the GUI server in a background thread, sharing claude_loop's process, and open a browser."""
 
 import os
+import secrets
 import socket
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -27,31 +12,36 @@ import uvicorn
 
 from micro_cc.webui import session
 
+# 0.0.0.0: containers publish 8765; 127.0.0.1 is the container's own loopback.
 HOST = "0.0.0.0"
 PORT = 8765
 
 
 def _has_gui_browser() -> bool:
-    """Whether `webbrowser.open` can plausibly hand off to a real GUI browser.
-
-    Without this check, webbrowser.open() on headless Linux (any container
-    with no DISPLAY/WAYLAND_DISPLAY — which is the normal case here) still
-    registers CONSOLE browsers whenever $TERM is set and www-browser/links/
-    elinks/lynx/w3m happens to be on PATH (see cpython's webbrowser.py
-    register_standard_browsers). Those run via GenericBrowser.open(), which
-    does `subprocess.Popen(cmdline)` with stdio inherited (not redirected)
-    and then blocks on `p.wait()`. The child takes over the same tty the
-    Textual app is drawing to, so the app appears to "freeze" — mouse and
-    keyboard now belong to the hijacking text browser, not to us — until
-    that subprocess is manually quit. Skipping the call entirely whenever
-    there's no real display avoids ever reaching that branch.
-    """
+    """Whether webbrowser.open can reach a GUI browser; console browsers would hijack the TUI's tty."""
     if sys.platform == "darwin" or sys.platform.startswith("win"):
         return True
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-def serve(project_dir, *, model=None, dangerous=(), trim_budget=None,
+def _close_tabs(base: str) -> None:
+    """Best-effort macOS: close our tab in Chrome/Arc/Safari if running (the page also tries window.close())."""
+    if sys.platform != "darwin":
+        return
+    for app in ("Google Chrome", "Arc", "Safari"):
+        script = (
+            f'if application "{app}" is running then\n'
+            f'tell application "{app}"\nrepeat with w in windows\n'
+            f'close (tabs of w whose URL starts with "{base}")\n'
+            "end repeat\nend tell\nend if"
+        )
+        try:
+            subprocess.Popen(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+
+
+def serve(project_dir, *, model=None, trim_budget=None,
           host=HOST, port=PORT, open_browser=True):
     """Boot the server. Returns (url, shutdown) — call shutdown() to stop it."""
     from micro_cc.models.catalog import DEFAULT_MODEL, DEFAULT_TRIM_BUDGET
@@ -61,28 +51,19 @@ def serve(project_dir, *, model=None, dangerous=(), trim_budget=None,
         project_dir=project_dir,
         msgs=[],
         model=model or DEFAULT_MODEL,
-        dangerous=dangerous,
-        # Passed straight to claude_loop's max_tokens, where None would blow up
-        # inside token_cutter rather than falling back to anything.
+        # None would blow up inside token_cutter, so never pass it through.
         trim_budget=trim_budget or DEFAULT_TRIM_BUDGET,
+        token=secrets.token_urlsafe(16),
     )
 
-    # 0.0.0.0 is a bind address, not somewhere a browser can go — the URL we
-    # hand back is always connectable.
+    # 0.0.0.0 is a bind address, not a browsable one.
     display_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
-    url = f"http://{display_host}:{port}"
+    base = f"http://{display_host}:{port}"
+    url = f"{base}/?t={session.STATE['token']}"  # one-time link; binds the first tab that opens it
 
-    # With a fixed port, a second instance would fail to bind but uvicorn only
-    # logs it on its own thread — serve() would return happily and the browser
-    # would attach to whatever is ALREADY on 8765 (another project's session).
-    # Fail loudly here instead.
+    # Fail loudly: a second instance would otherwise attach the browser to the first one's port.
     probe = socket.socket()
-    # Without this, the probe (and uvicorn's own bind right after) refuses
-    # the port while a previous /gui's connections are still draining
-    # through TIME_WAIT/FIN_WAIT_2 — no process actually holds the port,
-    # the kernel is just being conservative. SO_REUSEADDR is what lets a
-    # fresh listener claim the port anyway; a real still-running GUI would
-    # still fail to bind because that one *is* an active LISTEN socket.
+    # SO_REUSEADDR: ignore TIME_WAIT leftovers; a live listener still fails to bind.
     probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         probe.bind((host, port))
@@ -94,18 +75,16 @@ def serve(project_dir, *, model=None, dangerous=(), trim_budget=None,
     finally:
         probe.close()
 
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning", timeout_graceful_shutdown=3)
     server = uvicorn.Server(config)
 
-    # uvicorn wants to own signal handlers; off the main thread it can't have
-    # them, and shouldn't — the TUI is still the thing the user Ctrl-Cs.
+    # uvicorn can't install signal handlers off the main thread; the TUI owns Ctrl-C.
     server.install_signal_handlers = lambda: None
 
     thread = threading.Thread(target=server.run, name="micro-cc-gui", daemon=True)
     thread.start()
 
-    # Wait for the socket to accept, so a browser never lands on a
-    # connection-refused page and callers know the port is really up.
+    # Wait for the socket so the browser never hits connection-refused.
     for _ in range(100):
         try:
             with socket.create_connection((display_host, port), timeout=0.1):
@@ -114,13 +93,7 @@ def serve(project_dir, *, model=None, dangerous=(), trim_budget=None,
             threading.Event().wait(0.05)
 
     if open_browser and _has_gui_browser():
-        # serve() runs synchronously on the Textual app's single asyncio
-        # thread (see cmd_gui) — a browser launcher that blocks (xdg-open
-        # waiting on a dead D-Bus session is the classic case, but any
-        # misbehaving registered browser has the same effect) would freeze
-        # the whole TUI: no rendering, no mouse, no drag-select, nothing,
-        # until that call returns. Fire-and-forget it on its own thread so a
-        # hang there can never take the terminal down with it.
+        # Fire-and-forget: a blocking launcher would freeze the TUI's asyncio thread.
         def _open():
             try:
                 webbrowser.open(url)
@@ -129,7 +102,9 @@ def serve(project_dir, *, model=None, dangerous=(), trim_budget=None,
         threading.Thread(target=_open, name="micro-cc-gui-open", daemon=True).start()
 
     def shutdown():
+        session.STATE["stop"].set()  # in-flight turn breaks at its next chunk and persists
         server.should_exit = True
         thread.join(timeout=5)
+        _close_tabs(base)
 
     return url, shutdown

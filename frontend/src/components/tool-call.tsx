@@ -8,7 +8,6 @@ import {
   ChevronDownIcon
 } from './icons';
 import { Markdown } from './markdown';
-import { getCopy } from '../envUtils';
 import { Tip } from './tip';
 
 // ── State indicator icon ─────────────────────────────────────────
@@ -46,6 +45,15 @@ function StateIcon({ state, approved, preliminary, Icon }: { state: string; appr
 }
 
 
+type Risk = 'low' | 'medium' | 'high';
+
+// Gate card tint per risk; text stays monochrome so the buttons never clash.
+const RISK: Record<Risk, { label: string; card: string; dot: string }> = {
+  low: { label: 'Low risk', card: 'border-emerald-500/30 bg-emerald-500/5', dot: 'bg-emerald-500' },
+  medium: { label: 'Changes things', card: 'border-amber-500/30 bg-amber-500/5', dot: 'bg-amber-500' },
+  high: { label: 'High risk', card: 'border-red-500/40 bg-red-500/5', dot: 'bg-red-500' },
+};
+
 // ─── ToolCall ────────────────────────────────────────────────────
 // Renders a single dynamic-tool part. Handles all states:
 //   input-streaming  → shimmer (args arriving, partially parsed input)
@@ -69,7 +77,6 @@ export function ToolCall({ part, onApproval }: ToolCallProps) {
   const preliminary = state === 'output-available' ? (part as any).preliminary : false;
   const output = 'output' in part ? part.output : undefined;
   const outputStr = typeof output === 'string' ? output : '';
-  const t = getCopy();
 
   // Screenshots (browser_/computer_use) come back as a path the server can
   // serve out of project_dir — worth showing inline rather than as a path
@@ -91,6 +98,12 @@ export function ToolCall({ part, onApproval }: ToolCallProps) {
 
   let inputStr = '';
   try { inputStr = input != null ? JSON.stringify(input, null, 2) : ''; } catch { }
+
+  // Plain-language line + risk from the bridge (toolMetadata); history reloads fall back to the model's description.
+  const meta = (part as any).toolMetadata as { explanation?: string; risk?: Risk; reason?: string } | undefined;
+  const description = typeof (input as any)?.description === 'string' ? (input as any).description.trim() : '';
+  const explanation = meta?.explanation || description || `Use ${label}`;
+  const risk = RISK[meta?.risk ?? 'medium'];
 
   // Partial input that failed to stringify during streaming — show skeleton
   if (state === 'input-streaming' && !inputStr) {
@@ -227,38 +240,45 @@ export function ToolCall({ part, onApproval }: ToolCallProps) {
           is the question modal, and a stray Approve/Deny under it would both
           confuse and, if clicked, answer the model with a bare boolean. */}
       {isApprovalRequested && part.approval && toolName !== 'ask_user_question_tool_' && (
-        <div className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 flex items-center gap-3">
-          <div className="flex-1 flex flex-col gap-0.5">
-            <span className="text-xs font-extralight">
-              {t.tool_approval_ask} <strong className="font-medium text-foreground">{label}</strong>?
-            </span>
-            <Tip
-              side="top"
-              text={
-                <>This tool is gated, so it pauses here instead of running. Expand the row above to see exactly what it would do. Change which tools are gated in the header, or with <code>/dangerous</code>.</>
-              }
-            >
-              <span className="text-[10px] leading-tight text-muted-foreground/70 cursor-help underline decoration-dotted underline-offset-2">
-                {t.tool_approval_hint}
-              </span>
+        <div className={cn('mt-2 rounded-xl border px-3 py-2.5 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3', risk.card)}>
+          <div className="flex-1 min-w-0 flex flex-col gap-1">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', risk.dot)} />
+              <Tip
+                side="top"
+                text={<>Claude pauses here because {label} is set to ask first. Change it in Preferences, or with <code>/dangerous</code>.</>}
+              >
+                <span className="cursor-help">{risk.label}{meta?.reason ? ` · ${meta.reason}` : ''} · {label}</span>
+              </Tip>
+            </div>
+            <span className="font-sans text-sm text-foreground break-words">{explanation}</span>
+            {inputStr && (
+              <button
+                onClick={() => setIsExpanded(v => !v)}
+                className="self-start text-[10px] text-muted-foreground/70 hover:text-foreground underline decoration-dotted underline-offset-2"
+              >
+                {isExpanded ? 'Hide details' : 'Show exactly what it will do'}
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1 self-end sm:self-auto">
+            <Tip side="top" text="Don't run it. Claude is told you said no and asks what to do instead.">
+              <button
+                onClick={() => onApproval(part.approval!.id, toolCallId, false)}
+                className="px-2.5 py-1 text-xs rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+              >
+                Don't allow
+              </button>
+            </Tip>
+            <Tip side="top" text="Run it once, now. You'll be asked again next time.">
+              <button
+                onClick={() => onApproval(part.approval!.id, toolCallId, true)}
+                className="px-2.5 py-1 text-xs rounded-lg bg-foreground text-background hover:opacity-90 transition-opacity"
+              >
+                Allow
+              </button>
             </Tip>
           </div>
-          <Tip side="top" text="Don't run it. The model is told you declined and asks what to do instead.">
-            <button
-              onClick={() => onApproval(part.approval!.id, toolCallId, false)}
-              className="px-2.5 py-1 text-xs rounded-lg text-muted-foreground hover:bg-muted transition-colors"
-            >
-              Deny
-            </button>
-          </Tip>
-          <Tip side="top" text="Run it once, now. This doesn't un-gate the tool — you'll be asked again next time.">
-            <button
-              onClick={() => onApproval(part.approval!.id, toolCallId, true)}
-              className="px-2.5 py-1 text-xs rounded-lg bg-foreground text-background hover:opacity-90 transition-opacity"
-            >
-              Approve
-            </button>
-          </Tip>
         </div>
       )}
 
@@ -269,4 +289,3 @@ export function ToolCall({ part, onApproval }: ToolCallProps) {
     </div>
   );
 }
-

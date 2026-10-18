@@ -209,8 +209,7 @@ LEGACY_CTRL_SEQUENCES = {
     "end": ("\x1b[8^",),
 }
 
-# Values here are output key-ids (lowercase pageup/pagedown — see module
-# docstring).
+# Output key ids (lowercase pageup/pagedown).
 _LEGACY_SEQUENCE_KEY_IDS = {
     "\x1bOA": "up",
     "\x1bOB": "down",
@@ -416,8 +415,7 @@ def matches_kitty_sequence(data: str, expected_codepoint: int, expected_modifier
     if normalized_codepoint == normalized_expected_codepoint:
         return True
 
-    # Use base layout key for non-Latin layouts (e.g., Cyrillic) but only for
-    # unrecognized codepoints; recognized Latin letters/symbols are authoritative.
+    # base_layout_key only for non-Latin layouts; Latin letters/symbols are authoritative.
     if parsed.base_layout_key is not None and parsed.base_layout_key == expected_codepoint:
         cp = normalized_codepoint
         is_latin_letter = 97 <= cp <= 122
@@ -495,7 +493,7 @@ def format_key_name_with_modifiers(key_name: str, modifier: int) -> str | None:
     if (effective_mod & ~supported_modifier_mask) != 0:
         return None
     mods = []
-    # Alphabetical order (alt, ctrl, shift, super) — see module docstring.
+    # Alphabetical order: alt, ctrl, shift, super.
     if effective_mod & MODIFIERS["alt"]:
         mods.append("alt")
     if effective_mod & MODIFIERS["ctrl"]:
@@ -599,8 +597,7 @@ def matches_key(data: str, key_id: str) -> bool:
                 return True
             if matches_modify_other_keys(data, CODEPOINTS["enter"], MODIFIERS["alt"]):
                 return True
-            # \x1b\r is alt+enter only in legacy mode (no Kitty protocol).
-            # When Kitty protocol is active, alt+enter comes as CSI u sequence.
+            # \x1b\r is alt+enter only without the Kitty protocol; with it, alt+enter is CSI u.
             if not _kitty_protocol_active:
                 return data == "\x1b\r"
             return False
@@ -969,7 +966,6 @@ def parse_key(data: str) -> str | None:
     if data == "\x1b[6~":
         return "pagedown"
 
-    # Raw Ctrl+letter
     if len(data) == 1:
         code = ord(data)
         if 1 <= code <= 26:

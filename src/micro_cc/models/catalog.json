@@ -498,6 +498,22 @@
         },
         "openai": "gpt-6-luna"
       }
+    },
+    "gpt-6.1-sol": {
+      "name": "GPT-6.1 Sol",
+      "context_window": 1050000,
+      "max_output": 128000,
+      "reasoning": {
+        "levels": ["minimal", "low", "medium", "high"],
+        "default": "high"
+      },
+      "ids": {
+        "litellm": {
+          "id": "openai.gpt-6.1-sol",
+          "api": "openai-responses"
+        },
+        "openai": "gpt-6.1-sol"
+      }
     }
   }
 }

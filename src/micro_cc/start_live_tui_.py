@@ -37,7 +37,7 @@ from micro_cc.tui_native.etype_handler_ import ETYPES
 from micro_cc.utils.project_files_ import list_project_files, rank_file_matches
 from micro_cc.models import catalog as model_catalog
 from micro_cc.models.providers import active_provider, any_configured
-from micro_cc.utils import settings_store_
+from micro_cc.utils import settings_store_, whats_new
 from micro_cc.utils.tokenization_simple import load_token_stats
 from micro_cc.claude_loop_ import claude_loop
 from collections import deque
@@ -112,7 +112,6 @@ class MicroTui():
     _STATUS_LINE_TIMEOUT = 0.3
     _STATUS_LINE_MAXLEN = 200
 
-    ## IMPORTANT!
     _update_available = None
     _STATIC_HINT_LINE_MAXLEN = 200
 
@@ -122,7 +121,7 @@ class MicroTui():
         self.__existing_msgs = messages
         # Backs the @ mention picker; loaded once at mount.
         self._project_files = []
-        self._session_server = None  # Unix socket for message_session_, see on_mount
+        self._session_server = None  # Unix socket for message_session_, bound in start()
         self._loop_msgs = None  # entire loop_msgs owned
         self._msg_rows: list[dict] = []  # ordered list of msg dicts (for /copy + cancel)
         # state machine
@@ -132,8 +131,6 @@ class MicroTui():
         self._gui_shutdown = None
         ## user queries queueing
         self._queue = deque()
-        ## tools gated behind an approval prompt (editable via /dangerous)
-        self._dangerous_tools = set(settings_store_.get_setting("dangerous"))
         ## "working on…" nudge (above the input) while a query is active
         self._working_timer = None
         self._spin_i = 0
@@ -166,9 +163,9 @@ class MicroTui():
         self._last_checkpoint_index = (
             _existing_checkpoint["as_of_index"] if _existing_checkpoint is not None else 0
         )
-        ## background bash processes — see on_mount/_poll_bgprocs_tick.
+        ## background bash processes; polled from start().
         self._bgproc_poll_timer = None
-        # True while bgproc_detail_picker holds the prompt slot; orthogonal to _input_mode, never blocks a turn.
+        # True while the bgproc picker holds the prompt slot; independent of _input_mode.
         self._bgproc_viewing = False
         # Seed from disk so an old memory review doesn't flash on first poll.
         _existing_review = load_memory_review_recap(self._project_dir)
@@ -184,10 +181,11 @@ class MicroTui():
         # Tracked explicitly: nothing else cancels the do_query task, so ESC wouldn't stop the stream.
         self._current_query_task: asyncio.Task | None = None
         self._update_available = None
+        self._whats_new_row = None
         self._flash_status_timer_task: asyncio.Task | None = None
         self._memory_flash_timer_task: asyncio.Task | None = None
 
-        ## restart-on-self-change: the poll flags changes; the model restarts via reload_harness_, applied at a turn boundary.
+        ## restart-on-self-change: the poll flags changes; reload_harness_ applies them at a turn boundary.
         self._reload_pending = False
         self._reload_changed: set = set()
         self._self_poll_timer: asyncio.Task | None = None
@@ -202,12 +200,12 @@ class MicroTui():
 
         self.prompt = None
 
-        # --- Phase 5: input loop -----------------------------------------
+        # --- input loop ---
         self.terminal = ProcessTerminal()
         self._stdin_buffer = StdinBuffer()
         self._stdin_reader_registered = False
 
-        # Mods load once, before the widget tree renders; 0.2.103 seam files move to legacy/ first.
+        # Mods load once, before the widget tree renders; legacy seams are swept first.
         self._legacy_moved = mods_.sweep_legacy()
         mods_.bind(self._get_ui)
         mods_.on_fail(lambda text: self._flash_status(_markup_escape(text), seconds=8))
@@ -219,8 +217,7 @@ class MicroTui():
 
     # --- widget tree -----------------------------------------------------
     def _build_widget_tree(self) -> None:
-        # banner() returns (markup, hue); the hue is kept so the hint bar
-        # can tint to match this launch's wordmark.
+        # Keep the hue so the hint bar can match the wordmark.
         _banner_markup, self._banner_hue = banner_.banner()
         # name= makes a component a mod render target; header/above_input are empty anchors for mods.
         self.banner = RichStatic(_banner_markup, name="banner")
@@ -242,8 +239,7 @@ class MicroTui():
         self.working = RichStatic("", single_line=True, name="working")
         self.ask_question_text = RichStatic("", name="question")  # genuinely multi-line — full question text wraps
         self.statusbar = RichStatic("", single_line=True, name="statusbar")
-        # Own line and timer: a memory review can overlap the compaction flash, which shares one slot.
-        # max_lines=5 bounds a long change_log; it sits in the above-prompt group.
+        # Own timer: a memory review can overlap the compaction flash, which shares one slot.
         self.memory_flash = RichStatic("", max_lines=5, name="memory_flash")
         self.static_hintbar = RichStatic("", single_line=True, name="hintbar")
         # Not single_line: one row per tracked item.
@@ -252,13 +248,11 @@ class MicroTui():
         self.top_rule = HRule()
         self.bottom_rule = HRule()
 
-        # Layout: ambient slot, divider, input, divider, then statusbar/hint/subagent/bgproc lines.
         self.bottom_bar = VStack()
         self.bottom_bar.add(self.working)
-        # self.bottom_bar.add(self.ask_question_text)
         self.bottom_bar.add(self.memory_flash)
         self.bottom_bar.add(self.above_input_panels)
-        # Live-filter panel for / and @: always mounted, renders nothing while closed, never takes focus.
+        # Live filter for / and @: always mounted, never takes focus.
         self._live_panel = OptionPanel(show=lambda _p: self.request_render(), hide=self.request_render)
         self.bottom_bar.add(self._live_panel)
         self.bottom_bar.add(self.top_rule)
@@ -272,8 +266,7 @@ class MicroTui():
         self._active_prompt_slot_component = self.prompt
 
         self.root = VStack()
-        # shrink=0 on banner/bottom_bar: otherwise the shrink pass squeezes them when the
-        # conversation is tall; only messages_scroll may give up rows.
+        # shrink=0 keeps banner/bottom_bar from being squeezed by a tall conversation.
         self.root.add(self.banner, basis="auto", shrink=0)
         self.root.add(self.header_panels, basis="auto", shrink=0)
         # Conversation (or a subagent's) on the left, optional mod pane on the right.
@@ -311,7 +304,6 @@ class MicroTui():
                     if key != self._last_render_crash:
                         self._last_render_crash = key
                         tb = traceback.format_exc()
-                        # Log the full traceback and show the innermost frame inside this package.
                         location = ""
                         pkg_dir = os.path.dirname(os.path.abspath(__file__))
                         for frame in reversed(traceback.extract_tb(e.__traceback__)):
@@ -456,7 +448,6 @@ class MicroTui():
             self.request_render()
             return
 
-        # App-level keyboard scroll bindings (ctrl+up/down/pageup/pagedown/home/end).
         _SCROLL_KEYS = {
             "ctrl+up": self.action_scroll_messages_up,
             "ctrl+down": self.action_scroll_messages_down,
@@ -472,7 +463,6 @@ class MicroTui():
         # Live filter panels (slash/at) stay unfocused; intercept their navigation keys.
         live_panel = self._live_panel if self._live_panel.is_open else None
 
-        # Cycle subagent view [boss, *tracked subagents] on shift+tab.
         if (
             key_id == "shift+tab"
             and self.get_focus() is self.prompt
@@ -485,8 +475,7 @@ class MicroTui():
             try:
                 current_idx = cycle.index(self._subagent_viewing_target)
             except ValueError:
-                # Whatever we were viewing dropped out of the tracked list
-                # (subagent finished and got pruned) — land back on boss.
+                # Viewed subagent was pruned; fall back to boss.
                 current_idx = 0
             next_target = cycle[(current_idx + 1) % len(cycle)]
             if next_target is None:
@@ -495,7 +484,7 @@ class MicroTui():
                 self.enter_subagent_view(next_target)
             return
 
-        # Two branches: once open, focus is on bgproc_detail_picker, so one "focus is prompt" gate couldn't close it.
+        # Separate branch: once open, focus is on the picker, not the prompt.
         if key_id == "ctrl+b" and self._bgproc_viewing:
             self._hide_bgproc_detail()
             return
@@ -592,9 +581,9 @@ class MicroTui():
         self.set_focus(self.prompt)
         self._refresh_status()
 
-    def _on_dangerous_confirmed(self, checked: list) -> None:
-        self._dangerous_tools = {it.value for it in checked}
-        settings_store_.edit_setting("dangerous", list(self._dangerous_tools))
+    def _ungate_tool(self, name: str) -> None:
+        """'Yes, always' on an approval; claude_loop reads settings live, so it applies this turn."""
+        settings_store_.set_gated(settings_store_.gated_tools() - {name})
         self._refresh_status()
 
     def _on_slash_picked(self, item: PanelItem) -> None:
@@ -706,7 +695,6 @@ class MicroTui():
         self._esc_clear_armed = False
 
     # ---------------------------------------------------- restart on self-change
-    # Detect source changes and relaunch; supervisor catches breaking edits.
 
     def _flash_memory_review(self, text: str, seconds: float = 6.0) -> None:
         """Flash memory review text with separate timer to avoid collision with status flashes."""
@@ -838,7 +826,11 @@ class MicroTui():
     async def _resume_after_gui(self) -> None:
         """Reload from disk, then drain queued items (must be sequenced)."""
         await self._reload_messages_from_disk()
-        await self._drain_next_queued()
+        from micro_cc.webui import session as gui_session
+        for content in gui_session.drain_incoming():  # unclaimed wakeups go back to the terminal
+            await self._inject_incoming_turn(content)
+        if self._input_mode != "query_active":  # a drained wakeup already started a turn; its finally drains the rest
+            await self._drain_next_queued()
 
     # ============================================= loading /reloadfing messages
 
@@ -944,7 +936,6 @@ class MicroTui():
             self.set_focus(self.prompt)
             return
 
-        # /keys — same bail-out shape as /login above, no picker to close
         if self._input_mode == "keys":
             self._keys_stage = None
             self._keys_pending_name = None
@@ -954,7 +945,7 @@ class MicroTui():
             self.set_focus(self.prompt)
             return
 
-        # Any open panel cancels itself and runs its own on_cancel (ask-user and approval wake their waiter there).
+        # Open panels cancel themselves; their on_cancel wakes any waiter.
         for panel in (self._option_panel, self._live_panel):
             if panel.is_open:
                 panel.cancel()
@@ -990,8 +981,7 @@ class MicroTui():
                 self._esc_clear_timer_task = self._call_later(self._ESC_CLEAR_TIMEOUT, self._disarm_esc_clear)
             return
 
-        # Nothing else cancels the query task; cancelling stops the claude_loop iteration.
-        # The UI cleanup below is synchronous for instant feedback.
+        # Cancel the query task; the UI cleanup below is sync for instant feedback.
         if self._current_query_task is not None and not self._current_query_task.done():
             self._current_query_task.cancel()
             self_reload_.cancel_request()  # an interrupt withdraws a queued reload; the model can ask again
@@ -1002,7 +992,6 @@ class MicroTui():
         self._pending_result = None
         self._input_mode = "idle"
         if self._loop_msgs is not None:
-            # Capture partial streaming text from UI into API msgs
             if self._streaming is not None:
                 partial = self._streaming.get_content().strip()
                 # A tool turn already carries its text in the flushed assistant message.
@@ -1015,7 +1004,6 @@ class MicroTui():
         self.message_list.add(MessageRow(err))
         self._scroll_to_bottom()
 
-        ## clean queue
         for _, row, msg, _ in self._queue:
             self.message_list.remove(row)
             if msg in self._msg_rows:
@@ -1065,8 +1053,12 @@ class MicroTui():
         if not query:
             return
 
-        # Prefix commands (e.g. "/setup", "/new-skill do X") — take free
-        # text after the command name.
+        if self._whats_new_row is not None:
+            self.message_list.remove(self._whats_new_row)
+            self._whats_new_row = None
+            whats_new.mark_seen()
+
+        # Prefix commands take free text after the name, e.g. "/new-skill do X".
         lower_q = query.lower()
         mod_cmd = None if literal or skip_mods else mods_.match_command(query)
         matched_prefix = None if literal or mod_cmd else next(
@@ -1175,7 +1167,7 @@ class MicroTui():
         # Re-claim before any await so a mid-mount submit can't race a second worker.
         self._input_mode = "query_active"
         next_q, next_row, next_msg, next_image = self._queue.popleft()
-        # Queued row sits above later rows; remove and re-mount at the end (may already be gone).
+        # Re-mount the queued row at the end; it may already be gone.
         self.message_list.remove(next_row)
         if next_msg in self._msg_rows:
             self._msg_rows.remove(next_msg)
@@ -1199,7 +1191,6 @@ class MicroTui():
                 project_dir=self._project_dir,
                 model=self._current_model,
                 max_tokens=self._trim_budget,
-                dangerous_tools=self._dangerous_tools,
                 surface="tui",
                 encoded_image=encoded_image,
             ):
@@ -1232,9 +1223,12 @@ class MicroTui():
     # ============================================= subagents
 
     async def _inject_incoming_turn(self, content: str) -> None:
-        """Start a turn for `content` now if idle, else queue it.
-        "gui" counts as busy: the browser is the sole writer to messages.jsonl then."""
-        if self._input_mode in ("query_active", "gui"):
+        """Start a turn now if idle, queue if busy, or hand to the browser during /gui."""
+        if self._input_mode == "gui":
+            from micro_cc.webui import session as gui_session
+            gui_session.push_incoming(content)
+            return
+        if self._input_mode == "query_active":
             msg = {"type": "user_queued", "content": content}
             row = await self._mount_row(msg)
             self._queue.append((content, row, msg, None))
@@ -1271,8 +1265,7 @@ class MicroTui():
         return items
 
     def _show_bgproc_detail(self) -> None:
-        """ctrl+b: swap the prompt slot for a read-only list of background processes and watches.
-        Leaves _input_mode alone; _bgproc_viewing is its own flag."""
+        """ctrl+b: show background processes and watches in the prompt slot; leaves _input_mode alone."""
         from micro_cc.tools.bash_tool import list_background_processes
         from micro_cc.tools.monitor_watch_ import list_watches
 
@@ -1320,8 +1313,7 @@ class MicroTui():
         self.request_render()
 
     def exit_subagent_view(self) -> None:
-        """Back to the boss conversation; reload from disk unless a turn is active.
-        Skipped mid-turn: message_list is fresher than disk and a reload reorders the streaming row."""
+        """Back to boss; reload from disk unless mid-turn, where the streaming row would reorder."""
         self._subagent_viewing_target = None
         self.main_split.left = self.messages_scroll
         self.messages_scroll.scroll_to_end()
@@ -1330,8 +1322,7 @@ class MicroTui():
         if not turn_active:
             self._safe_task(self._reload_messages_from_disk(), "reload after subagent view exit")
 
-    # Status-agnostic on purpose: /graph and the graph-orchestration skill hold the mechanism;
-    # this only re-orients a model that may have lost that context.
+    # Status-agnostic: /graph and the graph-orchestration skill hold the mechanism.
     _SUBAGENT_WAKEUP_REMINDER = (
         "You have subagents running — spawned via bash_ + microcc-headless. "
         "Call monitor_(action='check', targets=[project_dirs...]) for a full "
@@ -1362,7 +1353,7 @@ class MicroTui():
             self._project_dir, self._on_session_message
         )
 
-        # Watch events push through this callback; registered here since only an interactive loop can receive them.
+        # Watch events push via this callback; only an interactive loop can receive them.
         from micro_cc.tools import monitor_watch_ as _monitor_watch_
 
         _monitor_watch_.set_wake_callback(self._on_monitor_event)
@@ -1402,15 +1393,19 @@ class MicroTui():
         if _stashed:
             self.prompt.insert(_stashed)
 
-        # Status bar
         self._refresh_status()
         self._static_hint_text()
 
-        # Load history — mount each as a MessageRow component
         history_msgs = history_mount_(self.__existing_msgs)
         for m in history_msgs:
             self.message_list.add(MessageRow(m))
         self._msg_rows = history_msgs
+        note = whats_new.pending()
+        if note:
+            acc = theme_store_.get("accent")
+            body = "\n".join(f"  [dim]·[/dim] {_markup_escape(l)}" for l in note["lines"])
+            self._whats_new_row = RichStatic(f"[bold {acc}]✦ micro-cc {note['version']} just landed ✦[/bold {acc}] [dim]what's new[/dim]\n{body}")
+            self.message_list.add(self._whats_new_row)
         self.messages_scroll.scroll_to_end()
 
         cut = cut_short_calls(self.__existing_msgs)
@@ -1422,7 +1417,6 @@ class MicroTui():
                 seconds=8,
             ))
 
-        # Surface mod load errors and the legacy sweep once.
         for _s in model_catalog.CATALOG_STATUS["skipped"]:
             mods_.record_error("catalog.json", _s)
         _uerrs = mods_.errors()
@@ -1435,17 +1429,14 @@ class MicroTui():
                 f"[{_warn}]{_note}[/{_warn}]", seconds=8,
             ))
 
-        # Force focus onto PromptInput so Enter is routed to
-        # _on_prompt_submitted from the first frame.
+        # Focus the prompt before the first frame so Enter reaches _on_prompt_submitted.
         self.set_focus(self.prompt)
 
-        # Screen is up — kick the update check off in the background so it
-        # never delays first paint.
+        # Background update check; must not delay first paint.
         self._safe_task(check_and_update(self, __version__), "update check")
         self._safe_task(_background_terminal_setup_check(self), "terminal setup check")
 
-        # Hand over the terminal (raw mode, paste, Kitty, alt-screen, stdin reader) only on a tty;
-        # piped stdin still renders and handles external wakeups.
+        # Take the terminal only on a tty; piped stdin still renders and takes wakeups.
         if sys.stdin.isatty():
             sys.stdout.write(ENTER_ALT_SCREEN)
             sys.stdout.flush()

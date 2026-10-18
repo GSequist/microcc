@@ -18,12 +18,9 @@ INTERNAL_PARAMS = ["project_dir", "model"]
 
 def python_type_to_json_schema(py_type) -> Dict[str, Any]:
     """Convert Python type annotation to JSON Schema."""
-
-    # Handle None/NoneType
     if py_type is None or py_type is type(None):
         return {"type": "null"}
 
-    # Handle basic types
     type_map = {
         str: {"type": "string"},
         int: {"type": "integer"},
@@ -39,9 +36,7 @@ def python_type_to_json_schema(py_type) -> Dict[str, Any]:
 
     if is_typeddict(py_type):
         hints = get_type_hints(py_type)
-        # __required_keys__ reflects each field's own NotRequired[...]
-        # marker; falls back to "everything required" for a TypedDict that
-        # doesn't set it (shouldn't happen on 3.12+, but cheap to guard).
+        # NotRequired is honoured via __required_keys__; default to all-required.
         required_keys = getattr(py_type, "__required_keys__", set(hints))
         properties = {}
         required = []
@@ -58,35 +53,27 @@ def python_type_to_json_schema(py_type) -> Dict[str, Any]:
     origin = get_origin(py_type)
     args = get_args(py_type)
 
-    # Handle Literal["a", "b", "c"] -> enum
     if origin is Literal:
         return {"type": "string", "enum": list(args)}
 
-    # Handle Optional[T] which is Union[T, None]
     if origin is Union:
-        # Filter out NoneType
         non_none_args = [a for a in args if a is not type(None)]
         if len(non_none_args) == 1:
-            # Optional[T] -> just return T's schema
             return python_type_to_json_schema(non_none_args[0])
         else:
-            # Union of multiple types
             return {"oneOf": [python_type_to_json_schema(a) for a in non_none_args]}
 
-    # Handle list[T]
     if origin is list:
         if args:
             return {"type": "array", "items": python_type_to_json_schema(args[0])}
         return {"type": "array"}
 
-    # Handle dict[K, V]
     if origin is dict:
         schema = {"type": "object"}
         if len(args) >= 2:
             schema["additionalProperties"] = python_type_to_json_schema(args[1])
         return schema
 
-    # Handle tuple
     if origin is tuple:
         if args:
             return {
@@ -95,23 +82,16 @@ def python_type_to_json_schema(py_type) -> Dict[str, Any]:
             }
         return {"type": "array"}
 
-    # Fallback for unknown types
     return {"type": "string"}
 
 
 def parse_google_docstring(docstring: str) -> tuple[str, Dict[str, str]]:
-    """
-    Parse Google-style docstring.
-
-    Returns:
-        (description, {param_name: param_description})
-    """
+    """Split a Google-style docstring into (description, {param: description})."""
     if not docstring:
         return "", {}
 
     lines = docstring.split("\n")
 
-    # Find Args: section
     description_lines = []
     param_descriptions = {}
 
@@ -139,7 +119,6 @@ def parse_google_docstring(docstring: str) -> tuple[str, Dict[str, str]]:
             "Note:",
             "Notes:",
         ):
-            # Save last param if any
             if current_param and current_desc_lines:
                 param_descriptions[current_param] = " ".join(current_desc_lines).strip()
             in_args_section = False
@@ -152,14 +131,11 @@ def parse_google_docstring(docstring: str) -> tuple[str, Dict[str, str]]:
             if not stripped:
                 continue
 
-            # Calculate indentation
             indent = len(line) - len(line.lstrip())
 
-            # Check if this is a new parameter (name: description pattern)
             param_match = re.match(r"^(\w+)\s*(?:\([^)]*\))?\s*:\s*(.*)$", stripped)
 
             if param_match and (base_indent is None or indent == base_indent):
-                # Save previous param
                 if current_param and current_desc_lines:
                     param_descriptions[current_param] = " ".join(
                         current_desc_lines
@@ -172,30 +148,22 @@ def parse_google_docstring(docstring: str) -> tuple[str, Dict[str, str]]:
                 if base_indent is None:
                     base_indent = indent
             elif current_param:
-                # Continuation of current param description
                 current_desc_lines.append(stripped)
 
         elif not in_returns_section and not in_args_section:
-            # Part of main description
             description_lines.append(stripped)
 
     # Save last param
     if current_param and current_desc_lines:
         param_descriptions[current_param] = " ".join(current_desc_lines).strip()
 
-    # Clean up description - join and remove empty lines at start/end
     description = " ".join(line for line in description_lines if line).strip()
 
     return description, param_descriptions
 
 
 def parse_legacy_docstring(docstring: str) -> tuple[str, Dict[str, Any]]:
-    """
-    Parse legacy #parameters: format for backward compatibility.
-
-    Returns:
-        (description, {param_name: description_or_schema})
-    """
+    """Split the legacy `#parameters:` docstring format into (description, {param: description_or_schema})."""
     if not docstring or "#parameters:" not in docstring:
         return docstring.strip() if docstring else "", {}
 
@@ -213,10 +181,8 @@ def parse_legacy_docstring(docstring: str) -> tuple[str, Dict[str, Any]]:
             continue
 
         if ":" in line and not line.startswith(" "):
-            # Save previous param
             if current_param and current_content:
                 content = " ".join(current_content).strip()
-                # Try parsing as JSON schema
                 if content.startswith("{") and content.endswith("}"):
                     try:
                         param_data[current_param] = json.loads(content)
@@ -230,7 +196,6 @@ def parse_legacy_docstring(docstring: str) -> tuple[str, Dict[str, Any]]:
         elif current_param:
             current_content.append(line)
 
-    # Save last param
     if current_param and current_content:
         content = " ".join(current_content).strip()
         if content.startswith("{") and content.endswith("}"):
@@ -245,16 +210,7 @@ def parse_legacy_docstring(docstring: str) -> tuple[str, Dict[str, Any]]:
 
 
 def function_to_schema(func: callable) -> Dict[str, Any]:
-    """
-    Convert a Python function to Anthropic tool schema.
-
-    Supports:
-    - Google-style docstrings with Args: section
-    - Legacy #parameters: format (backward compatible)
-    - Type hints for automatic type inference
-    - Optional parameters via = None or Optional[T]
-    """
-    # Handle partial functions
+    """Convert a Python function to an Anthropic tool schema (Google Args section or legacy #parameters:)."""
     if hasattr(func, "func"):
         actual_func = func.func
         func_name = actual_func.__name__
@@ -265,19 +221,15 @@ def function_to_schema(func: callable) -> Dict[str, Any]:
     docstring = inspect.getdoc(actual_func) or ""
     sig = inspect.signature(actual_func)
 
-    # Try to get type hints (may fail for some edge cases)
     try:
         type_hints = get_type_hints(actual_func)
     except Exception:
         type_hints = {}
 
-    # Detect format and parse
     if "#parameters:" in docstring:
-        # Legacy format
         description, param_data = parse_legacy_docstring(docstring)
         use_legacy = True
     else:
-        # Google-style
         description, param_data = parse_google_docstring(docstring)
         use_legacy = False
 
@@ -285,28 +237,22 @@ def function_to_schema(func: callable) -> Dict[str, Any]:
     required_params = []
 
     for param_name, param in sig.parameters.items():
-        # Skip internal params
         if param_name in INTERNAL_PARAMS:
             continue
 
-        # Skip *args and **kwargs
         if param.kind in (
             inspect.Parameter.VAR_POSITIONAL,
             inspect.Parameter.VAR_KEYWORD,
         ):
             continue
 
-        # Get type from hints
         py_type = type_hints.get(param_name)
 
-        # Build property schema
         if use_legacy and param_name in param_data:
-            # Legacy: might be full schema or just description
             data = param_data[param_name]
             if isinstance(data, dict):
                 properties[param_name] = data
             else:
-                # Just a description, infer type
                 if py_type:
                     prop = python_type_to_json_schema(py_type)
                 else:
@@ -314,7 +260,6 @@ def function_to_schema(func: callable) -> Dict[str, Any]:
                 prop["description"] = data
                 properties[param_name] = prop
         else:
-            # Google-style or no docs
             if py_type:
                 prop = python_type_to_json_schema(py_type)
             else:
@@ -325,9 +270,7 @@ def function_to_schema(func: callable) -> Dict[str, Any]:
 
             properties[param_name] = prop
 
-        # Determine if required
         if param.default == inspect.Parameter.empty:
-            # Check if Optional type (has None in union)
             if py_type:
                 origin = get_origin(py_type)
                 args = get_args(py_type)

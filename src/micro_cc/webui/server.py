@@ -1,21 +1,17 @@
-"""FastAPI surface for the GUI. Chat routes, minus auth.
+"""FastAPI surface for the GUI: one project, one browser tab (cookie + tab id), the process is the session."""
 
-Everything here is bound to 127.0.0.1 and scoped to the single project_dir the
-TUI handed over at /gui time, so there is no user id, no conversation id and no
-tenancy — the process IS the session.
-"""
-
+import hmac
 import os
 import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from micro_cc.claude_loop_ import claude_loop, GATEABLE_TOOLS
 from micro_cc.models import catalog as model_catalog
-from micro_cc.utils import command_registry, hidden_prompts, hints, settings_store_
+from micro_cc.utils import command_registry, hidden_prompts, hints, settings_store_, whats_new
 from micro_cc.utils.msg_store_ import (
     store_msgs,
     erase_msgs,
@@ -27,31 +23,53 @@ from micro_cc.utils.msg_store_ import (
 from micro_cc.utils.tokenization_simple import erase_token_stats
 from micro_cc.utils.project_files_ import list_project_files
 from micro_cc.cache import state_store
-from micro_cc.webui import bridge, history, session
+from micro_cc.webui import bridge, history, live, session
 
 DIST = Path(__file__).parent / "dist"
 
 UPLOAD_SUBDIR = "uploads"
 
-# Palette contents come from command_registry.py — the single source of
-# truth also read by the TUI's autocomplete (start_live_.py) — filtered to
-# drop TUI-only commands (gui=False: /exit, /update, /gui, /graph) and
-# stripped of the gui flag itself, which the frontend has no use for.
+# Palette from command_registry (shared with the TUI); drops gui=False commands.
 COMMANDS = [
     {k: v for k, v in c.items() if k != "gui"}
     for c in command_registry.COMMANDS
     if c.get("gui", True)
 ]
 
-# Hiding a command from the palette above doesn't stop someone typing it
-# directly into the chat box — /api/chat's hidden_prompts.PROMPT_BODIES
-# lookup is flag-blind, so enforce gui=False there too (see /graph's entry
-# in command_registry.py for why it's excluded).
+# Typed-in prompts bypass the palette filter, so enforce gui=False in /api/chat too.
 _GUI_ALLOWED_PROMPT_COMMANDS = {c["name"] for c in COMMANDS if c.get("kind") == "prompt"}
 
 REWIND_LIMIT = 40
 
 app = FastAPI(title="micro-cc")
+
+
+def _cookie_name(request: Request) -> str:
+    return f"mcc_{request.url.port}"  # cookies ignore ports; keep two GUIs apart
+
+
+def _authed(request: Request) -> bool:
+    cookie = session.STATE["cookie"]
+    return cookie is None or hmac.compare_digest(request.cookies.get(_cookie_name(request), ""), cookie)
+
+
+@app.middleware("http")
+async def _gate(request: Request, call_next):
+    """/api needs the session cookie; the first tab id seen owns the session."""
+    if request.url.path.startswith("/api/") and session.STATE["cookie"] is not None:
+        if not _authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=403)
+        tab = request.headers.get("x-tab")
+        if tab:
+            owner = session.STATE["owner"] = session.STATE["owner"] or tab
+            if tab != owner:
+                return JSONResponse({"error": "session is open in another tab"}, status_code=409)
+    return await call_next(request)
+
+
+@app.get("/api/ping")
+async def ping():
+    return {"ok": True}
 
 
 # ── helpers ────────────────────────────────────────────────────────
@@ -61,12 +79,7 @@ def _project_dir() -> str:
 
 
 def _safe_path(rel: str) -> Path | None:
-    """Resolve `rel` inside project_dir, or None if it escapes.
-
-    The server is bound to loopback, but "only I can reach it" is not the same
-    as "any path is fine" — a stray ../ in a rendered tool output would
-    otherwise turn an <img> into an arbitrary file read.
-    """
+    """Resolve `rel` inside project_dir, or None if it escapes (a ../ in rendered output must not read arbitrary files)."""
     root = Path(_project_dir()).resolve()
     target = (root / rel).resolve() if not os.path.isabs(rel) else Path(rel).resolve()
     try:
@@ -92,8 +105,7 @@ def _ends_with_user_turn(messages: list) -> bool:
 
 
 def _sse_response(gen):
-    # These headers are not decoration: without x-vercel-ai-ui-message-stream
-    # the SDK won't parse the body as a UI message stream at all.
+    # Required: without x-vercel-ai-ui-message-stream the SDK won't parse the stream.
     return StreamingResponse(
         gen,
         media_type="text/event-stream",
@@ -107,18 +119,14 @@ def _sse_response(gen):
 
 
 async def _empty_stream():
-    """A well-formed but empty assistant turn. Used when a POST arrives with
-    nothing to do — e.g. the SDK auto-sending after a deny that /api/chat/deny
-    has already fully resolved."""
+    """Well-formed empty assistant turn, for a POST with nothing to do (e.g. an auto-send after a deny)."""
     yield bridge.sse({"type": "start", "messageId": f"msg-{uuid.uuid4().hex[:12]}"})
     yield bridge.sse({"type": "finish", "finishReason": "stop"})
     yield bridge.SSE_DONE
 
 
 async def _refusal_stream(text: str):
-    """Same well-formed shape as _empty_stream, but with a visible reason —
-    for a command this surface can't safely run (see _GUI_ALLOWED_PROMPT_COMMANDS)
-    instead of silently no-op'ing or spending a model call on it."""
+    """Same shape as _empty_stream, with a visible reason for a command this surface can't run."""
     yield bridge.sse({"type": "start", "messageId": f"msg-{uuid.uuid4().hex[:12]}"})
     yield bridge.sse({"type": "error", "errorText": text})
     yield bridge.sse({"type": "finish", "finishReason": "stop"})
@@ -140,36 +148,54 @@ async def get_session():
             "models": model_catalog.MODEL_OPTIONS,
             "dangerous": settings.get("dangerous", []),
             "gateable": GATEABLE_TOOLS,
+            "presets": [{"key": k, "label": p["label"], "description": p["description"]}
+                        for k, p in settings_store_.GATE_PRESETS.items()],
+            "preset": settings_store_.current_preset(),
             "tokens_budget": settings.get("tokens_budget", model_catalog.DEFAULT_TRIM_BUDGET),
         },
         "commands": COMMANDS,
-        # Same registry the TUI's hint bar rotates — utils/hints.py.
+        # Same registry the TUI hint bar rotates.
         "hints": hints.for_surface(hints.GUI),
+        "whats_new": whats_new.pending(),
     }
+
+
+@app.post("/api/whats-new/seen")
+async def post_whats_new_seen():
+    whats_new.mark_seen()
+    return {"ok": True}
 
 
 @app.get("/api/background-status")
 async def get_background_status():
-    """Background `cmd &` processes bash_ has left running — same self-scoped
-    dict claude_loop_ feeds the model via <process-status>, exposed here for
-    the header pill (see chat-header.tsx). Polled on an interval, so this is
-    a plain in-memory dict lookup — no subprocess, no disk I/O."""
-    from micro_cc.tools.bash_tool import list_background_processes
+    return {"processes": live.bgprocs(_project_dir())}
 
-    return {"processes": list_background_processes()}
+
+@app.get("/api/subagents")
+async def get_subagents():
+    return {"subagents": live.subagents(_project_dir())}
+
+
+@app.get("/api/incoming")
+async def get_incoming(claim: bool = False):
+    """Peek at the head of server-initiated turns; /api/chat consumes it, so a dropped send stays queued."""
+    queue = session.STATE["incoming"]
+    if claim and queue and session.STATE["pending"] is None and not session.STATE["lock"].locked():
+        return {"id": queue[0]["id"], "content": queue[0]["content"], "queued": len(queue)}
+    return {"id": None, "content": None, "queued": len(queue)}
 
 
 @app.post("/api/settings")
 async def post_settings(request: Request):
-    """Writes through to ~/.micro-cc/settings.json — the same file the TUI's
-    pickers edit — so a change here survives the GUI closing."""
+    """Write through to ~/.micro-cc/settings.json, the file the TUI pickers edit."""
     data = await request.json()
     if "model" in data:
         settings_store_.edit_setting("model", data["model"])
         session.STATE["model"] = data["model"]
     if "dangerous" in data:
-        settings_store_.edit_setting("dangerous", data["dangerous"])
-        session.STATE["dangerous"] = set(data["dangerous"])
+        settings_store_.set_gated(data["dangerous"])
+    if data.get("preset") in settings_store_.GATE_PRESETS:
+        settings_store_.apply_preset(data["preset"])
     return {"ok": True}
 
 
@@ -225,9 +251,7 @@ async def get_file(path: str):
 
 @app.post("/api/upload")
 async def post_upload(file: UploadFile = File(...)):
-    """Attachments become real files under {project_dir}/uploads/ — the model
-    reads them with its ordinary read_ tool (multimodal by extension, see
-    file_tools_.py), so there's nothing to presign, cache or expire."""
+    """Save attachments under {project_dir}/uploads/; the model reads them with its ordinary read_ tool."""
     dest_dir = Path(_project_dir()) / UPLOAD_SUBDIR
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -268,99 +292,86 @@ async def post_command(request: Request):
 
 # ── chat ───────────────────────────────────────────────────────────
 
+def _persist_partial(project_dir: str) -> None:
+    """Save the user turn and any streamed-but-unsaved reply, like the TUI's cancel path."""
+    msgs, partial = session.STATE["msgs"], "".join(session.STATE["partial"]).strip()
+    if partial and msgs[-1:] and msgs[-1].get("role") != "assistant":
+        msgs.append({"role": "assistant", "content": partial})
+    session.STATE["partial"] = []
+    store_msgs(project_dir, msgs)
+
+
 @app.post("/api/chat")
 async def post_chat(request: Request):
     data = await request.json()
     messages = data.get("messages", [])
     project_dir = _project_dir()
+    incoming_id = data.get("incoming_id")
 
-    # A pending approval means claude_loop is parked on a `yield` inside a
-    # generator we still hold. This POST is the resume, not a new turn — the
-    # SDK sends it with no fresh user message, driven by sendAutomaticallyWhen.
-    resuming = session.STATE["pending"] is not None
+    query = _latest_user_text(messages)
+    head, _, rest = query.strip().partition(" ")
+    if head in hidden_prompts.PROMPT_BODIES:
+        if head not in _GUI_ALLOWED_PROMPT_COMMANDS:
+            return _sse_response(_refusal_stream(f"{head} is TUI-only — run it from the terminal instead."))
+        query = hidden_prompts.build(head, rest.strip())  # same hidden turns the TUI pushes
 
-    if not resuming and not _ends_with_user_turn(messages):
-        return _sse_response(_empty_stream())
-
-    session.STATE["stop"].clear()
-    msg_id = f"msg-{uuid.uuid4().hex[:12]}"
-
-    if resuming:
-        # An approval resumes with True. A question resumes with the
-        # {header: answer} dict /api/chat/answer stashed — passing True there
-        # would hand the model a boolean as the answer to every question.
-        if session.STATE["pending_kind"] == "question":
-            session.resolve_pending(session.STATE["answers"])
-        else:
-            session.resolve_pending(True)
-        session.clear_pending()
-        gen = session.STATE["gen"]
-    else:
-        query = _latest_user_text(messages)
-
-        # /setup & friends: same hidden turn the TUI pushes, from the same
-        # source (utils/hidden_prompts.py).
-        head, _, rest = query.strip().partition(" ")
-        if head in hidden_prompts.PROMPT_BODIES:
-            if head not in _GUI_ALLOWED_PROMPT_COMMANDS:
-                return _sse_response(_refusal_stream(
-                    f"{head} is TUI-only — run it from the terminal instead. "
-                    "(Subagent monitoring/wakeup only reach the terminal app, "
-                    "not this browser session — see /graph's entry in "
-                    "command_registry.py for why.)"
-                ))
-            query = hidden_prompts.build(head, rest.strip())
-
-        # Attachments are already on disk; name them so the model knows to look.
-        files = data.get("files") or []
-        if files:
-            listed = "\n".join(f"- {f}" for f in files)
-            query = f"Files attached to this message (relative to the project directory):\n{listed}\n\n{query}"
-
-        msgs = load_msgs(project_dir)
-        session.STATE["msgs"] = msgs
-        gen = claude_loop(
-            query=query,
-            msgs=msgs,
-            project_dir=project_dir,
-            model=settings_store_.get_setting("model") or model_catalog.DEFAULT_MODEL,
-            max_tokens=session.STATE["trim_budget"],
-            dangerous_tools=set(settings_store_.get_setting("dangerous") or []),
-            surface="gui",
-        )
-        session.STATE["gen"] = gen
+    files = data.get("files") or []  # attachments are on disk; name them so the model looks
+    if files:
+        listed = "\n".join(f"- {f}" for f in files)
+        query = f"Files attached to this message (relative to the project directory):\n{listed}\n\n{query}"
 
     async def run():
-        # One turn at a time — a second POST waits rather than interleaving two
-        # writers into the same msgs list.
+        # Everything touching session state happens under the lock: one turn at a time.
         async with session.STATE["lock"]:
+            # Pending approval: claude_loop is parked on a yield; this POST resumes it, no new turn.
+            resuming = session.STATE["pending"] is not None
+            if not resuming and (
+                not _ends_with_user_turn(messages)
+                or (incoming_id is not None and session.take_incoming(incoming_id) is None)  # another tab took it
+            ):
+                async for chunk in _empty_stream():
+                    yield chunk
+                return
+
+            session.STATE["stop"].clear()
+            session.STATE["partial"] = []
+            if resuming:
+                # Approvals resume with a bool (False if /deny stashed one); questions with the answers dict.
+                kind = session.STATE["pending_kind"]
+                session.resolve_pending(session.STATE["answers"] if kind == "question" else not session.STATE["denied"])
+                session.clear_pending()
+                gen = session.STATE["gen"]
+            else:
+                msgs = session.STATE["msgs"] = load_msgs(project_dir)
+                gen = session.STATE["gen"] = claude_loop(
+                    query=query,
+                    msgs=msgs,
+                    project_dir=project_dir,
+                    model=settings_store_.get_setting("model") or model_catalog.DEFAULT_MODEL,
+                    max_tokens=session.STATE["trim_budget"],
+                    surface="gui",
+                )
+
             try:
-                async for chunk in bridge.stream(gen, msg_id, project_dir):
+                async for chunk in bridge.stream(gen, f"msg-{uuid.uuid4().hex[:12]}", project_dir):
                     yield chunk
                     if session.STATE["stop"].is_set():
                         break
             finally:
-                # Only tear the generator down if it isn't parked on an
-                # approval — that's the one case where it must outlive the
-                # response.
-                if session.STATE["pending"] is None:
+                if session.STATE["pending"] is None:  # keep the generator alive while parked on an approval
+                    _persist_partial(project_dir)  # sync: durable even if the awaits below are cancelled
                     session.STATE["gen"] = None
-                    await gen.aclose()
-                    store_msgs(project_dir, session.STATE["msgs"])
+                    try:
+                        await gen.aclose()
+                    finally:
+                        store_msgs(project_dir, session.STATE["msgs"])
 
     return _sse_response(run())
 
 
 @app.post("/api/chat/answer")
 async def post_answer(request: Request):
-    """Stash the answers to an ask_user_question_tool_ prompt.
-
-    Doesn't resume the loop itself — the browser follows this with the SDK's
-    approval response, which triggers the /api/chat re-POST that streams the
-    rest of the turn. Keeping the two separate means the answers are already
-    in place by the time the resume lands, whatever order the browser fires
-    them in.
-    """
+    """Stash question answers; the resume re-POST to /api/chat comes separately, so order doesn't matter."""
     if session.STATE["pending_kind"] != "question":
         return {"ok": False, "reason": "no question pending"}
 
@@ -378,30 +389,10 @@ async def post_stop():
 
 @app.post("/api/chat/deny")
 async def post_deny():
-    """Resolve the pending approval as denied and drive the loop to its end.
-
-    claude_loop answers a denial by yielding `cancelled` and returning, so this
-    finishes in a couple of steps — no need to make the browser hold a stream
-    open for it.
-    """
-    if session.STATE["pending"] is None:
-        return {"ok": False, "reason": "nothing pending"}
-
-    session.resolve_pending(False)
-    gen = session.STATE["gen"]
-    session.clear_pending()
-    session.STATE["gen"] = None
-
-    if gen is not None:
-        try:
-            async for _ in gen:
-                pass
-        except Exception:
-            pass
-        finally:
-            await gen.aclose()
-
-    store_msgs(_project_dir(), session.STATE["msgs"])
+    """Stash a deny; the resume re-POST to /api/chat hands it to the parked loop, which keeps going."""
+    if session.STATE["pending_kind"] != "approval":
+        return {"ok": False, "reason": "no approval pending"}
+    session.STATE["denied"] = True
     return {"ok": True}
 
 
@@ -413,7 +404,16 @@ if (DIST / "assets").is_dir():
 
 
 @app.get("/")
-async def index():
+async def index(request: Request, t: str = ""):
+    """The /gui link carries a one-time token; swap it for the cookie and drop it from the URL."""
+    token = session.STATE["token"]
+    if token and hmac.compare_digest(t, token):
+        session.STATE["token"] = None
+        resp = RedirectResponse("/", status_code=303)
+        resp.set_cookie(_cookie_name(request), session.STATE["cookie"], httponly=True, samesite="strict")
+        return resp
+    if not _authed(request):
+        return HTMLResponse("This link has expired. Run /gui in the terminal for a new one.", status_code=403)
     idx = DIST / "index.html"
     if not idx.is_file():
         return JSONResponse(

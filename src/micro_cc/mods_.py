@@ -19,10 +19,10 @@ from micro_cc.tui_native.keys_ import matches_key, parse_key, parse_key_id
 API_VERSION = 2
 EVENTS = ("render", "glyphs", "command", "key", "pane", "pane_key", "pane_click", "agent")
 PANE_EVENTS = ("pane", "pane_key", "pane_click")
-# Coarse loop events mods may observe; per-token deltas are left out to keep streaming cheap.
+# Coarse loop events only; per-token deltas excluded to keep streaming cheap.
 AGENT_TYPES = ("tool_call", "tool_result", "final_text", "done", "error", "turn_boundary",
                "approval_request", "question_asked", "cache_invalidate")
-LEGACY = ("commands", "renderers", "panels", "keys.json", "glyphs.json", "banner.txt")  # 0.2.103 seams
+LEGACY = ("commands", "renderers", "panels", "keys.json", "glyphs.json", "banner.txt")
 SLOW_S = 0.1  # sync handler self-time that disables its mod after it returns
 HANG_S = 0.5  # sync handler self-time at which the watchdog interrupts it
 LOAD_HANG_S = 5.0  # import + register(on) of one mod
@@ -412,7 +412,7 @@ def render_pane(name: str, width: int, height: int, focused: bool) -> list[str] 
 
 def pane_key(name: str, data: str) -> bool:
     """True if the pane's mod consumed this raw input."""
-    e = {"name": name, "data": data, "key": parse_key(data)}  # key: "up", "enter", "ctrl+r", ...
+    e = {"name": name, "data": data, "key": parse_key(data)}
     out = bool(dispatch("pane_key", e, lambda e: False, name=name))
     bump()
     return out
@@ -452,7 +452,7 @@ def observe(event: dict) -> None:
 # --- legacy sweep ------------------------------------------------------------
 
 def sweep_legacy() -> list[str]:
-    """Move 0.2.103 seam files to ~/.micro-cc/legacy/; nothing is deleted."""
+    """Move legacy seam files to ~/.micro-cc/legacy/; nothing is deleted."""
     base, moved = user_dir(), []
     for name in LEGACY:
         src = base / name

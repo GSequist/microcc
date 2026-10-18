@@ -1,11 +1,6 @@
-"""Model catalog: providers, models and login prompts from catalog.json (schema 2).
+"""Model catalog (catalog.json schema 2): providers, models, login prompts.
 
-Layers merge key by key, later wins, once at import and without network access:
-  1. catalog.json shipped in this package - the offline fallback
-  2. ~/.micro-cc/cache/catalog.json - GitHub's copy, refreshed in the background by catalog_sync.py
-  3. ~/.micro-cc/models.json - legacy schema-1 user overrides, translated on read
-  4. ~/.micro-cc/catalog.json - the user's own overrides, extra models and providers
-A missing or broken layer is skipped; a bad entry is skipped and reported in CATALOG_STATUS["skipped"].
+Layers merge key by key, later wins: packaged, remote cache, legacy models.json, user catalog.json.
 """
 
 import json
@@ -357,8 +352,7 @@ def max_output_for(alias: str) -> int | None:
 
 
 def anthropic_beta_headers(alias: str, server_fallback: bool = True) -> list:
-    """anthropic-beta flags: 1M context past the 200k default, plus server-side fallback
-    when the model asks for it and `server_fallback` is set (direct Anthropic only)."""
+    """anthropic-beta flags: 1M context past 200k, plus server fallback (direct Anthropic only)."""
     entry = MODELS.get(alias)
     betas = []
     window = entry.get("context_window") if entry else None
@@ -376,9 +370,9 @@ def fallback_params(alias: str) -> dict:
 
 
 # --- budgets ----------------------------------------------------------------
-# Per model: B = context_window - max_output - PROMPT_RESERVE is the ceiling history is trimmed to.
-# A fold triggers at TRIGGER_RATIO * B of backlog; the summary is capped at SUMMARY_CAP_FRACTION * B
-# (and 90% of max_output). If summarizing fails the checkpoint must not advance, so nothing is dropped.
+# History budget B = context_window - max_output - PROMPT_RESERVE; folds trigger at TRIGGER_RATIO * B.
+# Summary cap is SUMMARY_CAP_FRACTION * B (and 90% of max_output).
+# A failed summary must not advance the checkpoint, so nothing is dropped.
 PROMPT_RESERVE = 20_000
 TRIGGER_RATIO = 0.8
 SUMMARY_CAP_FRACTION = 0.10
@@ -409,7 +403,7 @@ def trim_budget_for(alias: str, provider: str | None = None) -> int:
 
 
 def effective_trim_budget(alias: str, provider: str | None = None) -> int:
-    """History budget for `alias` on `provider` (default: active): MICRO_CC_TRIM_BUDGET, Ollama's env window, else the catalog."""
+    """History budget for `alias` on `provider`: MICRO_CC_TRIM_BUDGET, Ollama's env window, else the catalog."""
     override = os.getenv("MICRO_CC_TRIM_BUDGET")
     if override:
         return int(override)

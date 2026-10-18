@@ -102,12 +102,38 @@ async def cmd_copy(app):
 
 
 async def cmd_dangerous(app):
+    """Menu 1: the presets, plus "Custom…" which leads to menu 2."""
+    items = [PanelItem(k, p["label"], p["description"]) for k, p in settings_store_.GATE_PRESETS.items()]
+    items.append(PanelItem("custom", "Custom…", "choose tool by tool"))
+    app._option_panel.open(
+        items,
+        on_select=lambda it: _on_preset_picked(app, it.value),
+        selected=settings_store_.current_preset(),
+        title="When should Claude ask before acting?",
+    )
+
+
+def _on_preset_picked(app, key: str) -> None:
+    if key == "custom":
+        _open_tool_checklist(app)
+    else:
+        settings_store_.apply_preset(key)
+        app._refresh_status()
+
+
+def _open_tool_checklist(app) -> None:
+    """Menu 2: per-tool ticks. Same panel widget; confirm() already closed menu 1."""
     app._option_panel.open(
         [PanelItem(name, name) for name in GATEABLE_TOOLS],
-        on_select=app._on_dangerous_confirmed,
+        on_select=lambda checked: _on_tools_checked(app, checked),
         multi=True,
-        checked=set(app._dangerous_tools) & set(GATEABLE_TOOLS),
+        checked=settings_store_.gated_tools() & set(GATEABLE_TOOLS),
     )
+
+
+def _on_tools_checked(app, checked: list) -> None:
+    settings_store_.set_gated(it.value for it in checked)
+    app._refresh_status()
 
 
 SUBAGENT_CAP_CHOICES = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16)
@@ -359,14 +385,6 @@ async def cmd_gui(app):
         app._flash_status("⏳ busy — try /gui again once this finishes")
         return
 
-    pending = _pending_subagents(app._project_dir)
-    if pending:
-        app._flash_status(
-            f"✗ can't start GUI — {len(pending)} subagent(s) still running "
-            "(monitoring/wakeup only work in the terminal, see /graph)"
-        )
-        return
-
     if not any_configured():
         await app._mount_row({"type": "error", "content": "No API endpoint configured — run /login"})
         return
@@ -377,7 +395,6 @@ async def cmd_gui(app):
         return serve(
             app._project_dir,
             model=app._current_model,
-            dangerous=app._dangerous_tools,
             trim_budget=app._trim_budget,
         )
 

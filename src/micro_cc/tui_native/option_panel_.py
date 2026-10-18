@@ -225,7 +225,12 @@ class OptionPanel:
         if not self.is_open:
             return []
         theme = self.theme or default_theme()
-        lines = [theme.title(f" {w}") for w in _wrap_text(self.title, max(1, width - 2))] if self.title else []
+        # First title line bold, any further lines (after \n) dim detail.
+        lines = [
+            (theme.title if n == 0 else theme.description)(f" {w}")
+            for n, para in enumerate(self.title.split("\n") if self.title else [])
+            for w in _wrap_text(para, max(1, width - 2))
+        ]
         if not self.items:
             return lines + [theme.no_match("  No matches")]
 

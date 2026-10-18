@@ -2,7 +2,7 @@ name: install-test
 
 on:
   push:
-    paths: [install.sh, install.ps1, pyproject.toml, .github/workflows/install-test.yml]
+    paths: [install.sh, install.ps1, pyproject.toml, tests/smoke_browser.py, src/micro_cc/tools/browser_tool_.py, .github/workflows/install-test.yml]
   schedule:
     - cron: "17 5 * * *"   # nightly: catches astral.sh / PyPI drift
   workflow_dispatch:
@@ -57,6 +57,34 @@ jobs:
           command -v microcc
           "$(uv tool dir)/micro-cc/bin/python" -c "import micro_cc"
 
+  linux-browser:
+    # browser tool on a fresh install: WSLg-like display (xvfb) and no display (Win10 WSL / ssh)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "debian:12-slim"]
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: curl + ca-certs + xvfb
+        run: apt-get update && apt-get install -y curl ca-certificates xvfb xauth
+      - name: install via real URL
+        run: curl -fsSL $RAW/install.sh | sh
+      # the fix the browser tool prints when apt libs are missing (container runs as root)
+      - name: chromium system deps
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          "$(uv tool dir)/micro-cc/bin/python" -m playwright install-deps chromium
+      - name: browser with display
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          xvfb-run -a "$(uv tool dir)/micro-cc/bin/python" tests/smoke_browser.py
+      - name: browser without display
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          env -u DISPLAY -u WAYLAND_DISPLAY "$(uv tool dir)/micro-cc/bin/python" tests/smoke_browser.py
+
   windows-no-wsl:
     # runner has wsl.exe but no distro: the script must fail loudly with guidance
     runs-on: windows-2022
@@ -101,6 +129,13 @@ jobs:
         run: |
           wsl -d Ubuntu -e sh -c 'export PATH=$HOME/.local/bin:$PATH; command -v microcc'
           if ($LASTEXITCODE -ne 0) { throw "microcc not found in WSL" }
+          $global:LASTEXITCODE = 0
+      - name: browser + computer inside WSL
+        shell: pwsh
+        run: |
+          # Windows Chrome over CDP if reachable, else Linux Chromium (needs apt libs)
+          wsl -d Ubuntu -e sh -c 'export PATH=$HOME/.local/bin:$PATH; PY="$(uv tool dir)/micro-cc/bin/python"; S=$([ "$(id -u)" = 0 ] || echo "sudo -n"); $S "$PY" -m playwright install-deps chromium && "$PY" tests/smoke_browser.py'
+          if ($LASTEXITCODE -ne 0) { throw "browser smoke failed in WSL" }
           $global:LASTEXITCODE = 0
       - name: re-run install.ps1 (existing distro path)
         shell: pwsh

@@ -1,15 +1,6 @@
-"""Translate claude_loop's event dicts into a Vercel AI SDK v6 UI message stream.
+"""Translate claude_loop event dicts into a Vercel AI SDK v6 UI message stream.
 
-claude_loop yields bare `text_delta`/`thinking_delta` with no block framing —
-the TUI doesn't need any, it just appends to a widget. The SDK does: every run
-of text has to sit inside a text-start/text-end pair with a stable id, and
-tool calls have to sit inside a step. So this module owns that bookkeeping,
-via close_text/close_thinking/open_step helpers.
-
-Suspension is the interesting part. On `approval_request` we hand the mutable
-dict to session.set_pending, close the stream cleanly (finish + [DONE]) and
-`return` — crucially WITHOUT closing the underlying generator, which stays
-parked on its `yield` until the next request resumes it.
+Owns the text/reasoning/step block framing the SDK requires.
 """
 
 import asyncio
@@ -18,20 +9,15 @@ import uuid
 
 from micro_cc.cache import state_store
 from micro_cc.utils.msg_store_ import load_checkpoint, store_msgs
-from micro_cc.webui import session
+from micro_cc.utils.tool_safety_ import explain_gated, gate_risk
+from micro_cc.webui import live, session
 
 SSE_DONE = "data: [DONE]\n\n"
 
-# Events after which the transcript is worth flushing to disk — mirrors the
-# set start_headless_ persists on.
+# Events that flush the transcript to disk; same set start_headless_ persists on.
 _PERSIST_ON = {"tool_call", "tool_result", "final_text", "done", "error"}
 
-# Reveal cadence for text/thinking deltas — same idea as StreamingRow in
-# screens/window_overlay_.py (fixed-size slice per tick, not a wall-clock
-# catch-up that bursts when a tick runs late), just paced inline instead of
-# via a separate timer: asyncio.sleep() yields to the event loop every tick,
-# so a concurrent /api/chat/stop POST still gets scheduled and server.py's
-# stop check (run between every chunk this yields) still fires promptly.
+# Reveal in fixed-size slices, paced with sleep so a concurrent /api/chat/stop still gets scheduled.
 _FRAME = 0.02
 _CHARS_PER_TICK = 2
 
@@ -41,17 +27,12 @@ def sse(chunk: dict) -> str:
 
 
 def _compaction_flash(project_dir):
-    """Webui counterpart to the TUI's _update_status_bar compaction-flash
-    check — same poll-on-natural-stopping-points cadence (called from the
-    same _PERSIST_ON set below), same disk-backed checkpoint, same
-    stale-index seeding fix (see session.init). Returns an SSE chunk for a
-    fresh compaction, else None. A stable id ("status") lets AI SDK update
-    the one data-status part in place rather than piling up duplicates;
-    `at` is the checkpoint index the frontend keys its own re-arm off."""
+    """SSE chunk for a compaction newer than the last one flashed, else None."""
     checkpoint = load_checkpoint(project_dir)
     if checkpoint is None or checkpoint["as_of_index"] == session.STATE["last_checkpoint_index"]:
         return None
     session.STATE["last_checkpoint_index"] = checkpoint["as_of_index"]
+    # Stable id: the AI SDK updates this part in place instead of stacking duplicates.
     return sse({
         "type": "data-status",
         "id": "status",
@@ -60,11 +41,7 @@ def _compaction_flash(project_dir):
 
 
 async def stream(gen, msg_id, project_dir):
-    """Drive `gen` (a fresh or resumed claude_loop) and yield SSE strings.
-
-    Returns normally either when the loop finishes or when it suspends on an
-    approval; `session.STATE["pending"]` tells the caller which happened.
-    """
+    """Drive `gen` and yield SSE strings; returns on finish or suspension (session.STATE["pending"] says which)."""
     in_text = in_thinking = step_open = False
     text_id = thinking_id = None
 
@@ -96,16 +73,29 @@ async def stream(gen, msg_id, project_dir):
         return [c for c in (close_thinking(), close_text(), close_step()) if c]
 
     async def reveal(chunk_type, block_id, text):
-        """Yield `text` as small fixed-size SSE deltas, paced with a sleep
-        between each — the smoothing step. `block_id` is captured by value at
-        call time, so a delta always carries the id that was live when it
-        started even if the block gets closed for any reason before this
-        finishes draining."""
+        """Yield `text` as small SSE deltas, sleeping between each (the smoothing step)."""
         for i in range(0, len(text), _CHARS_PER_TICK):
             yield sse({"type": chunk_type, "id": block_id, "delta": text[i:i + _CHARS_PER_TICK]})
             await asyncio.sleep(_FRAME)
 
+    last_live = None
+
+    def live_parts():
+        """data- parts for the status line above the input; only when something changed."""
+        nonlocal last_live
+        subs, procs = live.subagents(project_dir), live.bgprocs(project_dir)
+        key = live.change_key(subs, procs)
+        if key == last_live:
+            return []
+        last_live = key
+        return [
+            sse({"type": "data-subagents", "id": "subagents", "data": {"subagents": subs}}),
+            sse({"type": "data-bgprocs", "id": "bgprocs", "data": {"processes": procs}}),
+        ]
+
     yield sse({"type": "start", "messageId": msg_id})
+    for c in live_parts():
+        yield c
 
     async for event in gen:
         etype = event.get("type")
@@ -131,6 +121,7 @@ async def stream(gen, msg_id, project_dir):
             for c in (close_thinking(), open_step()):
                 if c:
                     yield c
+            session.STATE["partial"].append(event["content"])
             if not in_text:
                 in_text = True
                 text_id = f"text-{uuid.uuid4().hex[:8]}"
@@ -139,15 +130,24 @@ async def stream(gen, msg_id, project_dir):
                 yield c
 
         elif etype == "tool_call":
+            session.STATE["partial"] = []  # now in msgs
             for c in (close_thinking(), close_text(), open_step()):
                 if c:
                     yield c
+            tool_input = event.get("input") or {}
+            risk, reason = gate_risk(event["name"], tool_input, project_dir)
             yield sse({
                 "type": "tool-input-available",
                 "toolCallId": event["id"],
                 "toolName": event["name"],
-                "input": event.get("input") or {},
+                "input": tool_input,
                 "dynamic": True,
+                # Read by the approval gate (part.toolMetadata); same text/risk as the TUI.
+                "toolMetadata": {
+                    "explanation": explain_gated(event["name"], tool_input),
+                    "risk": risk,
+                    "reason": reason,
+                },
             })
 
         elif etype == "tool_result":
@@ -156,8 +156,9 @@ async def stream(gen, msg_id, project_dir):
                 "toolCallId": event["id"],
                 "output": event.get("output", ""),
             })
-            # The todo store lives in state, not in the tool's return string —
-            # re-read it so the tracker reflects the write that just happened.
+            for c in live_parts():
+                yield c
+            # Todos live in state, not the tool's return value; re-read so the tracker sees the write.
             if event.get("name") == "todo_tool_":
                 todos = state_store.get_todos(project_dir)
                 if todos:
@@ -176,13 +177,7 @@ async def stream(gen, msg_id, project_dir):
                 yield c
 
             if kind == "question":
-                # ask_user_question_tool_ carries a LIST of questions, each
-                # freeform / single-choice / multi-choice, shown one at a time
-                # — none of which survives being squashed into Approve/Deny.
-                # The questions ride out as a data part for the modal to walk;
-                # the approval-request that follows exists purely to arm the
-                # SDK's resume (sendAutomaticallyWhen), which is what re-POSTs
-                # /api/chat once the answers are in.
+                # Questions ride as a data part; the approval-request below only arms the SDK resume.
                 yield sse({
                     "type": "data-question",
                     "id": f"question-{event['id']}",
@@ -200,9 +195,7 @@ async def stream(gen, msg_id, project_dir):
             })
             yield sse({"type": "finish", "finishReason": "stop"})
             yield SSE_DONE
-            # Deliberately no aclose() — the generator stays parked on its
-            # yield, and STATE["gen"] still references it. The next POST
-            # resolves the dict and iterates it onwards from here.
+            # No aclose(): the generator stays parked; the next POST resumes it from here.
             return
 
         elif etype == "cancelled":
@@ -218,6 +211,7 @@ async def stream(gen, msg_id, project_dir):
                 yield c
 
         elif etype == "final_text":
+            session.STATE["partial"] = []  # now in msgs
             for c in (close_thinking(), close_text()):
                 if c:
                     yield c
@@ -232,6 +226,8 @@ async def stream(gen, msg_id, project_dir):
                 yield c
 
     for c in close_all():
+        yield c
+    for c in live_parts():
         yield c
     store_msgs(project_dir, session.STATE["msgs"])
     yield sse({"type": "finish", "finishReason": "stop"})

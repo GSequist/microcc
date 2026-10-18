@@ -1,9 +1,4 @@
-"""The application's response contract, independent of any provider SDK.
-
-Requests/history use Anthropic-shaped dictionaries. Responses expose content
-blocks by attribute; Anthropic SDK blocks already satisfy that interface and
-are kept intact. Other protocols construct ContentBlock values here.
-"""
+"""Provider-independent response contract: dict-shaped history, attribute-shaped content blocks."""
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -15,34 +10,21 @@ class ContentBlock:
     type: str
     text: str = ""
     thinking: str = ""
-    # Anthropic: cryptographic signature on a "thinking" block, validated on
-    # replay. OpenAI Responses API: reused to carry a reasoning item's
-    # encrypted_content — same role (an opaque blob the provider must get
-    # back verbatim to trust/reuse the reasoning), different provider.
+    # Anthropic: thinking signature, checked on replay. Responses API: encrypted_content (opaque blob).
     signature: str = ""
     name: str = ""
     input: dict = field(default_factory=dict)
-    # tool_use: the call id. OpenAI Responses API "thinking" blocks: reused
-    # to carry the reasoning item's own id, needed to replay it ahead of the
-    # function_call items it preceded (see adapters/responses.py, apis/openai_responses.py).
+    # tool_use call id; Responses API reasoning item id, needed to replay it ahead of its function_call.
     id: str = ""
-    # Set (to the JSONDecodeError message) when a tool_use block's streamed
-    # arguments didn't parse as JSON. `input` is left {} rather than the
-    # model's raw, invented-looking partial text — but the block still
-    # carries id/name so claude_loop_ can pair it with an is_error
-    # tool_result instead of dropping it and violating the API's "one
-    # tool_result per tool_use" contract.
+    # JSONDecodeError message when streamed tool args don't parse; input stays {}, id/name kept for an is_error result.
     parse_error: str = ""
 
 
 class Usage(TypedDict, total=False):
-    # Full input context, including cached tokens; output generated this call.
+    # Total input incl. cached tokens; output for this call.
     input: int
     output: int
-    # Split of `input` for cache-miss detection (utils/tokenization_simple.py's
-    # detect_cache_miss). Absent, not zero, when a provider doesn't report
-    # prompt-cache activity at all — the adapter that does (adapters/anthropic.py)
-    # always sets both, even when a value is legitimately 0.
+    # Cache split for miss detection; absent when the provider doesn't report caching.
     cache_read: int
     cache_write: int
 
@@ -51,11 +33,8 @@ class Usage(TypedDict, total=False):
 class Response:
     content: list = field(default_factory=list)
     usage: Usage = field(default_factory=dict)
-    # Raw values off the API response — "" / None for providers that don't
-    # have this concept (only the Anthropic-family adapters populate them).
-    # "refusal" is the one claude_loop_ checks for: a terminal turn with no
-    # content blocks at all (safety classifiers, not a normal end_turn) that
-    # would otherwise be indistinguishable from an ordinary empty completion.
+    # "" / None unless an Anthropic-family adapter sets them.
+    # "refusal" (empty content, safety stop) is checked by claude_loop_.
     stop_reason: str = ""
     stop_details: object = None
 

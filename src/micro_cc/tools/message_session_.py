@@ -12,36 +12,22 @@ async def message_session_(
     project_dir,
 ) -> str:
     """
-    Talk to another micro-cc session scoped to a project_dir — a live TUI in
-    another terminal, or a headless/batch run (past, present, or future)
-    against that same project_dir. Use this to hand off findings, coordinate
-    with a sibling subagent, or report back to whoever spawned you.
+    Talk to another micro-cc session on a project_dir: a live TUI, or a headless run against it
+    (past, present or future). Use it to hand off findings or report back.
 
-    action="list" — the other live micro-cc sessions (TUIs) on this machine, as
-        `project_dir (pid N)` lines. Reads a small registry on disk; contacts
-        nobody. Call it when you need a target you don't already have.
-
-    action="send" — deliver `message` to `target_project_dir`. Two paths, tried
-        in order:
-          1. Live: if a TUI session is open right now on target_project_dir, the
-             message lands as an incoming turn in its conversation immediately —
-             acted on right away if it's idle, or as soon as its current turn
-             finishes if busy.
-          2. Durable fallback: if nothing is live there, the message is queued
-             in that project's inbox instead. It is NOT lost — it gets folded in
-             automatically the next time anyone runs headless/TUI against that
-             project_dir (at startup, and continuously at each tool-result
-             checkpoint while it's running), even if that run starts well after
-             this call returns.
-        A reply arrives as its own incoming turn — don't follow up with
-        monitor_, which is for headless subagents and PIDs only.
+    action="list": live micro-cc TUI sessions on this machine, as `project_dir (pid N)` lines.
+    Reads a disk registry and contacts nobody.
+    action="send": deliver `message` to `target_project_dir`. Tries live delivery first: the
+    message lands as an incoming turn now, or after the current turn if busy. If no TUI is open
+    there, it is queued in that project's inbox and folded in at the next headless or TUI
+    startup or tool-result checkpoint.
+    A reply arrives as its own incoming turn. Do not follow up with monitor_; it is for
+    headless subagents and PIDs only.
 
     Args:
         action: "list" or "send"
-        target_project_dir: For "send" — absolute path of the target project,
-            whatever it was launched with, e.g. `python start_.py /path/to/project`
-            or `microcc-headless /path/to/project "..."`
-        message: For "send" — what to tell that session
+        target_project_dir: For "send": absolute path of the target project.
+        message: For "send": what to tell that session.
     """
     if action == "list":
         peers = list_peers(project_dir)

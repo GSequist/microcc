@@ -24,7 +24,7 @@ export function CommandModal({
   onCleared: () => void;
   onRewound: (msgs: UIMessage[]) => void;
 }) {
-  const { session, files, setModel, setDangerous } = useSession();
+  const { session, files, setModel, setDangerous, setPreset } = useSession();
   const [rewindOptions, setRewindOptions] = useState<RewindOption[]>([]);
 
   useEffect(() => {
@@ -97,6 +97,29 @@ export function CommandModal({
               </button>
             ))}
 
+          {kind === 'dangerous' && (
+            <>
+              {session.presets.map((p) => {
+                const on = p.key === session.preset;
+                return (
+                  <button
+                    key={p.key}
+                    onClick={() => setPreset(p.key)}
+                    className="w-full text-left px-4 py-2 hover:bg-accent transition-colors flex items-start gap-2.5"
+                  >
+                    <span className={cn('mt-1.5 w-1.5 h-1.5 rounded-full shrink-0', on ? 'bg-foreground' : 'bg-transparent')} />
+                    <span className="flex flex-col">
+                      <span className={cn('text-sm', on ? 'text-foreground' : 'text-muted-foreground')}>{p.label}</span>
+                      <span className="text-xs text-muted-foreground/70">{p.description}</span>
+                    </span>
+                  </button>
+                );
+              })}
+              <div className="px-4 pt-3 pb-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground/60">
+                custom
+              </div>
+            </>
+          )}
           {kind === 'dangerous' &&
             session.gateable.map((tool) => {
               const on = session.dangerous.includes(tool);

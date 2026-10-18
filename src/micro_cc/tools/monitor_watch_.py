@@ -1,17 +1,6 @@
-"""Streaming counterpart to monitor_'s "check" snapshot action.
-
-A watch is a shell command spawned once and left running — `tail -f log |
-grep ERROR`, a poll loop, whatever — whose stdout lines are treated as
-events and pushed straight into the running TUI's own turn queue as they
-happen (see set_wake_callback), instead of the model having to remember to
-call monitor_(action="check") again to notice anything changed.
-
-In-process module state only, no disk persistence: a watch is only ever
-meaningful inside the interactive TUI, which sits idle between turns and can
-receive a push at any time. A headless/batch run executes exactly one turn
-and exits — there is no idle loop left standing by to receive one, so
-start_watch refuses outright (via the wake_callback-not-set check) rather
-than starting a subprocess nothing will ever read the events from.
+"""Streaming watches: a shell command whose stdout lines are pushed into the live TUI as they
+happen (monitor_ action="watch"). In-process only, no persistence. Headless runs refuse,
+since nothing would read the events.
 """
 
 import asyncio
@@ -26,22 +15,13 @@ from micro_cc.utils.msg_store_ import _get_storage_dir
 
 _watches: dict[str, dict] = {}
 
-# Set once by start_live_tui_.py's start() — a plain sync function taking
-# the fully-formatted content string to inject as boss's next turn. None
-# means no interactive session is listening (headless/batch, or the TUI
-# hasn't finished starting yet), and start_watch below refuses in that case
-# instead of spawning a process whose events would just vanish.
+# Set by start_live_tui_.start(); None means no interactive session (start_watch refuses).
 _wake_callback = None
 
-# Stdout lines arriving within this window of each other are batched into
-# one notification rather than one per line. A burst from one event (a
-# multi-line stack trace, say) reads as one turn instead of N.
+# Lines arriving within this window are batched into one notification.
 _BATCH_WINDOW_S = 0.2
 
-# A watch whose filter is too broad (or missing entirely) can otherwise
-# flood claude_loop_ with a full model round-trip per firing. More than this
-# many firings inside _RATE_LIMIT_WINDOW_S auto-stops the watch instead of
-# continuing to fire, preventing runaway event loops.
+# Too many firings in the window auto-stop the watch (runaway-filter guard).
 _RATE_LIMIT_WINDOW_S = 10.0
 _RATE_LIMIT_MAX_FIRES = 15
 
@@ -99,8 +79,7 @@ async def start_watch(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env={**_bash_env(), "TERM": "dumb"},
-        # New session/process-group, same reason bash_ uses it: lets stop_watch
-        # (and kill_all on app exit) reach the whole tree, not just this shell.
+        # New process group so stop_watch and kill_all reach the whole tree.
         start_new_session=True,
     )
     _watches[watch_id] = {
@@ -143,10 +122,7 @@ async def _reader_loop(watch_id: str) -> None:
     try:
         while True:
             try:
-                # No pending batch yet: block indefinitely for the first
-                # line. A batch already started: cap the wait at the
-                # batching window so it flushes even if more lines are
-                # still coming, instead of growing unbounded.
+                # Block for the first line; once a batch starts, cap the wait so it flushes.
                 line = await asyncio.wait_for(
                     proc.stdout.readline(),
                     timeout=_BATCH_WINDOW_S if pending else None,
@@ -169,10 +145,7 @@ async def _reader_loop(watch_id: str) -> None:
 
 
 async def _stderr_to_file(watch_id: str) -> None:
-    """Stderr is captured to disk, not streamed as events. Stdout is the
-    event stream, while stderr is available for a human/model to read on
-    demand if the command itself is failing rather than just producing no
-    matches."""
+    """Stderr goes to the output file, not the event stream."""
     entry = _watches[watch_id]
     proc = entry["proc"]
     try:
@@ -225,9 +198,7 @@ async def stop_watch(watch_id: str, *, reason: str = "stopped by request") -> st
         return f"No active watch with id '{watch_id}'."
     if entry["status"] != "running":
         return f"Watch {watch_id} is already stopped."
-    # Set before cancelling: _reader_loop's own finally re-checks this same
-    # flag before calling _finish, so it never double-fires a second
-    # "stream ended" notification on top of the reason fired here.
+    # Set before cancelling so _reader_loop's finally skips its own "stream ended" notice.
     entry["status"] = "stopped"
     for key in ("reader_task", "stderr_task", "timeout_task"):
         task = entry.get(key)
@@ -243,10 +214,7 @@ async def stop_watch(watch_id: str, *, reason: str = "stopped by request") -> st
 
 
 def kill_all() -> None:
-    """App-shutdown cleanup (start_live_tui_.stop()) — a watch is OUR OWN
-    subprocess, not a deliberately-detached `cmd &` the user wants to
-    survive past this session the way bash_'s own background procs do, so
-    nothing here should still be running once the TUI process exits."""
+    """App-shutdown cleanup: kill still-running watch process groups."""
     for entry in _watches.values():
         if entry["status"] == "running":
             try:

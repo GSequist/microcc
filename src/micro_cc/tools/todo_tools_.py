@@ -6,10 +6,7 @@ _TODO_ICON = {"pending": "⏳", "in_progress": "🔄", "completed": "✅", "fail
 
 
 def _format_todo_list(store: Dict[str, Dict], preview: int = 200) -> str:
-    """Full task-list reminder, wrapped for the model's benefit. Baked directly
-    into this tool's own return string so it rides inside its own tool_result
-    — no separate message/block, so it can't create the stray-text-after-
-    tool_result shape that confuses the model into premature stops."""
+    """Task-list reminder appended to the tool_result, so it rides in the same block."""
     if not store:
         return ""
     done = sum(1 for t in store.values() if t.get("status") == "completed")
@@ -46,32 +43,20 @@ async def todo_tool_(
     model,
 ) -> str:
     """
-    Track multi-step work. Keyed by id — you only send the ids/fields you CHANGE;
-    everything else is preserved. This is a MERGE, not a replace.
+    Track multi-step work, keyed by id. A MERGE: send only the ids and fields you change.
+    `notes` is a per-task scratchpad that persists across steps.
 
-    Use `notes` as your per-task scratchpad — accumulate findings, SKUs, prices,
-    rejected options. It persists across steps so you don't lose your own research.
-
-    WRITE/EDIT — todos: {
-      "1": {"content": "Search Greek cherry tomatoes < 2 EUR",
-            "status": "in_progress", "activeForm": "Searching cherry tomatoes",
-            "tag": "produce", "notes": "Found 3 SKUs: ...; rejected X because ..."},
-      "2": {"content": "Review basket for gaps", "status": "pending"}
-    }
-      content     (str)  the task, imperative — set once
-      status      (str)  pending | in_progress | completed | failed
-      activeForm  (str)  present-continuous label shown in the UI while active
-      notes       (str)  long-lived scratchpad, appended/edited over time
-      tag         (str)  optional grouping label
-
-    Flip one status:  todos={"1": {"status": "completed"}}   ← notes untouched.
-    Edit notes:       todos={"3": {"notes": "updated text"}}  ← other fields kept.
-    Every value MUST be an object, even for a single-field change.
-      WRONG: todos={"3": "completed"}
-      RIGHT: todos={"3": {"status": "completed"}}
-    Delete:           remove=["1"].
-    INSPECT in full:  get=["3"]  → returns id 3's full content+notes.
-                      get=["*"]  → returns every todo in full.
+    WRITE todos: {"1": {"content": "...", "status": "in_progress", "activeForm": "Searching ...",
+                        "tag": "produce", "notes": "..."}}
+      content     (str) imperative task text, set once
+      status      (str) pending | in_progress | completed | failed
+      activeForm  (str) present-continuous label shown while active
+      notes       (str) long-lived scratchpad, appended or edited over time
+      tag         (str) optional grouping label
+    Flip status:  todos={"1": {"status": "completed"}}   (notes untouched)
+    Every value MUST be an object: todos={"3": {"status": "completed"}}, not {"3": "completed"}
+    Delete:       remove=["1"]
+    INSPECT:      get=["3"] returns id 3 in full; get=["*"] returns every todo in full
 
     Keep exactly ONE item in_progress.
     """
@@ -122,15 +107,9 @@ async def todo_tool_(
         reminder = _format_todo_list(store)
         if reminder:
             msg += "\n\n" + reminder
-        # Single string back to the model (same contract as vision/file tools).
-        # The store is persisted to state_store above; the UI (start_live
-        # _tick_working) reads it straight from there — nothing downstream
-        # needs the dict.
+        # Returned string is the tool_result; the store is already persisted above.
         return msg
 
     except Exception as e:
-        # Returned string is already the tool_result the UI renders in the
-        # tool_call row — no separate print() needed (and none wanted: a
-        # bare print() inside a TUI's alt screen lands wherever the cursor
-        # happens to be, not anywhere the user would see it as an error).
+        # Returned as the tool_call row; a print() would land in the TUI alt screen.
         return f"Error in todo_tool_: {e}"

@@ -8,11 +8,11 @@ browser_manager = BrowserManager()
 
 
 def google_search(query: str, filter_year: int = None, *, project_dir) -> str:
-    """Search the web for information.
+    """Search the web and return the results page text.
 
     Args:
         query: Text query to search for
-        filter_year: Optional year filter (e.g., 2020)
+        filter_year: Ignored; no year filter is applied
     """
     browser = browser_manager.get_browser(project_dir)
     browser.visit_page(f"google: {query}", filter_year=None)
@@ -21,10 +21,7 @@ def google_search(query: str, filter_year: int = None, *, project_dir) -> str:
 
 
 def visit_url(url: str, *, project_dir) -> str:
-    """Visit a webpage at a given URL and return its text.
-
-    Given a YouTube URL, returns the transcript.
-    Given a file URL like "https://example.com/file.pdf", downloads it for text_file tool.
+    """Visit a URL and return its text. YouTube URLs return the transcript; file URLs are downloaded for text_file.
 
     Args:
         url: The URL to visit
@@ -36,11 +33,11 @@ def visit_url(url: str, *, project_dir) -> str:
 
 
 def archive_search(url: str, date: str, *, project_dir) -> str:
-    """Search Wayback Machine for archived version closest to date.
+    """Return the Wayback Machine snapshot closest to date.
 
     Args:
         url: The URL to find in archive
-        date: Desired date in 'YYYYMMDD' format
+        date: Target date as YYYYMMDD
     """
     browser = browser_manager.get_browser(project_dir)
     base_api = f"https://archive.org/wayback/available?url={url}"
@@ -89,10 +86,10 @@ def page_down(project_dir) -> str:
 
 
 def find_on_page(search_string: str, *, project_dir) -> str:
-    """Scroll viewport to first occurrence of search string (Ctrl+F).
+    """Scroll to the first occurrence of search_string (Ctrl+F).
 
     Args:
-        search_string: String to search for; supports wildcards like '*'
+        search_string: Text to find; supports wildcards like '*'
     """
     browser = browser_manager.get_browser(project_dir)
     result = browser.find_on_page(search_string)
@@ -117,10 +114,10 @@ def find_next(project_dir) -> str:
 
 
 def download_from_url(url: str, *, project_dir) -> str:
-    """Download a file from URL for later processing with text_file.
+    """Download a file (xlsx, pptx, docx, wav, mp3, pdf, etc.) for text_file.
 
     Args:
-        url: URL of file to download (xlsx, pptx, docx, wav, mp3, pdf, etc.)
+        url: URL of the file to download
     """
     browser = browser_manager.get_browser(project_dir)
     browser.visit_page(url)
@@ -129,12 +126,11 @@ def download_from_url(url: str, *, project_dir) -> str:
 
 
 def text_file(filename: str, *, project_dir) -> str:
-    """Convert downloaded file to text/markdown.
+    """Convert a downloaded file to text/markdown.
 
     Args:
-        filename: Name of previously downloaded file
+        filename: Name of a previously downloaded file
     """
     browser = browser_manager.get_browser(project_dir)
-    # Assuming browser has method to read downloaded files
     content = browser.read_downloaded_file(filename)
     return content if content else f"Could not read file: {filename}"

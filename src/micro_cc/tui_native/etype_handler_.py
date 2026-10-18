@@ -126,12 +126,15 @@ async def handle_approval_request(app, event, container, tool_call_rows, approva
     approval_ui_.show(app, name, inp)
     await app._pending_input.wait()
 
+    # claude_loop reads this after the yield resumes: falsy -> denial tool_result, turn continues.
     approval["approved"] = app._pending_result
+    if app._pending_result == "always":
+        app._ungate_tool(name)
 
     if tool_id in approval_rows:
         arow = approval_rows.pop(tool_id)
         if not app._pending_result:
-            new_msg = {"type": "error", "content": f" {name} cancelled"}
+            new_msg = {"type": "error", "content": f" {name} declined"}
             arow.update_msg(new_msg)
             for i, m in enumerate(app._msg_rows):
                 if m.get("type") == "approval" and m.get("id") == tool_id:

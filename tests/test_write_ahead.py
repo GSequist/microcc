@@ -111,14 +111,21 @@ class WriteAheadCase(LoopCase):
         self.assertIn("Interrupted", by_id["b"])
         self.assertIn("Not run", by_id["c"])
 
-    async def test_denied_approval_answers_every_call(self):
+    async def test_deny_answers_and_turn_continues(self):
+        asked = []
         def deny(ev):
             if ev["type"] == "approval_request":
+                asked.append(ev["id"])
                 ev["approval"]["approved"] = False
+        model = Scripted(turn(use("a", "quick", {"tag": "1"}), use("b", "quick", {"tag": "2"})), final("ok, what instead?"))
         msgs = []
-        await self.run_loop(Scripted(turn(use("a", "quick", {"tag": "1"}))), msgs, dangerous={"quick"}, on_event=deny)
-        self.assert_valid(msgs)
-        self.assertIn("Not run", self.results(msgs)[0]["content"])
+        await self.run_loop(model, msgs, dangerous={"quick"}, on_event=deny)
+        by_id = {r["tool_use_id"]: r["content"] for r in self.results(msgs)}
+        self.assertEqual(asked, ["a"])  # one deny skips the rest of the batch unasked
+        self.assertIn("declined", by_id["a"])
+        self.assertIn("Not run", by_id["b"])
+        self.assertEqual(seen_at_run, [])  # nothing executed
+        self.assertEqual(msgs[-1]["role"], "assistant")  # the model got to reply
 
     async def test_aclose_answers_open_calls(self):
         msgs = []

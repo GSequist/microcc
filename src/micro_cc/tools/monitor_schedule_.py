@@ -1,34 +1,9 @@
-"""Scheduled prompts: "wake me in 20 minutes", "check the deploy every 5m",
-"every weekday at 9 tell me the standup" — the third thing monitor_ watches,
-alongside headless subagents and live streaming watches.
+"""Scheduled prompts ("wake me in 20m", "check the deploy every 5m", cron): spec parsing,
+next-fire math and storage, used by monitor_.
 
-Design: a schedule tool plus a cron scheduler, built for micro-cc's
-single-process asyncio model:
-
-  * `interval` specs ("30s", "5m", "2h", "1d", or "every 5 minutes") and
-    standard 5-field `cron` specs (local time) both compile to a next-fire
-    time. Cron fields support wildcard / N / step / range / list; day-of-month
-    and day-of-week are OR-ed when both are restricted.
-  * Anti-herd jitter is ported too: a recurring task fires up to 10% of its
-    period late (capped at 15 min), deterministically from its id, so a fleet
-    of users asking for "hourly" doesn't all hit the model at :00. One-shots
-    landing on :00/:30 fire up to 90s early. Picking an off-minute is still
-    the bigger lever (see monitor_'s own prompt text).
-  * Recurring tasks auto-expire after `DEFAULT_MAX_AGE_DAYS` (7) — they fire
-    one last time, then are deleted. Bounds how long a single session can run
-    on its own. `max_age_days=0` means unlimited.
-
-Persistence is per-project (the project's own storage dir, beside
-messages.jsonl), so a durable schedule survives a restart AND a self-reload —
-the TUI re-arms every stored schedule on start. Session-only schedules
-(`durable=False`) live in the module dict and die with the process, matching
-CC-oss's durable/session split.
-
-Firing is a push, not a poll: the scheduler's tick calls the same wake
-callback monitor_watch_ uses, so a due task arrives as its own turn exactly
-like a watch line or a subagent checkpoint. This is why schedules only fire in
-the live interactive session — a headless run executes one turn and exits with
-no idle loop standing by to receive the push.
+Durable tasks persist per project; session-only ones live in memory. Recurring tasks get
+anti-herd jitter and auto-expire after 7 days. Firing is done by monitor_schedule_runtime,
+and only in the live TUI.
 """
 
 import json
@@ -60,7 +35,6 @@ def parse_interval(spec: str) -> int | None:
     s = spec.strip().lower()
     if s.startswith("every "):
         s = s[len("every "):].strip()
-        # "5 minutes" / "2 hours" / "1 day" / "30 seconds"
         parts = s.split()
         if len(parts) == 2 and parts[0].isdigit():
             word = parts[1].rstrip("s")
@@ -69,7 +43,6 @@ def parse_interval(spec: str) -> int | None:
                 return None
             return max(MIN_INTERVAL_SECONDS, int(parts[0]) * _UNIT_SECONDS[unit])
         return None
-    # "5m" / "30s" / "2h" / "1d"
     if len(s) >= 2 and s[-1] in _UNIT_SECONDS and s[:-1].isdigit():
         secs = int(s[:-1]) * _UNIT_SECONDS[s[-1]]
         return max(MIN_INTERVAL_SECONDS, secs)
@@ -77,10 +50,7 @@ def parse_interval(spec: str) -> int | None:
 
 
 # ---------------------------------------------------------------- cron specs
-# 5-field, local time:
-#   minute hour day-of-month month day-of-week
-# Field syntax: wildcard, N, */N (step), N-M, N-M/S, comma-lists.
-# day-of-week 0=Sunday, 7 accepted as Sunday alias.
+# 5-field local time: minute hour dom month dow. Cron dow: 0 and 7 are Sunday.
 _FIELD_RANGES = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
 _FIELD_NAMES = ("minute", "hour", "day-of-month", "month", "day-of-week")
 
@@ -121,9 +91,7 @@ def _expand_field(field: str, lo: int, hi: int) -> list | None:
 
 
 def _re_match(pattern: str, text: str) -> tuple | None:
-    """Return the tuple of capture groups on match, or None on miss. Callers
-    distinguish match-vs-miss by `is not None`; an absent optional group is
-    None inside the tuple (callers use `or ''`/truthiness)."""
+    """Capture-group tuple on match, else None. Unmatched optional groups are None inside it."""
     import re
     m = re.match(pattern, text)
     return m.groups() if m else None
@@ -144,9 +112,7 @@ def parse_cron(expr: str) -> dict | None:
 
 
 def validate_spec(spec: str) -> tuple[str, str] | None:
-    """Return (kind, normalized) where kind is 'interval' or 'cron', or None
-    if the spec is neither. Normalized is the original spec for cron, or the
-    raw spec for interval (kept verbatim for display)."""
+    """(kind, normalized) for an interval or cron spec; None if neither."""
     if parse_interval(spec) is not None:
         return ("interval", spec.strip())
     if parse_cron(spec) is not None:
@@ -168,11 +134,10 @@ def _next_cron_dt(fields: dict, after: datetime) -> datetime | None:
     t = after.replace(second=0, microsecond=0) + timedelta(minutes=1)
     for _ in range(366 * 24 * 60):
         if t.month not in month_set:
-            # jump to start of next month
             y, m = (t.year + 1, 1) if t.month == 12 else (t.year, t.month + 1)
             t = t.replace(year=y, month=m, day=1, hour=0, minute=0)
             continue
-        # Python: Monday=0..Sunday=6; cron: Sunday=0..Saturday=6
+        # Python weekday 0=Mon; cron 0=Sun.
         dow = (t.weekday() + 1) % 7
         dom = t.day
         if dom_wild and dow_wild:
@@ -229,8 +194,7 @@ def cron_to_human(expr: str) -> str:
 
 # ---------------------------------------------------------------- jitter
 def _jitter_frac(task_id: str) -> float:
-    """Deterministic [0,1) from the id's first 8 hex chars — stable across
-    restarts, uniform across tasks. Non-hex ids fall back to 0 (no jitter)."""
+    """Deterministic [0,1) from the id's first 8 hex chars; non-hex ids get 0."""
     try:
         return int(task_id[:8], 16) / 0x1_0000_0000
     except (ValueError, IndexError):
@@ -238,14 +202,10 @@ def _jitter_frac(task_id: str) -> float:
 
 
 def _jittered_recurring(anchor: datetime, task: dict) -> datetime:
-    """Next recurring fire: base next-run + deterministic forward delay of up
-    to _RECURRING_FRAC of the gap between successive fires, capped. Only
-    meaningful for cron tasks (interval tasks have a fixed period, so the
-    jitter is just a fraction of that period)."""
+    """Base next fire plus a deterministic delay up to 10% of the gap, capped at 15 min."""
     base = _base_next_fire(anchor, task)
     if base is None:
         return None
-    # Period estimate: next fire after base.
     after_base = _base_next_fire(base + timedelta(seconds=1), task)
     if after_base is None:
         return base
@@ -255,9 +215,7 @@ def _jittered_recurring(anchor: datetime, task: dict) -> datetime:
 
 
 def _jittered_one_shot(anchor: datetime, task: dict) -> datetime:
-    """One-shot: base next-run, minus a deterministic lead of up to 90s, but
-    only when the fire minute is a :00/:30 boundary (the human-rounding
-    hotspots). Off-minute one-shots fire exactly on time."""
+    """Base next fire, minus a deterministic lead up to 90s, only for :00/:30 minutes."""
     base = _base_next_fire(anchor, task)
     if base is None:
         return None
@@ -278,11 +236,7 @@ def _base_next_fire(anchor: datetime, task: dict) -> datetime | None:
 
 
 def next_fire_at(task: dict, now: float | None = None) -> float | None:
-    """Epoch seconds of the next fire, or None if the spec can't produce one.
-
-    Anchor is last_fired_at if the task has fired before, else created_at —
-    so a never-fired pinned cron (`30 14 27 2 *`) doesn't jump to next year
-    just because the process started late."""
+    """Epoch seconds of the next fire, or None. Anchors on last_fired_at, else created_at."""
     now = time.time() if now is None else now
     anchor = datetime.fromtimestamp(task.get("last_fired_at") or task["created_at"])
     if task.get("recurring", True):
@@ -297,9 +251,7 @@ def _store_path(project_dir: str):
     return _get_storage_dir(project_dir) / "scheduled_prompts.json"
 
 
-# Session-only tasks (durable=False): process-private, keyed by project_dir.
-# Same lifetime rule as monitor_watch_._watches — meaningful only inside the
-# live TUI, gone when it exits.
+# Session-only tasks (durable=False): in memory, gone when the process exits.
 _session_tasks: dict[str, list] = {}
 
 
@@ -337,10 +289,7 @@ def add_schedule(
     durable: bool = False,
     max_age_days: float = DEFAULT_MAX_AGE_DAYS,
 ) -> tuple[dict | None, str]:
-    """Create a schedule. Returns (task, error) — task is None on a bad spec.
-    `durable=True` writes to the project store (survives restart); the default
-    is session-only, matching CC-oss's "most 'remind me in 5 minutes' stay
-    session-only" guidance."""
+    """Create a schedule; returns (task, error), task None on a bad spec. durable=True persists."""
     validated = validate_spec(spec)
     if validated is None:
         return None, (
@@ -386,17 +335,14 @@ def remove_schedule(project_dir: str, task_id: str) -> bool:
         _session_tasks[project_dir] = kept_s
         removed = True
     if removed:
-        # Local import: monitor_schedule_runtime's tick() already imports this
-        # module locally to avoid a module-level cycle; mirror that direction
-        # here instead of adding one back the other way.
+        # Local import avoids a module-level cycle with monitor_schedule_runtime.
         from micro_cc.tools import monitor_schedule_runtime as _rt
         _rt.forget(task_id)
     return removed
 
 
 def _update_task(project_dir: str, task: dict) -> None:
-    """Persist a fired task's new last_fired_at (durable) or replace it in the
-    session list. Called by the runtime after a fire."""
+    """Persist a fired task's new last_fired_at (durable) or replace it in the session list."""
     if task.get("durable"):
         tasks = _read_durable(project_dir)
         for i, t in enumerate(tasks):
@@ -434,14 +380,8 @@ def due_schedules(project_dir: str, now: float | None = None) -> list:
 
 
 def fire_schedule(project_dir: str, task: dict, now: float | None = None) -> str | None:
-    """Advance a fired task: stamp last_fired_at, then either delete it
-    (one-shot, or recurring-but-aged-out) or leave it for the next period.
-
-    Recurring tasks reschedule from `now`, not from their previous next-fire —
-    so a tick that lands late (a long turn blocked the loop) can't trigger a catch-up storm of missed fires.
-
-    Returns the task id if it was deleted, else None. Caller fires the prompt.
-    """
+    """Stamp last_fired_at, or delete a one-shot or aged-out task; returns the deleted id or None.
+    Recurring tasks reschedule from now, so a late tick cannot trigger a catch-up storm."""
     now = time.time() if now is None else now
     aged = is_aged_out(task, now)
     if task.get("recurring", True) and not aged:

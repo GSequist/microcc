@@ -41,16 +41,23 @@ from micro_cc.utils.tokenization_simple import token_cutter, token_stats, save_t
 from micro_cc.utils.claude_md_loader import load_claude_md_file
 from micro_cc.models.providers import active_provider
 from micro_cc.utils.tool_safety_ import READ_ONLY_TOOLS, read_only_by_input
+from micro_cc.utils.gate_check_ import needs_approval
 
 
 load_dotenv(os.path.expanduser("~/.micro-cc/.env"))
 load_dotenv()
 
-DEFAULT_DANGEROUS = {"bash_", "edit_", "write_"}
 GATEABLE_TOOLS = [
     "bash_", "write_", "edit_", "read_", "glob_", "grep_",
-    "computer_use", "browser_navigate",
+    "computer", "browser",
 ]
+# Denial is a normal tool_result, so the turn continues and Claude can adapt.
+DENIED_MSG = (
+    "The user declined this action, so it was NOT run (no files changed, no command executed). "
+    "Don't retry it as-is. In plain, non-technical language, say what you were trying to do and "
+    "ask how they'd like to proceed, or offer a safer alternative."
+)
+DENIED_SKIP_MSG = "Not run: the user declined an earlier action in this same step."
 ASK_USER_QUESTION_TOOL = ["ask_user_question_tool_"]
 
 def _unanswered_results(blocks, calls, results, started):
@@ -188,14 +195,17 @@ async def claude_loop(
 ):
     """Execute agent loop: call model, execute tools, append results to msgs."""
 
-    dangerous = DEFAULT_DANGEROUS if dangerous_tools is None else set(dangerous_tools)
+    # None = read settings live, so "Yes, always" or /dangerous mid-turn applies at once; a set pins it (headless, tests).
+    def gated():
+        return settings_store_.gated_tools() if dangerous_tools is None else dangerous_tools
+
     ask_user = ASK_USER_QUESTION_TOOL
     provider = active_provider()  # pinned for the whole turn
 
     skills_summary = get_skill_summary(project_dir)
     claude_md_content = load_claude_md_file(project_dir)
     mcp_catalog = get_effective_mcp_catalog(project_dir)
-    package_dir = os.path.dirname(os.path.abspath(__file__))  # micro_cc source dir
+    package_dir = os.path.dirname(os.path.abspath(__file__))
 
     default_tools = [
         bash_,
@@ -522,9 +532,7 @@ whole conversation history, including compacted turns.
                         call_errors_by_id[tb.id] = f"Error: {reason}"
                         continue
 
-                    # Register on demand: a catalog function, or an MCP tool of a
-                    # server this context loaded but this process hasn't resolved
-                    # yet (fresh process / restart — mcp_routing starts empty).
+                    # Register on demand: a fresh process starts with empty mcp_routing.
                     if inner not in tools and inner not in mcp_routing:
                         if inner in TOOL_CATALOG:
                             tools[inner] = get_tool_func(inner)
@@ -562,11 +570,10 @@ whole conversation history, including compacted turns.
                                   if calls[tb.id][0] not in tools and calls[tb.id][0] not in mcp_routing
                                   and tb.id not in skip_ids]
 
-                # Unknown tool names get an error result inside the single turn message, never a separate
-                # assistant message (thinking/text would be echoed twice).
+                # Keep unknown-tool errors in this user message, or thinking/text gets echoed twice.
                 unknown_ids = {tb.id for tb in unknown_blocks}
 
-                # Malformed ask_user questions never reach the UI (it indexes them without fallbacks): error result instead.
+                # Malformed ask_user questions would crash the UI, so answer with an error.
                 ask_errors_by_id = {}
                 for tb in local_tool_blocks:
                     if calls[tb.id][0] in ask_user:
@@ -575,6 +582,7 @@ whole conversation history, including compacted turns.
                             ask_errors_by_id[tb.id] = reason
 
                 answered_by_id = {}
+                denied_ids = set()
                 for tool_use_block in local_tool_blocks:
                     inner_name, inner_args = calls[tool_use_block.id]
                     yield {
@@ -598,7 +606,17 @@ whole conversation history, including compacted turns.
                             yield {"type": "cancelled"}
                             return
 
-                    if inner_name in dangerous:
+                    if inner_name in gated():
+                        # One deny skips the batch's remaining gated calls: the user is redirecting.
+                        if denied_ids:
+                            results_by_id[tool_use_block.id] = DENIED_SKIP_MSG
+                            denied_ids.add(tool_use_block.id)
+                            continue
+                        # Auto-gate (live settings only): rules + the session's model may wave it through.
+                        if dangerous_tools is None and settings_store_.get_setting("auto_gate") and not await needs_approval(
+                            inner_name, inner_args, project_dir, msgs, model, provider
+                        ):
+                            continue
                         approval = {"approved": None}
                         yield {
                             "type": "approval_request",
@@ -607,12 +625,13 @@ whole conversation history, including compacted turns.
                             "input": inner_args,
                             "approval": approval,
                         }
-                        if not approval["approved"]:
-                            yield {"type": "cancelled"}
-                            return
+                        if not approval["approved"]:  # True or "always" runs; the UI persists "always"
+                            results_by_id[tool_use_block.id] = DENIED_MSG
+                            denied_ids.add(tool_use_block.id)
 
                 executed_local_blocks = [
-                    tb for tb in local_tool_blocks if calls[tb.id][0] not in ask_user
+                    tb for tb in local_tool_blocks
+                    if calls[tb.id][0] not in ask_user and tb.id not in denied_ids
                 ]
                 executed_ids = {tb.id for tb in executed_local_blocks} | {tb.id for tb in mcp_tool_blocks}
 

@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from typing import Optional
 
 from micro_cc.utils.helpers import _IMAGE_EXTENSIONS, sanitize_and_encode_image_
 from micro_cc.utils.msg_store_ import _get_storage_dir
@@ -16,8 +17,7 @@ from micro_cc.utils.msg_store_ import _get_storage_dir
 
 _SHELL = shutil.which("bash") or "/bin/bash"
 
-# Secrets stripped from every bash_ subprocess env: these built-ins, every provider key
-# the model catalog names, and MICROCC_BASH_ENV_DENYLIST (comma-separated) for an embedding app's own.
+# Env vars stripped from bash_ subprocesses: built-in and provider keys, plus MICROCC_BASH_ENV_DENYLIST.
 _DENIED_ENV = {"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "MICRO_CC_POSTGRES_URL", "MICRO_CC_MIRROR_POSTGRES_URL"}
 
 
@@ -26,54 +26,32 @@ def _bash_env() -> dict:
     denied = _DENIED_ENV | secret_env_keys() | {n for n in os.environ.get("MICROCC_BASH_ENV_DENYLIST", "").split(",") if n}
     return {k: v for k, v in os.environ.items() if k not in denied}
 
-# Supported platforms are macOS and WSL — both are real POSIX/bash
-# environments, so nothing below is platform-conditional. Native (non-WSL)
-# Windows has no bash and no POSIX process-group/signal semantics for the
-# kill/pipe logic below, so it's refused up front rather than half-supported.
+# macOS and WSL only; native Windows is refused up front (no POSIX process-group semantics).
 _WINDOWS_MSG = (
     "[bash_ requires a POSIX shell — native Windows isn't supported. "
     "Install WSL (`wsl --install` in PowerShell, then `pip install micro-cc` "
     "inside the WSL shell) and run micro-cc from there.]"
 )
 
-# Sticky cwd per project_dir: lets `cd` inside one bash_ call carry over to
-# the next, like a real shell session, instead of resetting to project_dir
-# on every call.
+# Last cwd per project_dir, so `cd` carries over between bash_ calls.
 _cwd_state: dict[str, str] = {}
 
-# Processes a `cmd &`-style backgrounded launch left running after its
-# parent bash_ call returned. Populated by _track_survivors below; drained
-# for the per-loop <process-status> reminder in claude_loop_.py so the model
-# finds out its server/watcher/etc is still alive without a dedicated tool
-# call, and can stop it with a plain `bash_("kill <pid>")`.
-# Each entry also carries "pgid" and "output_path" — see _drain_to_file and
-# get_output_tail below for how those get populated and read back.
+# Survivors of backgrounded `cmd &` launches, drained for the per-loop status reminder.
 _background_procs: dict[int, dict] = {}
 
-# Drain tasks handed off from a bash_ call's own stdout/stderr pipes once a
-# survivor is detected (see _drain_to_file) — kept here, keyed by pgid, so
-# they aren't garbage-collected out from under the still-running reader and
-# can be cancelled once every pid in that group has exited (see
-# list_background_processes' pruning).
+# Persistent pipe drains for survivors, keyed by pgid; cancelled once the group exits.
 _output_drain_tasks: dict[int, tuple] = {}
 
-# One-time snapshot of the user's interactive aliases/functions, so bash_
-# commands behave like a real terminal instead of a bare, alias-less `bash -c`.
+# Cached aliases/functions from an interactive shell, sourced into bash_ commands.
 _snapshot_path: str | None = None
 _snapshot_attempted = False
 _snapshot_lock = asyncio.Lock()
 
-# No command-level restrictions here by design: this tool has no visibility
-# into whether it's gated (TUI's dangerous_tools/approval_request already
-# covers bash_ end-to-end at the tool-call level -- see claude_loop_.py).
-# Baking a second, command-level check in here would either duplicate that
-# gate or silently override it, so it doesn't live here.
+# No command-level checks here: the TUI approval gate covers bash_ per tool call.
 
 
 async def _ensure_shell_snapshot() -> str | None:
-    """Capture aliases/functions from an interactive shell once per process
-    and reuse them on every bash_ call. Cached including failures, so a
-    broken snapshot attempt isn't retried on every single call."""
+    """Capture aliases/functions from an interactive shell once per process; failures are cached too."""
     global _snapshot_path, _snapshot_attempted
     async with _snapshot_lock:
         if _snapshot_attempted:
@@ -88,13 +66,7 @@ async def _ensure_shell_snapshot() -> str | None:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                # Same isolation as the main bash_ subprocess below, and for
-                # the same reason: this is "-i", so it sources .bashrc/.zshrc.
-                # If a startup file shells out to something like `sudo` that
-                # can't prompt via its (DEVNULL) stdin, it falls back to
-                # opening /dev/tty directly — without this flag that reaches
-                # the REAL terminal the TUI owns, racing Textual's own raw
-                # keystroke reads and corrupting input.
+                # New session: no /dev/tty access, so a sourced rc file can't reach the TUI's terminal.
                 start_new_session=True,
             )
             await asyncio.wait_for(proc.wait(), timeout=5)
@@ -117,21 +89,7 @@ def _bgproc_output_dir(project_dir: str) -> Path:
 
 
 async def _drain_to_file(pipe, path: Path):
-    """Persistent counterpart to _drain_loop for a backgrounded survivor.
-
-    _drain_loop stops reading the moment bash_'s own call returns (see the
-    0.05s grace period + _cancel in bash_ below) — fine for the common case,
-    but a `cmd &` child inherited the same pipe and keeps writing to it long
-    after that, with nothing left to read it. Left unread, the child either
-    blocks on write() once the pipe buffer fills or gets SIGPIPE the moment
-    we let proc.stdout/stderr get garbage-collected and close our end.
-
-    This keeps the exact same non-blocking add_reader loop _drain_loop uses,
-    just appending each chunk to `path` on disk instead of an in-memory list
-    the caller has already returned past. Runs until real EOF (the child
-    finally exits and every write-end holder has closed) or until cancelled
-    (list_background_processes' pruning, once the pid it belongs to is gone).
-    """
+    """Like _drain_loop, but appends to `path` on disk so a backgrounded survivor never blocks or gets SIGPIPE."""
     fd = pipe.fileno()
     os.set_blocking(fd, False)
     loop = asyncio.get_running_loop()
@@ -175,8 +133,7 @@ async def _drain_to_file(pipe, path: Path):
 STALL_THRESHOLD_S = 45
 _STALL_TAIL_CHARS = 1024
 
-# Last-line patterns suggesting a backgrounded process is blocked on interactive
-# input: output stopped growing AND the tail reads like a confirmation prompt.
+# Last-line patterns of an interactive prompt, checked when a background process stalls.
 _PROMPT_PATTERNS = [
     re.compile(r"\(y/n\)", re.I),
     re.compile(r"\[y/n\]", re.I),
@@ -197,11 +154,7 @@ _PS_OCTAL_ESCAPE_RE = re.compile(r"\\([0-7]{3})")
 
 
 def _unescape_ps_octal(s: str) -> str:
-    """BSD/macOS `ps -o command=` escapes any non-printable byte in a
-    process's argv — most commonly a literal newline — as a backslash plus
-    3-digit octal code (`\\012` for `\\n`) instead of the real character.
-    Decode those back so a multi-line command reads as actual lines rather
-    than literal backslash-digit noise."""
+    """Decode the 3-digit octal escapes BSD `ps` emits for non-printable argv bytes (e.g. newlines)."""
     def _decode(m):
         try:
             return chr(int(m.group(1), 8))
@@ -210,43 +163,12 @@ def _unescape_ps_octal(s: str) -> str:
     return _PS_OCTAL_ESCAPE_RE.sub(_decode, s)
 
 
-# Unique to the wrapper script bash_() itself builds below (source snapshot,
-# env sourcing, the actual command, then this literal exit-code capture) —
-# see bash_()'s script_lines. A `cmd &`-backgrounded COMPOUND command (a
-# `for`/`while`/`{ ...; }`) runs as a forked-but-never-exec'd copy of that
-# same wrapper bash process for its own job-control subshell, so `ps`
-# reports THAT subshell's argv as the entire multi-line wrapper script, not
-# the user's actual command — fork() alone never changes argv, only exec()
-# does. Detecting that marker and falling back to the original `command`
-# argument (what the model actually asked to run) beats trying to make
-# sense of our own plumbing leaking through ps's output.
+# Marks bash_'s wrapper script; a backgrounded compound command's ps argv shows it, so fall back to the raw command.
 _WRAPPER_SCRIPT_MARKER = "__mcc_ec="
 
 
 async def _track_survivors(pgid: int, command: str, cwd: str, project_dir: str) -> Path | None:
-    """Record any process still alive in bash_'s process group after it exited.
-
-    start_new_session=True made bash's own pid the group id, so once bash
-    itself has exited, anything `ps -g` still finds there is a `cmd &` child
-    bash left running behind it — e.g. a dev server the model backgrounded.
-
-    Runs on every single bash_ call, so this must not block the event loop:
-    a synchronous subprocess.run() here stalls whatever else is in flight
-    (other gathered tool calls, the API stream, bash stdout draining on a
-    concurrent call) for the ps roundtrip. asyncio.create_subprocess_exec
-    yields instead of blocking.
-
-    killpg(pgid, 0) below is a single syscall -- no process spawn -- and
-    tells us whether anything is still alive in the group. That's true for
-    the rare `cmd &` case and false for the overwhelming majority of calls,
-    so it lets us skip forking `ps` (and its own fork/exec cost) on every
-    plain `ls`/`git status`/etc. instead of paying for it unconditionally.
-
-    Returns the output-file path survivors should have their pipes drained
-    into (see bash_'s own call site, which hands stdout/stderr off to
-    _drain_to_file instead of cancelling them), or None when nothing
-    survived — the overwhelming majority of calls.
-    """
+    """Record processes still alive in bash_'s process group after it exited; return their output path or None."""
     try:
         os.killpg(pgid, 0)
     except (ProcessLookupError, PermissionError):
@@ -290,27 +212,15 @@ async def _track_survivors(pgid: int, command: str, cwd: str, project_dir: str) 
     return out_path if found else None
 
 
-# One-shot "this pid just finished" notices, queued by list_background_processes'
-# pruning below and drained by format_background_status. Mirrors
-# subagent_tracker_'s notified-flag pattern (see that module's docstring):
-# a still-running process is worth polling for on demand (monitor_/bash_
-# ps), a state CHANGE (started, finished) is worth pushing once. Plain
-# list, not keyed by pid, since a finished entry is removed from
-# _background_procs the same tick it's queued here — nothing to dedupe.
+# One-shot "pid finished" notices, drained by format_background_status.
 _finished_procs: list[dict] = []
 
-# One-shot "this one looks stuck" notices — same drain-once contract as
-# _finished_procs, queued by _check_stall below and drained by
-# format_background_status.
+# One-shot "looks stuck" notices, drained by format_background_status.
 _stalled_procs: list[dict] = []
 
 
 def _check_stall(pid: int, info: dict) -> None:
-    """Piggybacks on list_background_processes' own per-call pass (run every
-    3s regardless of busy/idle by start_live_tui_'s _poll_bgprocs_tick, and
-    on every claude_loop_ status build) instead of a dedicated timer — cheap
-    when nothing's stalled: one stat() call; the tail-read + regex only run
-    once growth has genuinely stopped for STALL_THRESHOLD_S."""
+    """Flag a background pid as stalled: output stopped growing and the tail looks like a prompt."""
     path = info.get("output_path")
     if not path or info.get("stall_notified"):
         return
@@ -327,8 +237,7 @@ def _check_stall(pid: int, info: dict) -> None:
         return
     tail = get_output_tail(pid, _STALL_TAIL_CHARS)
     if not tail or not _looks_like_prompt(tail):
-        # Not a prompt — keep watching, but don't re-tail on every call until
-        # growth resumes or another full STALL_THRESHOLD_S has passed.
+        # Not a prompt: keep watching; re-tail only after growth resumes or the threshold passes again.
         info["last_growth_at"] = now
         return
     info["stall_notified"] = True
@@ -338,9 +247,7 @@ def _check_stall(pid: int, info: dict) -> None:
 
 
 def list_background_processes() -> list[dict]:
-    """Prune exited processes and return survivors — the same self-scoped
-    set format_background_status formats for the model, structured for a
-    UI pill instead (see start_live_.py/webui/server.py)."""
+    """Prune exited processes and return survivors for the UI pill."""
     for pid in list(_background_procs):
         try:
             os.kill(pid, 0)
@@ -352,9 +259,7 @@ def list_background_processes() -> list[dict]:
             })
         else:
             _check_stall(pid, _background_procs[pid])
-    # A pgid's drain tasks (see _drain_to_file) outlive any one child pid
-    # entry — only cancel them once nothing left in _background_procs still
-    # points at that pgid, i.e. every pid ps -g ever found there is gone.
+    # Cancel a pgid's drain tasks only once no live pid still uses it.
     live_pgids = {info["pgid"] for info in _background_procs.values()}
     for pgid in list(_output_drain_tasks):
         if pgid not in live_pgids:
@@ -395,20 +300,8 @@ def get_output_tail(pid: int, max_chars: int = 2000) -> str | None:
 
 
 def format_background_status() -> str | None:
-    """Format state CHANGES for the per-loop reminder — same notify-once
-    contract as subagent_tracker_ (see that module's docstring: still-alive
-    is worth showing once, up front; after that it's pull-on-demand via
-    monitor_/bash_, not a repeated per-loop restatement). Concretely:
-    - a newly-tracked pid gets exactly one "started" line, right after
-      list_background_processes() has already pruned/queued any finished
-      ones for this same call, so the notified flag flips only for pids
-      that are still genuinely alive this tick.
-    - a pid that died since the last check gets exactly one "finished" line,
-      drained from _finished_procs and not re-shown.
-    An already-notified, still-running pid is silent here — the model was
-    told once it exists and can check on it itself; no per-iteration nag.
-    """
-    procs = list_background_processes()  # prunes dead pids into _finished_procs first
+    """Format new, finished and stuck background processes for the per-loop reminder; each notice shows once."""
+    procs = list_background_processes()
     lines = []
     if _finished_procs:
         for f in _finished_procs:
@@ -434,14 +327,7 @@ def format_background_status() -> str | None:
 
 
 def kill_background_processes() -> int:
-    """SIGKILL every process group this process's bash_ calls left running
-    (`cmd &` survivors). Used when a headless subagent is stopped with
-    SIGTERM: those groups live in their own sessions, so killing the
-    subagent's python process alone would orphan them — a killed-and-
-    relaunched subagent would then compete with its predecessor's leftover
-    heavy commands. Not called on a normal finish, where a deliberately
-    backgrounded server may be meant to outlive the run. Returns the number
-    of groups signalled."""
+    """SIGKILL leftover bash_ process groups on headless-subagent SIGTERM; returns the count signalled."""
     killed = 0
     for pgid in {info["pgid"] for info in _background_procs.values()}:
         try:
@@ -454,12 +340,7 @@ def kill_background_processes() -> int:
 
 
 def _kill_tree(proc):
-    """SIGKILL the whole process group, not just the direct bash process.
-
-    start_new_session=True makes proc.pid its own process-group id, so this
-    also reaps anything the command piped into or backgrounded — a plain
-    proc.kill() only hits bash itself and orphans the rest.
-    """
+    """SIGKILL the whole process group (start_new_session makes proc.pid its pgid)."""
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -467,23 +348,7 @@ def _kill_tree(proc):
 
 
 async def _drain_loop(pipe, chunks: list):
-    """Copy whatever's available on `pipe` into `chunks` as it arrives.
-
-    Runs concurrently with the process, not after it — without this, a
-    command producing more than the OS pipe buffer (~64KB) blocks on
-    write() forever since nothing reads until wait() returns. Left running
-    until cancelled; a backgrounded `cmd &` child inheriting this pipe
-    would otherwise keep it open past bash's own exit, so we never wait for
-    EOF here — the caller cancels once bash itself has exited.
-
-    Event-driven via loop.add_reader (epoll/kqueue), not a poll-sleep loop:
-    the previous version woke up every 10ms to check os.read() even when
-    the process was silent, which taxes every concurrent bash_ call (real
-    load in headless with several agents running at once) for
-    CPU no one needed, and added up to 10ms of pure lag per chunk on
-    streaming output. add_reader instead fires the callback exactly when
-    the fd has data, with no idle wakeups and no added latency.
-    """
+    """Copy pipe output into `chunks` as it arrives; ends at EOF or when cancelled."""
     fd = pipe.fileno()
     os.set_blocking(fd, False)
     loop = asyncio.get_running_loop()
@@ -522,12 +387,7 @@ async def _cancel(task):
 
 
 async def _drain_or_timeout(task, timeout: float):
-    """Wait for a drain task to hit real EOF, capped at `timeout`.
-
-    shield keeps a timeout from cancelling `task` itself here — the caller
-    always runs _cancel(task) right after regardless of which way this
-    exits, so cleanup is uniform either way.
-    """
+    """Wait for a drain task to reach EOF, capped at `timeout`; never cancels it."""
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
     except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -535,13 +395,7 @@ async def _drain_or_timeout(task, timeout: float):
 
 
 def _snapshot_image_mtimes(cwd: str) -> dict[str, float]:
-    """Top-level image files in `cwd` and their current mtime, taken right
-    before the command runs — the baseline _newly_created_image compares
-    against. Non-recursive on purpose: matplotlib/PIL/etc. save to the
-    working directory in the overwhelming common case (a script writing
-    to some nested output/ path is the same signal a human would have to
-    go looking for too), and scanning the whole tree on every bash_ call
-    is real, avoidable cost for a rare case."""
+    """Mtimes of top-level image files in `cwd`, taken before the command runs; non-recursive by design."""
     try:
         return {
             f: os.path.getmtime(os.path.join(cwd, f))
@@ -553,11 +407,7 @@ def _snapshot_image_mtimes(cwd: str) -> dict[str, float]:
 
 
 def _newly_created_image(cwd: str, before: dict[str, float]) -> str | None:
-    """Path of the most recently modified image in `cwd` that's new or
-    changed since `before` — the command's own output, not a screenshot
-    that happened to already be sitting there. One image per call, not
-    every image ever produced: keeps the shape simple (see bash_'s
-    docstring note on why this is intentionally narrow for v1)."""
+    """Most recently modified image in `cwd` that is new or changed since `before`; one per call."""
     try:
         candidates = []
         for f in os.listdir(cwd):
@@ -581,23 +431,23 @@ async def bash_(
     *,
     project_dir: str,
     path: str = None,
-    timeout: int = 120
+    timeout: int = 120,
+    description: Optional[str] = None
 ) -> str:
-    """Execute bash command.
+    """Execute a bash command.
 
     Args:
         command: The bash command to execute
-        path: Working directory (default: last known cwd for this project, initially project_dir). Relative paths resolve to project_dir.
-        timeout: Max seconds before killing process (default 120)
+        path: Working directory (default: last cwd for this project, initially project_dir); relative paths resolve to project_dir
+        timeout: Max seconds before the process is killed (default 120)
+        description: Short description of what you are about to do, in active voice
     """
     if platform.system() == "Windows":
         return _WINDOWS_MSG
 
     max_output_chars = 60000
 
-    # Determine cwd. `cd` inside a previous command call carries over via
-    # _cwd_state, so this behaves like one continuous shell session rather
-    # than resetting to project_dir on every call.
+    # `cd` persists via _cwd_state across calls.
     if path:
         if os.path.isabs(path):
             cwd = path
@@ -617,18 +467,12 @@ async def bash_(
     cwd_fd, cwd_file = tempfile.mkstemp(prefix="micro_cc_cwd_")
     os.close(cwd_fd)
 
-    # Wrap the command so we can (a) source captured aliases/functions and
-    # (b) capture the resulting cwd for the next call, regardless of the
-    # command's own exit code. Newline-separated (not &&) so `pwd -P` still
-    # runs even if `command` exits non-zero.
+    # Aliases load, and the cwd capture runs even on non-zero exit (newline-joined, not &&).
     script_lines = []
     if snapshot_path:
         script_lines.append(f"source {shlex.quote(snapshot_path)} 2>/dev/null || true")
         script_lines.append("shopt -s expand_aliases 2>/dev/null || true")
-    # Project-scoped secrets (see /keys): sourced fresh every call, straight
-    # off disk, so a .env written mid-session is picked up immediately with
-    # no reload step and without ever touching this long-running process's
-    # own os.environ.
+    # Project .env is sourced into the subshell each call, never into os.environ.
     project_env_path = os.path.join(project_dir, ".env")
     if os.path.isfile(project_env_path):
         script_lines.append(f"set -a; source {shlex.quote(project_env_path)} 2>/dev/null || true; set +a")
@@ -640,42 +484,16 @@ async def bash_(
     full_command = "\n".join(script_lines)
 
     try:
-        # Plain subprocess.Popen, not asyncio.create_subprocess_exec: asyncio's
-        # subprocess transport ties proc.wait()/returncode to ALL stdio pipes
-        # reaching EOF, not just the process exiting. A backgrounded `cmd &`
-        # child inherits those same pipes and can hold them open indefinitely,
-        # which made the asyncio version hang for the full timeout on every
-        # backgrounded launch. Popen.wait() (run in an executor thread below)
-        # reflects the shell's own exit immediately, independent of who still
-        # holds the pipes.
+        # Popen, not asyncio: a `cmd &` child holding the pipes would stall asyncio's wait().
         proc = subprocess.Popen(
             [_SHELL, "-c", full_command],
             cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            # MICROCC_CALLER_PROJECT_DIR: lets any microcc-headless process
-            # this shell (or a descendant of it) launches self-register with
-            # OUR subagent tracker on startup — see start_headless_.py's
-            # run_headless. Always set, unconditionally: cheap, and correct
-            # by construction (project_dir here is the real caller identity
-            # the framework handed this tool call, not text to pattern-match
-            # against). Replaces a former bash_tool_-side regex/shlex scan
-            # over the command string trying to detect+parse a
-            # microcc-headless invocation after the fact — that approach
-            # mistracked `mkdir`/`|` as project_dirs the moment a command
-            # chained multiple spawns or ran an unrelated `grep
-            # microcc-headless`, twice in production (see
-            # subagent_tracker_.py's module docstring).
+            # Lets microcc-headless children self-register with this caller's subagent tracker.
             env={**_bash_env(), "TERM": "dumb", "MICROCC_CALLER_PROJECT_DIR": project_dir},
-            # Detach into a new session: no controlling terminal, own
-            # process group. Without this, a child that opens /dev/tty
-            # directly (ssh -t, vim, another Textual app, ...) reaches the
-            # REAL terminal the host TUI owns — writes its own raw-mode/
-            # alt-screen escape codes onto it and steals keyboard input,
-            # which is exactly the "bleeds onto terminal and breaks the
-            # app" failure. New session also means proc.pid is a process
-            # group id, so a timeout can kill the whole tree, not just bash.
+            # New session: no controlling tty; proc.pid doubles as the pgid for _kill_tree.
             start_new_session=True,
         )
 
@@ -698,13 +516,7 @@ async def bash_(
             await _cancel(stderr_task)
             raise  # re-raise so gather/task cancellation propagates
 
-        # bash exited. If nothing backgrounded a child that inherited these
-        # pipes, the drain loops already hit real EOF within one 10ms poll
-        # tick of proc.wait() returning — waiting a flat 50ms unconditionally
-        # on every single call taxed the common (non-backgrounding) case for
-        # no reason. Still cap at 50ms so a `cmd &` child holding a pipe open
-        # gets the same grace period as before; it just doesn't cost the
-        # other 99% of calls anymore.
+        # Drains hit EOF on their own; cap the wait at 50ms for a `cmd &` child holding a pipe.
         await asyncio.gather(
             _drain_or_timeout(stdout_task, 0.05),
             _drain_or_timeout(stderr_task, 0.05),
@@ -712,14 +524,7 @@ async def bash_(
 
         survivor_output_path = await _track_survivors(proc.pid, command, cwd, project_dir)
         if survivor_output_path is not None:
-            # A `cmd &` child is still alive and holding these pipes open —
-            # hand the still-live ones off to a persistent drain instead of
-            # cancelling them (see _drain_to_file), so its future output
-            # keeps landing on disk instead of getting SIGPIPE'd once we let
-            # proc.stdout/stderr get garbage-collected. A pipe that already
-            # hit real EOF here (task.done()) means that particular stream
-            # was already closed/redirected elsewhere by the child itself —
-            # nothing to hand off, cancel is a no-op either way.
+            # Live survivor pipes go to _drain_to_file; already-EOF'd ones are just cancelled.
             handed_off = []
             if stdout_task.done():
                 await _cancel(stdout_task)
@@ -761,15 +566,7 @@ async def bash_(
 
         output_text = output.strip() or "[No output]"
 
-        # Display-only, never vision: unlike read_'s {"type": "image", ...}
-        # (which claude_loop_ routes as a real tool_result image block, a
-        # genuine vision call), this shape keeps `output` as the normal
-        # string tool_result Claude reasons about exactly as before —
-        # display_image only ever reaches the TUI's own render path. A
-        # bash command that happens to produce an image (a matplotlib
-        # chart, say) doesn't silently cost a vision call on every run;
-        # the model can still look at it explicitly via its own read_
-        # call on the file, same as today.
+        # Display-only: rendered by the TUI; the model still gets the plain string.
         image_path = _newly_created_image(cwd, image_mtimes_before)
         if image_path:
             encoded = sanitize_and_encode_image_(image_path)
@@ -783,9 +580,7 @@ async def bash_(
     except Exception as e:
         return f"[Bash error: {type(e).__name__}: {e}]"
     finally:
-        # Pick up wherever `command` left the shell (via `cd`), so the next
-        # call starts there instead of resetting to project_dir. Empty/missing
-        # on timeout or a crash before `pwd -P` ran -- just skip the update.
+        # Sync cwd from `pwd -P`; skipped if the command timed out or crashed before it ran.
         try:
             with open(cwd_file, "r") as f:
                 new_cwd = f.read().strip()

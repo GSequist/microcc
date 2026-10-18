@@ -5,38 +5,24 @@ import time
 
 
 async def computer(code: str, *, project_dir: str, model: str) -> str:
-    """Execute PyAutoGUI code to control the Mac desktop.
+    """Run PyAutoGUI code to control the Mac desktop; `pyautogui` and `time` are pre-imported.
 
-    `pyautogui` and `time` are pre-imported. Use for mouse, keyboard, and screen control.
-
-    Every execution auto-captures a screenshot which is analyzed via vision.
+    Every run auto-captures a screenshot and describes it via vision.
 
     Args:
-        code: Python code using pyautogui. Examples:
-              pyautogui.click(500, 300)
-              pyautogui.hotkey('cmd', 'space')
-              pyautogui.write('hello', interval=0.05)
-              pyautogui.moveTo(100, 200)
-              pyautogui.scroll(-3)
+        code: Python code using pyautogui
     """
-    # Element scoping (_get_ax_elements) is macOS Accessibility API, and the
-    # screenshot step below shells out to `screencapture` — both mac-only.
-    # search_tool_.py already keeps this tool out of the catalog on other
-    # platforms; this is the defense-in-depth check for any other call path.
+    # Mac-only: AX element scoping and screencapture; search_tool_ also hides this tool elsewhere.
     if platform.system() != "Darwin":
         return "[Computer tool is macOS-only — not available on this platform]"
 
-    # pyautogui pulls in AppKit/Quartz/objc — kept out of the eager import
-    # chain (this module loads at app startup) and only paid the first time
-    # computer_use actually runs.
+    # Lazy import: AppKit/Quartz load only on first use.
     import pyautogui
     pyautogui.PAUSE = 0.3
 
-    # Screenshot dir
     ss_dir = os.path.join(project_dir, ".computer_screenshots")
     os.makedirs(ss_dir, exist_ok=True)
 
-    # Execute the code with pyautogui in scope
     exec_output = ""
     try:
         local_ns = {"pyautogui": pyautogui, "time": time}
@@ -51,7 +37,7 @@ async def computer(code: str, *, project_dir: str, model: str) -> str:
     except Exception as e:
         exec_output = f"Execution error: {type(e).__name__}: {e}"
 
-    # Auto-screenshot via native screencapture (faster + better quality than pyautogui)
+    # Native screencapture: faster and sharper than pyautogui.
     screenshot_path = os.path.join(ss_dir, f"{int(time.time() * 1000)}.png")
     try:
         subprocess.run(
@@ -61,14 +47,12 @@ async def computer(code: str, *, project_dir: str, model: str) -> str:
     except Exception as e:
         return f"{exec_output}\n[Screenshot failed: {e}]".strip()
 
-    # Annotate screenshot with interactive element bounding boxes
     from micro_cc.utils.annotate_ import annotate_screenshot
     elements = _get_ax_elements()
     element_index = annotate_screenshot(screenshot_path, elements)
 
-    # Vision the annotated screenshot
     from micro_cc.tools.vision_tools_ import vision
-    prompt = "Describe this Mac screen. Numbered red boxes mark interactive elements."
+    prompt = "Describe this Mac screen. Numbered coloured boxes mark interactive elements."
     description = await vision(
         screenshot_path,
         prompt,
@@ -99,12 +83,7 @@ _INPUT_ROLES = {"AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"}
 
 
 def _get_ax_elements() -> list[dict]:
-    """Extract ALL interactive elements from all visible apps via macOS Accessibility API.
-
-    Traverses to depth 30 to reach web content inside Chrome/Electron (Outlook lives at depth 20+).
-    Collects everything with any action, then ranks for the annotated screenshot (top 50 drawn).
-    All elements stored in element_map for Claude to reference.
-    """
+    """Collect actionable on-screen elements from all visible apps via the macOS Accessibility API."""
     try:
         from ApplicationServices import (
             AXUIElementCreateApplication,
@@ -196,8 +175,7 @@ def _get_ax_elements() -> list[dict]:
             except Exception:
                 continue
 
-        # Rank: labeled > unlabeled, inputs high, deeper = content not chrome,
-        #        "Close"/"Close Tab" deprioritized
+        # Rank: labeled first, inputs high, deeper nodes up, Close buttons down.
         def _score(el):
             s = 0
             if el["label"]:
@@ -211,7 +189,7 @@ def _get_ax_elements() -> list[dict]:
 
         candidates.sort(key=_score, reverse=True)
 
-        # Dedup: if two elements have click centers within 8px, keep the higher-scored one
+        # Drop elements whose click centers are within 8px of a higher-scored one.
         deduped = []
         seen_coords = []  # list of (cx, cy)
         for el in candidates:

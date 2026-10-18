@@ -11,6 +11,10 @@ import { ChatHeader } from './chat-header';
 import { CommandModal, type ModalKind } from './command-modal';
 import { QuestionPanel, type PendingQuestion } from './question-panel';
 import { useSession } from '../contexts/SessionContext';
+import { useIncoming } from '../hooks/use-incoming';
+import { useSubagents } from '../hooks/use-subagents';
+import { useBackgroundProcesses } from '../hooks/use-background-processes';
+import { BackgroundLine } from './background-line';
 
 export function Chat() {
   const { session, commands, refresh } = useSession();
@@ -64,6 +68,14 @@ export function Chat() {
       })
       .catch(() => {});
   }, [setMessages]);
+
+  useIncoming(
+    status === 'ready' && !question,
+    useCallback(
+      (text: string, id: number) => sendMessage({ parts: [{ type: 'text', text }] }, { body: { incoming_id: id } }),
+      [sendMessage],
+    ),
+  );
 
   const customStop = useCallback(async () => {
     try {
@@ -214,6 +226,23 @@ export function Chat() {
     return null;
   };
 
+  // Streamed snapshots are fresher mid-turn; between turns the polled ones keep the line live.
+  const getLatestData = (msgs: UIMessage[], type: string, key: string) => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const parts = msgs[i].parts;
+      if (!parts) continue;
+      for (let j = parts.length - 1; j >= 0; j--) {
+        if (parts[j].type === type) return (parts[j] as any).data[key];
+      }
+    }
+    return null;
+  };
+  const polledSubagents = useSubagents();
+  const polledProcesses = useBackgroundProcesses();
+  const busy = status === 'submitted' || status === 'streaming';
+  const subagents = (busy && getLatestData(messages, 'data-subagents', 'subagents')) || polledSubagents;
+  const processes = (busy && getLatestData(messages, 'data-bgprocs', 'processes')) || polledProcesses;
+
   const rawTodos = getLatestTodos(messages);
   const latestStatus = getLatestStatus(messages);
   // Stop rendering once every item is terminal — a finished list shouldn't linger.
@@ -247,6 +276,9 @@ export function Chat() {
             <TodoTracker todos={todos} />
           </div>
         )}
+        <div className="mx-auto w-full md:max-w-3xl">
+          <BackgroundLine subagents={subagents} processes={processes} />
+        </div>
         <div className="flex mx-auto px-2 pb-4 md:pb-6 gap-2 w-full md:max-w-3xl z-10">
           {question ? (
             <QuestionPanel

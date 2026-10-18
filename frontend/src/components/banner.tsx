@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react';
+import { memo } from 'react';
 
 // Straight transcription of the TUI banner (screens/window_overlay_.py).
 // The `\` escapes matter — the art is full of quotes and backticks.
@@ -13,9 +13,8 @@ const ART = [
   '88      88      88 88  `"Ybbd8"\' 88          `"YbbdP"\'     `"Ybbd8"\'  `"Ybbd8"\'',
 ];
 
-// Same seven the TUI picks from (_BANNER_COLORS). There the colour is chosen
-// once per launch; here it cycles, because a web page is a surface that can
-// afford to breathe.
+// Same seven the TUI picks from (_BANNER_COLORS). Picked once per tab, like the
+// TUI does per launch, then it never changes.
 const COLORS = [
   '#4a8a68', // green (original)
   '#8fa8d9', // pastel blue
@@ -26,19 +25,19 @@ const COLORS = [
   '#c9c17a', // pastel gold
 ];
 
-// Every instance derives its colour from the clock rather than its own
-// counter, so the header mark and the big wordmark are always on the same
-// swatch — a mark that mounts later would otherwise start its cycle offset.
-const PERIOD_MS = 4000;
+const ACCENT = (() => {
+  try {
+    const saved = sessionStorage.getItem('mcc-accent');
+    if (saved) return saved;
+    const pick = COLORS[Math.floor(Math.random() * COLORS.length)];
+    sessionStorage.setItem('mcc-accent', pick);
+    return pick;
+  } catch {
+    return COLORS[Math.floor(Math.random() * COLORS.length)];
+  }
+})();
 
-export function useBannerColor() {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => tick((n) => n + 1), PERIOD_MS);
-    return () => clearInterval(id);
-  }, []);
-  return COLORS[Math.floor(Date.now() / PERIOD_MS) % COLORS.length];
-}
+export const useBannerColor = () => ACCENT;
 
 // The TUI's rich markup tints every alphanumeric run with the accent colour and
 // leaves the punctuation (the commas, quotes and backticks that draw the
@@ -80,9 +79,9 @@ function PureBanner() {
           than wrapping. clamp() keeps it readable from phone to desktop. */}
       <pre
         aria-label="micro-cc"
-        className="font-mono leading-[1.15] whitespace-pre transition-colors duration-1000 ease-in-out"
+        className="font-mono leading-[1.15] whitespace-pre"
         style={{
-          fontSize: 'clamp(3px, 0.55vw, 6px)',
+          fontSize: 'clamp(5px, 1.35vw, 12px)',
           // The art is built from ", ', ` and quote pairs; a coding font with
           // ligatures would fuse them and bend the letterforms out of shape.
           fontVariantLigatures: 'none',
@@ -94,16 +93,16 @@ function PureBanner() {
         ))}
       </pre>
 
-      <p className="text-xs italic text-muted-foreground/70">
+      <p className="text-[11px] italic text-muted-foreground/70">
         Knowledge work is, by extension, a coding problem.
       </p>
 
-      <p className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground/60">
-        <kbd style={{ color: accent }} className="transition-colors duration-1000">enter</kbd> submit
+      <p className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground/60">
+        <kbd style={{ color: accent }}>enter</kbd> submit
         <span className="opacity-40">·</span>
-        <kbd style={{ color: accent }} className="transition-colors duration-1000">@</kbd> files
+        <kbd style={{ color: accent }}>@</kbd> files
         <span className="opacity-40">·</span>
-        <kbd style={{ color: accent }} className="transition-colors duration-1000">/</kbd> commands
+        <kbd style={{ color: accent }}>/</kbd> commands
       </p>
     </div>
   );
@@ -111,15 +110,14 @@ function PureBanner() {
 
 export const Banner = memo(PureBanner);
 
-// Avatar-sized stand-in for the wordmark, cycling the same palette so the
-// transcript stays tied to the banner above it.
+// Avatar-sized stand-in for the wordmark, same accent as the banner.
 function PureAssistantMark() {
   const accent = useBannerColor();
 
   return (
     <div className="size-8 flex items-center justify-center rounded-full ring-1 shrink-0 ring-border bg-background">
       <span
-        className="font-mono text-[13px] leading-none transition-colors duration-1000 ease-in-out"
+        className="font-mono text-[13px] leading-none"
         style={{ color: accent }}
       >
         ◇
@@ -130,15 +128,13 @@ function PureAssistantMark() {
 
 export const AssistantMark = memo(PureAssistantMark);
 
-// Header wordmark. The full ASCII art is 79 columns wide and unreadable at
-// header size, so this is the same idea reduced to a glyph + name — still on
-// the shared colour cycle, so it breathes in step with the big one.
+// Header wordmark: the art reduced to a glyph + name, same accent as the banner.
 function PureBannerMark() {
   const accent = useBannerColor();
 
   return (
     <span
-      className="flex items-center gap-1.5 font-mono transition-colors duration-1000 ease-in-out"
+      className="flex items-center gap-1.5 font-mono"
       style={{ color: accent }}
       title="micro-cc — on the metal"
     >

@@ -6,34 +6,9 @@ from micro_cc.postgres_store import schema_
 from micro_cc.utils.helpers import project_hash
 from micro_cc.utils.msg_normalize_ import normalize_message, reconstruct_message, repair_dangling_tool_use, is_valid_message, log_dropped_message
 
-# One row per message (project_hash, id — id is a BIGSERIAL, so insertion
-# order IS read order)
-# one INSERT per message, one SELECT ... ORDER BY per read. Replaces the old
-# design (_write_raw: INSERT ... ON CONFLICT DO UPDATE SET messages =
-# EXCLUDED.messages), which rewrote the ENTIRE conversation into a single
-# JSONB column on every single tool_call/tool_result/final_text/done/error
-# event — same O(n)-per-call cost as the local backend's old full-rewrite,
-# just paid as a network round trip instead of a local disk write, and with
-# no way to ever become an append.
-#
-# store_msgs is still handed the FULL msgs list every call (that's the
-# shared contract in msg_store_.py — claude_loop_ mutates one growing list
-# in place, every caller just passes it along), so this still needs to know
-# how much is already durable to insert only the new tail. Postgres itself
-# is the durable source of truth for that count — a COUNT(*) per call,
-# no in-memory cursor (which wouldn't survive a container restart anyway,
-# the whole reason this backend exists).
-#
-# Unlike the local backend, this one CAN have two genuinely separate
-# processes writing the same project_hash at once — a headless/cron run and
-# a live TUI both pointed at the same Postgres and the same project_dir
-# (e.g. a CRM orchestrator's per-ticket container job and an admin's local
-# microcc session on that same ticket). That's not a single-writer
-# deployment, so store_msgs/rewind_msgs/load_msgs all take a Postgres
-# advisory lock (see _locked below) around their count-then-write critical
-# sections — the local backend's in-process threading.RLock has no reach
-# across a network connection, so this has to be enforced server-side
-# instead.
+# One row per message (BIGSERIAL id, so insertion order is read order).
+# Several processes can write one project_hash here, so writes take an advisory lock (_locked).
+# store_msgs inserts msgs[COUNT(*):], so Postgres, not memory, holds the write cursor.
 
 def _connect():
     try:
@@ -51,21 +26,10 @@ def _connect():
 
 
 def _locked(conn, phash: str, fn):
-    """Run fn() with a Postgres session-level advisory lock held on phash —
-    the cross-process equivalent of msg_store_.py's per-project
-    threading.RLock, needed because two OS processes (not just two threads
-    in one process) can legitimately share a project_hash here. hashtext()
-    collapses phash to a 32-bit int; a collision between two unrelated
-    tickets just serializes them against each other for the duration of one
-    call, never corrupts anything, so no need for a wider key.
-
-    conn must be in autocommit mode (every caller's _connect() already is)
-    — pg_advisory_lock/unlock are plain function calls, not scoped to a
-    transaction, so an explicit unlock in `finally` is what actually
-    releases it rather than relying on commit/rollback.
-    """
+    """Run fn() under a session advisory lock on phash (the cross-process analogue of msg_store_'s RLock)."""
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_lock(hashtext(%s)::bigint)", (phash,))
+    # Autocommit: advisory locks are session-scoped, so unlock explicitly.
     try:
         return fn()
     finally:
@@ -96,19 +60,9 @@ def _insert_rows(cur, phash: str, msgs: list) -> None:
 
 
 def store_msgs(project_dir: str, msgs: list) -> None:
-    """Append the tail of `msgs` not yet in micro_cc_messages for this
-    project. Same contract as msg_store_.store_msgs: call it every time you
-    want the latest state durable.
+    """Append the msgs tail not yet stored for this project. Call whenever you want state durable.
 
-    Deliberately does NOT run repair_dangling_tool_use before inserting —
-    same reasoning as the local backend: this is called mid-run, before a
-    just-issued tool_use has its result yet, so the tail is routinely a
-    dangling tool_use for a normal, brief moment. Unlike the old
-    full-JSONB-overwrite design, an appended row is permanent the instant
-    it's inserted — there's no next full rewrite to silently clean a
-    synthetic "Interrupted" row up, so writing one here would leave it in
-    history forever. Repair only belongs at load time (load_msgs/
-    rewind_msgs), same as local.
+    No repair here: a mid-run tail is often a pending tool_use, and inserted rows are permanent.
     """
     phash = project_hash(project_dir)
     with _connect() as conn:
@@ -121,11 +75,7 @@ def store_msgs(project_dir: str, msgs: list) -> None:
                 known = cur.fetchone()[0]
 
                 if known > len(msgs):
-                    # Same self-heal as msg_store_.store_msgs: a COUNT ahead
-                    # of len(msgs) means this call's view of history is
-                    # stale or short relative to what's actually durable —
-                    # appending from `known` would skip rows outright.
-                    # Replace instead of silently losing them.
+                    # COUNT ahead of msgs means a stale view; appending would skip rows, so replace.
                     cur.execute(
                         "DELETE FROM micro_cc_messages WHERE project_hash = %s",
                         (phash,),
@@ -140,20 +90,7 @@ def store_msgs(project_dir: str, msgs: list) -> None:
 
 
 def load_msgs(project_dir: str) -> list:
-    """Locked the same as store_msgs/rewind_msgs — not because a plain read
-    is unsafe by itself, but so it can't land between a concurrent rewind's
-    DELETE and its re-INSERT (autocommit means those are two separate
-    commits, not one transaction) and observe a transiently empty history.
-
-    Malformed rows get DELETEd here, not just filtered in memory: unlike the
-    local backend (which tracks its own high-water mark), store_msgs's
-    `known` here is always a fresh COUNT(*) against this table. Merely
-    filtering in memory would leave COUNT(*) ahead of the returned list by
-    the dropped-row count, and store_msgs's fast path (INSERT msgs[known:])
-    would then skip that many of THIS turn's genuinely new messages instead
-    of just the malformed ones — same class of bug as omitting this would
-    cause locally, just via COUNT(*) instead of _persisted_len.
-    """
+    """Repaired, reconstructed messages. Locked so it can't observe a rewind between its DELETE and re-INSERT."""
     phash = project_hash(project_dir)
     with _connect() as conn:
         def _do():
@@ -165,6 +102,7 @@ def load_msgs(project_dir: str) -> list:
                 rows = cur.fetchall()
                 bad_ids = [row_id for row_id, message in rows if not is_valid_message(message)]
                 if bad_ids:
+                    # Delete, not just filter: store_msgs' COUNT(*) must match the returned list.
                     log_dropped_message("pg_store_", project_dir, len(bad_ids))
                     cur.execute(
                         "DELETE FROM micro_cc_messages WHERE id = ANY(%s)",
@@ -217,18 +155,10 @@ def erase_msgs(project_dir: str) -> None:
 
 
 def search_msgs(project_dir: str, query: str, limit: int = 10) -> list:
-    """Postgres counterpart to msg_store_.search_msgs — ILIKE substring
-    match over the JSONB message column, cast to text, rather than real
-    FTS (to_tsvector/tsquery). Deliberate: mirrors the local backend's
-    plain substring semantics exactly, so a project behaves identically
-    regardless of which storage backend it's running against, rather than
-    Postgres quietly being "smarter." Returns most-recent-first, same
-    contract as the local implementation.
-    """
+    """ILIKE substring match over the JSONB message text, newest first; mirrors msg_store_ semantics."""
     if not query:
         return []
-    # Lazy import — msg_store_ imports pg_store_ at module load, so a
-    # top-level import here would be circular.
+    # Lazy: msg_store_ imports this module at load, so a top-level import would be circular.
     from micro_cc.utils.msg_store_ import _flatten_content_for_search, _snippet
 
     phash = project_hash(project_dir)
@@ -281,12 +211,7 @@ def store_summary(project_dir: str, summary: str) -> None:
 
 
 def load_checkpoint(project_dir: str) -> dict | None:
-    """New-format checkpoint reader — same micro_cc_sessions.summary JSONB
-    column load_summary reads, repurposed with an as_of_index key. Returns
-    None for a missing row AND for an old-format one (no "as_of_index"),
-    same contract as msg_store_.load_checkpoint. "folded_tokens" defaults
-    to 0 for a row written before that field existed — see
-    msg_store_.load_checkpoint's docstring."""
+    """Checkpoint from micro_cc_sessions.summary; None if absent or old-format (no as_of_index)."""
     phash = project_hash(project_dir)
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -304,8 +229,7 @@ def load_checkpoint(project_dir: str) -> dict | None:
 
 
 def store_checkpoint(project_dir: str, summary: str, as_of_index: int, folded_tokens: int = 0) -> None:
-    """Persist the new-format checkpoint — same row store_summary writes,
-    repurposed with an as_of_index and folded_tokens."""
+    """Persist the checkpoint in the same row store_summary writes."""
     phash = project_hash(project_dir)
     normalized = os.path.abspath(os.path.expanduser(project_dir))
     payload = {
@@ -336,10 +260,7 @@ def erase_summary(project_dir: str) -> None:
 
 
 def load_token_stats(project_dir: str) -> dict | None:
-    """Carbon copy of the local tokens.json read — see save_token_stats.
-    None on a missing row (mirrors tokenization_simple.load_token_stats'
-    own no-op-on-miss local-disk contract, which the caller already relies
-    on)."""
+    """Token stats dict or None; the Postgres twin of tokenization_simple's tokens.json."""
     phash = project_hash(project_dir)
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -351,12 +272,7 @@ def load_token_stats(project_dir: str) -> dict | None:
 
 
 def save_token_stats(project_dir: str, token_stats: dict) -> None:
-    """Persist the whole token_stats dict as-is — a carbon copy of what
-    tokenization_simple.save_token_stats writes to local tokens.json, not
-    a bespoke column per field (this project has no per-conversation billing
-    rows, and the local dict is
-    already the exact shape worth keeping). Same idempotent upsert shape as
-    store_summary/store_checkpoint above."""
+    """Upsert the whole token_stats dict, as tokenization_simple writes it to tokens.json."""
     phash = project_hash(project_dir)
     normalized = os.path.abspath(os.path.expanduser(project_dir))
     with _connect() as conn, conn.cursor() as cur:
@@ -376,8 +292,7 @@ def save_token_stats(project_dir: str, token_stats: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def list_memories(project_hash: str = "") -> list:
-    """Manifest: [{key, description, updated_at}], newest first.
-    project_hash='' (default) is the global scope."""
+    """Manifest [{key, description, updated_at}], newest first; project_hash '' is the global scope."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT key, description, updated_at FROM micro_cc_memory WHERE project_hash = %s ORDER BY updated_at DESC",
@@ -409,9 +324,7 @@ def count_memories(project_hash: str = "") -> int:
 
 
 def add_memory(key: str, description: str, content: str, project_hash: str = "") -> dict:
-    """Returns {'status': 'ok'|'exists'}. ON CONFLICT DO NOTHING makes the
-    exists-check atomic — unlike the local backend, two processes sharing
-    this Postgres can genuinely race on the same (project_hash, key)."""
+    """{'status': 'ok'|'exists'}; ON CONFLICT keeps the existence check atomic across processes."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -431,8 +344,7 @@ def edit_memory(
     new_description: str | None = None,
     project_hash: str = "",
 ) -> dict:
-    """Returns {'status': 'ok'|'missing'}. COALESCE keeps the "omit to keep
-    current" merge atomic in one UPDATE, instead of a racy read-modify-write."""
+    """{'status': 'ok'|'missing'}; COALESCE merges in one atomic UPDATE."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -449,7 +361,7 @@ def edit_memory(
 
 
 def delete_memory(key: str, project_hash: str = "") -> dict:
-    """Returns {'status': 'ok'|'missing'}."""
+    """{'status': 'ok'|'missing'}."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM micro_cc_memory WHERE key = %s AND project_hash = %s", (key, project_hash))
         status = "ok" if cur.rowcount else "missing"
@@ -461,9 +373,7 @@ def delete_memory(key: str, project_hash: str = "") -> dict:
 # ---------------------------------------------------------------------------
 
 def load_settings() -> dict | None:
-    """None on a missing row — same "no row yet" contract as
-    load_token_stats/load_checkpoint, so settings_store_._load() can tell
-    "never written" apart from "written as {}"."""
+    """None on a missing row, so settings_store_ can tell unwritten from {}."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT data FROM micro_cc_settings WHERE id = 'global'")
         row = cur.fetchone()
@@ -471,7 +381,7 @@ def load_settings() -> dict | None:
 
 
 def load_theme() -> dict | None:
-    """Theme row of micro_cc_settings; None if never written. Copies a pre-0.2.106 micro_cc_theme row once."""
+    """Theme row of micro_cc_settings; None if never written. Falls back to the legacy micro_cc_theme table."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT data FROM micro_cc_settings WHERE id = 'theme'")
         row = cur.fetchone()
@@ -484,7 +394,7 @@ def load_theme() -> dict | None:
         row = cur.fetchone()
         if not row:
             return None
-        # Idempotent: racing processes upsert the same legacy data; the old table is left in place.
+        # Idempotent: racing processes write the same row; legacy table left in place.
         cur.execute(
             "INSERT INTO micro_cc_settings (id, data, updated_at) VALUES ('theme', %s, now()) ON CONFLICT (id) DO NOTHING",
             (json.dumps(row[0]),),
@@ -507,9 +417,7 @@ def save_theme(store: dict) -> None:
 
 
 def save_settings(store: dict) -> None:
-    """Whole-dict upsert — settings are edited by a human via the TUI/webui,
-    not a per-message hot path, so there's no append/lock story to match
-    store_msgs' here."""
+    """Whole-dict upsert; settings are human-edited, so no append/lock path like store_msgs."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             """

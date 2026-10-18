@@ -1,10 +1,19 @@
+import asyncio
 import os
+import platform
+import subprocess
+import sys
 import time
 
 _playwright = None
 _browser = None
 _page = None
 _console_log: list[str] = []
+_CDP_PORT = 9222
+_WIN_CHROME = [
+    "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
+    "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+]
 
 
 def _on_console(msg):
@@ -16,33 +25,77 @@ def _on_console(msg):
 async def _ensure_browser():
     global _playwright, _browser, _page
     if _page is not None and (_page.is_closed() or not _browser.is_connected()):
-        # The user closed the browser window/tab out-of-band — Playwright's
-        # own objects don't reset themselves when that happens, so `_page`
-        # stays a truthy (but dead) reference forever and the `if not
-        # _page:` check below never re-fires. Every subsequent call was
-        # hitting that same dead target: TargetClosedError on every call,
-        # with no way back short of /clear (the only thing that ever called
-        # close_browser()). Tear down and fall through to relaunch fresh,
-        # same as the very first call. Best-effort — close_browser() already
-        # swallows errors from an already-dead process.
+        # Window closed out-of-band: Playwright objects stay truthy, so tear down and relaunch.
         await close_browser()
     if not _page:
         from playwright.async_api import async_playwright
         _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(headless=False)
-        _page = await _browser.new_page(viewport={"width": 1280, "height": 720})
+        _browser = await _attach_windows_chrome() if _is_wsl() else None
+        if _browser:
+            _page = await _browser.contexts[0].new_page()
+            await _page.set_viewport_size({"width": 1280, "height": 720})
+        else:
+            _browser = await _launch_chromium()
+            _page = await _browser.new_page(viewport={"width": 1280, "height": 720})
         _page.on("console", _on_console)
     return _page
 
 
-async def close_browser():
-    """Tear down the persistent browser session.
+def _is_wsl() -> bool:
+    return "microsoft" in platform.release().lower()
 
-    Best-effort: if the browser process already died (crashed, killed,
-    its pipe to Playwright's driver closed from the other end), close()/
-    stop() raise instead of no-op'ing, which would otherwise take down
-    whatever awaited us (e.g. /clear) with an unhandled exception."""
+
+async def _attach_windows_chrome():
+    """WSL: start Windows Chrome with a persistent micro-cc profile and attach over CDP; None if unreachable."""
+    exe = next((p for p in _WIN_CHROME if os.path.exists(p)), None)
+    if not exe:
+        return None
+    url = f"http://localhost:{_CDP_PORT}"
+    try:
+        return await _playwright.chromium.connect_over_cdp(url, timeout=1500)
+    except Exception:
+        pass  # not running yet
+    try:
+        local = subprocess.run(["cmd.exe", "/c", "echo %LOCALAPPDATA%"], capture_output=True,
+                               text=True, timeout=10, cwd="/mnt/c").stdout.strip()
+        subprocess.Popen([exe, f"--remote-debugging-port={_CDP_PORT}", f"--user-data-dir={local}\\micro-cc-chrome",
+                          "--no-first-run", "--no-default-browser-check", "about:blank"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        return None
+    for _ in range(20):
+        await asyncio.sleep(0.5)
+        try:
+            return await _playwright.chromium.connect_over_cdp(url, timeout=1500)
+        except Exception:
+            continue
+    return None  # NAT-mode WSL can't reach Windows localhost; fall back to Linux Chromium
+
+
+async def _launch_chromium():
+    """Launch Playwright Chromium, downloading it on first use; headless when Linux has no display."""
+    headless = platform.system() == "Linux" and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    try:
+        return await _playwright.chromium.launch(headless=headless)
+    except Exception as e:
+        if "Executable doesn't exist" not in str(e):
+            raise
+    proc = await asyncio.create_subprocess_exec(sys.executable, "-m", "playwright", "install", "chromium",
+                                                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+    _, err = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"playwright install chromium failed: {err.decode()[-500:]}")
+    return await _playwright.chromium.launch(headless=headless)
+
+
+async def close_browser():
+    """Tear down the browser session; errors from an already-dead browser are swallowed."""
     global _playwright, _browser, _page
+    if _page:
+        try:
+            await _page.close()  # CDP-attached Chrome keeps running; drop only our tab
+        except Exception:
+            pass
     if _browser:
         try:
             await _browser.close()
@@ -57,30 +110,27 @@ async def close_browser():
 
 
 async def browser(code: str, *, project_dir: str, model: str) -> str:
-    """Execute Playwright Python code against a persistent browser session.
+    """Run Playwright async Python code against a persistent single-page browser (created on first call).
 
-    A browser with a single page is lazily initialized on first call and persists
-    across calls. `page` is pre-initialized in scope — just write Playwright code.
-
-    Every execution auto-captures a screenshot which is analyzed via vision.
+    Every run auto-captures a screenshot and describes it via vision.
 
     Args:
-        code: Playwright Python async code. `page` is available.
-              Examples:
-                await page.goto("https://example.com")
-                await page.click("button#submit")
-                await page.fill("input[name=q]", "hello")
+        code: Playwright async Python code, `page` in scope; return a value to see it as output
     """
-    page = await _ensure_browser()
+    try:
+        page = await _ensure_browser()
+    except Exception as e:
+        await close_browser()
+        hint = ""
+        if "missing dependencies" in str(e).lower():
+            hint = f"\nFix: sudo {sys.executable} -m playwright install-deps chromium"
+        return f"[Browser unavailable: {type(e).__name__}: {str(e)[:800]}]{hint}"
 
-    # Screenshot dir
     ss_dir = os.path.join(project_dir, ".browser_screenshots")
     os.makedirs(ss_dir, exist_ok=True)
 
-    # Execute the code with page in scope
     exec_output = ""
     try:
-        # Capture any return value from last expression
         local_ns = {"page": page}
         exec(
             f"async def __browser_exec__():\n"
@@ -100,14 +150,12 @@ async def browser(code: str, *, project_dir: str, model: str) -> str:
     except Exception as e:
         return f"{exec_output}\n[Screenshot failed: {e}]".strip()
 
-    # Annotate screenshot with interactive element bounding boxes
     from micro_cc.utils.annotate_ import annotate_screenshot
     elements = await _get_browser_elements(page, screenshot_path)
     element_index = annotate_screenshot(screenshot_path, elements)
 
-    # Vision the annotated screenshot
     from micro_cc.tools.vision_tools_ import vision
-    prompt = "Describe this browser page. Numbered red boxes mark interactive elements."
+    prompt = "Describe this browser page. Numbered coloured boxes mark interactive elements."
     description = await vision(
         screenshot_path,
         prompt,
@@ -115,7 +163,6 @@ async def browser(code: str, *, project_dir: str, model: str) -> str:
         model=model,
     )
 
-    # Drain console log
     console_lines = _console_log.copy()
     _console_log.clear()
 
@@ -135,45 +182,50 @@ async def browser(code: str, *, project_dir: str, model: str) -> str:
     return "\n".join(parts)
 
 
+# In-viewport, visible, unoccluded interactive elements; box clipped to viewport, click at its visible center.
+_ELEMENTS_JS = """() => {
+    const sels = 'a[href], button, input:not([type=hidden]), select, textarea, summary, '
+        + '[contenteditable=""], [contenteditable=true], [tabindex]:not([tabindex="-1"]), [onclick], '
+        + '[role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], '
+        + '[role=option], [role=combobox], [role=textbox], [role=searchbox], [role=slider], [role=treeitem]';
+    const vw = innerWidth, vh = innerHeight, out = [];
+    for (const el of document.querySelectorAll(sels)) {
+        const r = el.getBoundingClientRect();
+        const x0 = Math.max(r.left, 0), y0 = Math.max(r.top, 0);
+        const x1 = Math.min(r.right, vw), y1 = Math.min(r.bottom, vh);
+        if (x1 - x0 < 4 || y1 - y0 < 4) continue;
+        const st = getComputedStyle(el);
+        if (st.visibility !== 'visible' || +st.opacity === 0 || st.pointerEvents === 'none') continue;
+        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+        const hit = document.elementFromPoint(cx, cy);
+        if (!hit || !(hit === el || el.contains(hit) || hit.contains(el) || (el.labels && [...el.labels].includes(hit)))) continue;
+        const label = (el.getAttribute('aria-label') || el.innerText || el.labels?.[0]?.innerText || el.getAttribute('placeholder')
+            || el.getAttribute('title') || el.getAttribute('alt') || el.querySelector('img[alt]')?.alt
+            || (el.type === 'password' ? '' : el.value) || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+        const role = el.getAttribute('role');
+        const tag = el.tagName.toLowerCase() + (el.type && el.tagName !== 'BUTTON' ? '[' + el.type + ']' : '') + (role ? '[role=' + role + ']' : '');
+        out.push({x: x0, y: y0, width: x1 - x0, height: y1 - y0, click_x: cx, click_y: cy, label, tag});
+    }
+    return out;
+}"""
+
+
 async def _get_browser_elements(page, screenshot_path: str) -> list[dict]:
-    """Extract interactive elements from the page with bounding rects, scaled for Retina."""
+    """Extract interactive elements with bounding rects, scaled to screenshot pixels."""
     try:
         from PIL import Image
 
-        # Determine scale factor: screenshot pixels vs viewport
+        # Screenshot pixels per viewport pixel (Retina).
         img = Image.open(screenshot_path)
         img_w, _ = img.size
         viewport = page.viewport_size
         scale = img_w / viewport["width"] if viewport else 1.0
 
-        raw = await page.evaluate("""() => {
-            const sels = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="tab"], [role="checkbox"], [role="menuitem"], [onclick]';
-            const els = [...document.querySelectorAll(sels)];
-            return els.map(el => {
-                const r = el.getBoundingClientRect();
-                const label = el.textContent?.trim()?.slice(0, 80)
-                    || el.getAttribute('aria-label')
-                    || el.getAttribute('placeholder')
-                    || el.getAttribute('title')
-                    || '';
-                const tag = el.tagName.toLowerCase()
-                    + (el.type ? '[' + el.type + ']' : '')
-                    + (el.getAttribute('role') ? '[role=' + el.getAttribute('role') + ']' : '');
-                return { x: r.x, y: r.y, width: r.width, height: r.height, label, tag };
-            });
-        }""")
+        raw = await page.evaluate(_ELEMENTS_JS)
 
-        # Filter zero-size / offscreen, cap at 50
+        # Viewport-coord click targets stay as-is (for page.mouse.click); boxes scale to screenshot pixels.
         elements = []
         for el in raw:
-            if el["width"] < 2 or el["height"] < 2:
-                continue
-            if el["x"] + el["width"] < 0 or el["y"] + el["height"] < 0:
-                continue
-            # Store viewport-coord click target (for page.mouse.click)
-            el["click_x"] = el["x"] + el["width"] / 2
-            el["click_y"] = el["y"] + el["height"] / 2
-            # Scale to screenshot pixels for box drawing
             el["x"] = el["x"] * scale
             el["y"] = el["y"] * scale
             el["width"] = el["width"] * scale
@@ -182,7 +234,6 @@ async def _get_browser_elements(page, screenshot_path: str) -> list[dict]:
             if len(elements) >= 50:
                 break
 
-        # Assign indices
         for i, el in enumerate(elements, 1):
             el["index"] = i
 

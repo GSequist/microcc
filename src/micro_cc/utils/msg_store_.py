@@ -18,8 +18,7 @@ def _use_postgres() -> bool:
     return bool(os.getenv("MICRO_CC_POSTGRES_URL"))
 
 
-# Additive relay after a local write, e.g. for an embedding app's own
-# durable store — fires (project_dir, msgs), errors logged not raised.
+# Post-local-write relay (e.g. an embedding app's durable store); errors are logged, not raised.
 _sink: Optional[Callable[[str, list], None]] = None
 
 
@@ -73,7 +72,7 @@ def _get_lock(project_dir: str) -> threading.RLock:
 
 
 def _rewrite_all(project_dir: str, msgs: list) -> None:
-    """Overwrite messages.jsonl with all msgs. No repair here, that only runs at load. Caller holds the lock."""
+    """Overwrite messages.jsonl with msgs (no repair; load does that). Caller holds the lock."""
     storage_dir = _get_storage_dir(project_dir)
     jsonl_path = storage_dir / "messages.jsonl"
 
@@ -150,8 +149,7 @@ def load_msgs(project_dir: str) -> list:
             log_dropped_message("msg_store_", project_dir, len(msgs) - len(valid_msgs))
         msgs = valid_msgs
 
-        # Mark = pre-repair count of valid rows, so repair's synthetic messages count as new tail.
-        # Malformed lines stay on disk and are filtered on every load.
+        # Mark counts pre-repair rows, so repair's synthetic messages count as new tail.
         _persisted_len[project_dir] = len(msgs)
 
     msgs = repair_dangling_tool_use(msgs)
@@ -538,7 +536,6 @@ async def _review_memory(new_summary: str, model: str, project_dir: str) -> None
             resp = await model_call(input_msgs, model, max_tokens=1024, tools=tools)
             if not resp:
                 break
-            # Count this call's spend in token_stats.
             in_tok, out_tok = resp.usage.get("input", 0), resp.usage.get("output", 0)
             if in_tok or out_tok:
                 token_stats["total_input"] += in_tok
@@ -622,7 +619,6 @@ async def _call_summary_model(
     try:
         resp = await model_call(input_msgs, model, max_tokens=summary_cap)
 
-        # Count this call's spend in token_stats.
         usage = resp.usage if resp else {}
         in_tok, out_tok = usage.get("input", 0), usage.get("output", 0)
         if in_tok or out_tok:

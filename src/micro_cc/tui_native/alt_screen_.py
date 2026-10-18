@@ -24,8 +24,7 @@ class Component(Protocol):
 BEGIN_SYNCHRONIZED_OUTPUT = "\x1b[?2026h"  # one atomic terminal paint starts
 END_SYNCHRONIZED_OUTPUT = "\x1b[?2026l"    # ...and ends here
 
-# Alt screen sets terminal default colors (OSC 11/10) from active theme.
-# Both are FUNCTIONS to support live theme switches (see reapply_default_colors).
+# OSC 10/11 default colors from the active theme; functions so live switches apply.
 def _enter() -> str:
     from micro_cc.utils import theme_store_
     return (
@@ -55,8 +54,7 @@ EXIT_ALT_SCREEN = _exit()
 # Marker emitted by focused components; extract_cursor_position finds and strips it.
 CURSOR_MARKER = "\x1b_pi:c\x07"
 
-# Leading OSC 133 shell-integration markers (prompt/output-start/end) some
-# shells prepend to prompt lines. Only strips a leading run of these.
+# OSC 133 shell-integration markers some shells prepend to prompt lines.
 _OSC133_ZONE_PREFIX = re.compile(r"^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+")
 
 SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
@@ -818,7 +816,7 @@ class TuiAltScreen:
             self._refresh_search_matches(width)
             screen = self.apply_search_highlights(screen)
         screen = composite_overlays(screen, width, height, self.overlay_stack)
-        # Enforce invariant: screen must be exactly height rows. Layout edge cases can short it.
+        # Screen must be exactly height rows.
         if len(screen) > height:
             screen = screen[len(screen) - height:]
         elif len(screen) < height:

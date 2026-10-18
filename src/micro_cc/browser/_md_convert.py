@@ -28,18 +28,10 @@ from micro_cc.utils import settings_store_
 
 
 class _CustomMarkdownify(markdownify.MarkdownConverter):
-    """
-    A custom version of markdownify's MarkdownConverter. Changes include:
-
-    - Altering the default heading style to use '#', '##', etc.
-    - Removing javascript hyperlinks.
-    - Truncating images with large data:uri sources.
-    - Ensuring URIs are properly escaped, and do not conflict with Markdown syntax
-    """
+    """markdownify converter: ATX headings, no javascript links, truncated data URIs, escaped URIs."""
 
     def __init__(self, **options: Any):
         options["heading_style"] = options.get("heading_style", markdownify.ATX)
-        # Explicitly cast options to the expected type if necessary
         super().__init__(**options)
 
     def convert_hn(self, n: int, el: Any, text: str, convert_as_inline: bool) -> str:
@@ -72,17 +64,16 @@ class _CustomMarkdownify(markdownify.MarkdownConverter):
                 if parsed_url.scheme and parsed_url.scheme.lower() not in ["http", "https", "file"]:  # type: ignore
                     return "%s%s%s" % (prefix, text, suffix)
                 href = urlunparse(parsed_url._replace(path=quote(unquote(parsed_url.path))))  # type: ignore
-            except ValueError:  # It's not clear if this ever gets thrown
+            except ValueError:
                 return "%s%s%s" % (prefix, text, suffix)
 
-        # For the replacement see #29: text nodes underscores are escaped
+        # Text underscores are escaped as \_ (see #29).
         if (
             self.options["autolinks"]
             and text.replace(r"\_", "_") == href
             and not title
             and not self.options["default_title"]
         ):
-            # Shortcut syntax
             return "<%s>" % href
         if self.options["default_title"] and not title:
             title = href
@@ -98,7 +89,7 @@ class _CustomMarkdownify(markdownify.MarkdownConverter):
         el: Any,
         text: str,
         convert_as_inline: bool = False,
-        parent_tags: Optional[set] = None,  # Add the missing parameter
+        parent_tags: Optional[set] = None,
         **kwargs: Any,
     ) -> str:
         """Same as usual converter, but removes data URIs"""
@@ -113,7 +104,6 @@ class _CustomMarkdownify(markdownify.MarkdownConverter):
         ):
             return alt
 
-        # Remove dataURIs
         if src.startswith("data:"):
             src = src.split(",")[0] + "..."
 
@@ -146,32 +136,26 @@ class PlainTextConverter(DocumentConverter):
     def convert(
         self, local_path: str, **kwargs: Any
     ) -> Union[None, DocumentConverterResult]:
-        # Guess the content type from file extension
         content_type, _ = mimetypes.guess_type(
             "__placeholder" + kwargs.get("file_extension", "")
         )
 
-        # Only accept actual text files
         if content_type is None:
             return None
         elif "text/" not in content_type.lower():
             return None
 
-        # Try to detect if file is binary before opening as text
         try:
-            # Check first few bytes for binary content
             with open(local_path, "rb") as f:
                 chunk = f.read(1024)
-                if b"\0" in chunk:  # Null bytes suggest binary content
+                if b"\0" in chunk:
                     return None
 
-                # Check if the content can be decoded as UTF-8
                 try:
                     chunk.decode("utf-8")
                 except UnicodeDecodeError:
                     return None
 
-            # If we get here, file appears to be text
             with open(local_path, "rt", encoding="utf-8") as fh:
                 text_content = fh.read()
             return DocumentConverterResult(
@@ -206,14 +190,11 @@ class HtmlConverter(DocumentConverter):
     def _convert(self, html_content: str) -> Union[None, DocumentConverterResult]:
         """Helper function that converts and HTML string."""
 
-        # Parse the string
         soup = BeautifulSoup(html_content, "html.parser")
 
-        # Remove javascript and style blocks
         for script in soup(["script", "style"]):
             script.extract()
 
-        # Print only the main content
         body_elm = soup.find("body")
         webpage_text = ""
         if body_elm:
@@ -235,7 +216,6 @@ class WikipediaConverter(DocumentConverter):
     def convert(
         self, local_path: str, **kwargs: Any
     ) -> Union[None, DocumentConverterResult]:
-        # Bail if not Wikipedia
         extension = kwargs.get("file_extension", "")
         if extension.lower() not in [".html", ".htm"]:
             return None
@@ -243,16 +223,13 @@ class WikipediaConverter(DocumentConverter):
         if not re.search(r"^https?:\/\/[a-zA-Z]{2,3}\.wikipedia.org\/", url):
             return None
 
-        # Parse the file
         soup = None
         with open(local_path, "rt", encoding="utf-8") as fh:
             soup = BeautifulSoup(fh.read(), "html.parser")
 
-        # Remove javascript and style blocks
         for script in soup(["script", "style"]):
             script.extract()
 
-        # Print only the main content
         body_elm = soup.find("div", {"id": "mw-content-text"})
         title_elm = soup.find("span", {"class": "mw-page-title-main"})
 
@@ -260,12 +237,10 @@ class WikipediaConverter(DocumentConverter):
         main_title = None if soup.title is None else soup.title.string
 
         if body_elm:
-            # What's the title
             if title_elm and len(title_elm) > 0:
                 main_title = title_elm.string  # type: ignore
                 assert isinstance(main_title, str)
 
-            # Convert the page
             webpage_text = f"# {main_title}\n\n" + _CustomMarkdownify().convert_soup(
                 body_elm
             )
@@ -284,7 +259,6 @@ class YouTubeConverter(DocumentConverter):
     def convert(
         self, local_path: str, **kwargs: Any
     ) -> Union[None, DocumentConverterResult]:
-        # Bail if not YouTube
         extension = kwargs.get("file_extension", "")
         if extension.lower() not in [".html", ".htm"]:
             return None
@@ -292,12 +266,10 @@ class YouTubeConverter(DocumentConverter):
         if not url.startswith("https://www.youtube.com/watch?"):
             return None
 
-        # Parse the file
         soup = None
         with open(local_path, "rt", encoding="utf-8") as fh:
             soup = BeautifulSoup(fh.read(), "html.parser")
 
-        # Read the meta tags
         assert soup.title is not None and soup.title.string is not None
         metadata: Dict[str, str] = {"title": soup.title.string}
         for meta in soup(["meta"]):
@@ -306,7 +278,7 @@ class YouTubeConverter(DocumentConverter):
                     metadata[meta[a]] = meta.get("content", "")
                     break
 
-        # We can also try to read the full description. This is more prone to breaking, since it reaches into the page implementation
+        # Full description lives in ytInitialData: a fragile page-internals scrape.
         try:
             for script in soup(["script"]):
                 content = script.text
@@ -323,7 +295,6 @@ class YouTubeConverter(DocumentConverter):
         except Exception:
             pass
 
-        # Start preparing the page
         webpage_text = "# YouTube\n"
 
         title = self._get(metadata, ["title", "og:title", "name"])  # type: ignore
@@ -359,10 +330,7 @@ class YouTubeConverter(DocumentConverter):
             assert isinstance(params["v"][0], str)
             video_id = str(params["v"][0])
             try:
-                # Must be a single transcript.
                 transcript = YouTubeTranscriptApi.get_transcript(video_id)  # type: ignore
-                # transcript_text = " ".join([part["text"] for part in transcript])  # type: ignore
-                # Alternative formatting:
                 transcript_text = SRTFormatter().format_transcript(transcript)
             except Exception:
                 pass
@@ -406,12 +374,9 @@ class YouTubeConverter(DocumentConverter):
 
 
 class PdfConverter(DocumentConverter):
-    """
-    Converts PDFs to Markdown. Most style information is ignored, so the results are essentially plain-text.
-    """
+    """PDF to plain-text Markdown; styling is dropped."""
 
     def convert(self, local_path, **kwargs) -> Union[None, DocumentConverterResult]:
-        # Bail if not a PDF
         extension = kwargs.get("file_extension", "")
         if extension.lower() != ".pdf":
             return None
@@ -423,12 +388,9 @@ class PdfConverter(DocumentConverter):
 
 
 class DocxConverter(HtmlConverter):
-    """
-    Converts DOCX files to Markdown. Style information (e.g.m headings) and tables are preserved where possible.
-    """
+    """DOCX to Markdown via mammoth; headings and tables preserved where possible."""
 
     def convert(self, local_path, **kwargs) -> Union[None, DocumentConverterResult]:
-        # Bail if not a DOCX
         extension = kwargs.get("file_extension", "")
         if extension.lower() != ".docx":
             return None
@@ -443,19 +405,14 @@ class DocxConverter(HtmlConverter):
 
 
 class XlsxConverter(HtmlConverter):
-    """
-    Converts XLSX files to Markdown, with each sheet presented as a separate Markdown table.
-    """
+    """XLSX to Markdown, one table per sheet."""
 
     def convert(self, local_path, **kwargs) -> Union[None, DocumentConverterResult]:
-        # Bail if not a XLSX
         extension = kwargs.get("file_extension", "")
         if extension.lower() not in [".xlsx", ".xls"]:
             return None
 
-        # Imported lazily — this is the only xlsx-reading path in the app,
-        # no reason to pay openpyxl's cost on every startup for a feature
-        # most sessions never touch.
+        # Lazy: keeps openpyxl out of startup for sessions that never open a spreadsheet.
         import openpyxl
 
         workbook = openpyxl.load_workbook(local_path, data_only=True, read_only=True)
@@ -482,21 +439,16 @@ class XlsxConverter(HtmlConverter):
 
 
 class PptxConverter(HtmlConverter):
-    """
-    Converts PPTX files to Markdown. Supports heading, tables and images with alt text.
-    """
+    """PPTX to Markdown: headings, tables, pictures with alt text, speaker notes."""
 
     def convert(self, local_path, **kwargs) -> Union[None, DocumentConverterResult]:
-        # Bail if not a PPTX
         extension = kwargs.get("file_extension", "")
         if extension.lower() != ".pptx":
             return None
 
         md_content = ""
 
-        # Imported lazily, like openpyxl above — a broken pptx install (e.g.
-        # paper-pptx next to stock python-pptx) must fail this one conversion,
-        # not the harness boot that imports this module.
+        # Lazy: a broken pptx install must fail this conversion, not the module import.
         import pptx
 
         presentation = pptx.Presentation(local_path)
@@ -508,7 +460,6 @@ class PptxConverter(HtmlConverter):
 
             title = slide.shapes.title
             for shape in slide.shapes:
-                # Pictures
                 if self._is_picture(shape):
                     # https://github.com/scanny/python-pptx/pull/512#issuecomment-1713100069
                     alt_text = ""
@@ -517,7 +468,6 @@ class PptxConverter(HtmlConverter):
                     except Exception:
                         pass
 
-                    # A placeholder name
                     filename = re.sub(r"\W", "", shape.name) + ".jpg"
                     md_content += (
                         "\n!["
@@ -527,7 +477,6 @@ class PptxConverter(HtmlConverter):
                         + ")\n"
                     )
 
-                # Tables
                 if self._is_table(shape):
                     html_table = "<html><body><table>"
                     first_row = True
@@ -545,7 +494,6 @@ class PptxConverter(HtmlConverter):
                         "\n" + self._convert(html_table).text_content.strip() + "\n"
                     )
 
-                # Text areas
                 elif shape.has_text_frame:
                     if shape == title:
                         md_content += "# " + shape.text.lstrip() + "\n"
@@ -583,9 +531,7 @@ class PptxConverter(HtmlConverter):
 
 
 class MediaConverter(DocumentConverter):
-    """
-    Abstract class for multi-modal media (e.g., images and audio)
-    """
+    """Abstract base for multi-modal media (images, audio)."""
 
     def _get_metadata(self, local_path):
         exiftool = shutil.which("exiftool")
@@ -602,19 +548,15 @@ class MediaConverter(DocumentConverter):
 
 
 class ImageConverter(MediaConverter):
-    """
-    Converts images to markdown via extraction of metadata (if `exiftool` is installed), OCR (if `easyocr` is installed), and description via a multimodal LLM (if an mlm_client is configured).
-    """
+    """Image to Markdown: exiftool metadata (if installed) plus an LLM caption."""
 
     def convert(self, local_path, **kwargs) -> Union[None, DocumentConverterResult]:
-        # Bail if not a XLSX
         extension = kwargs.get("file_extension", "")
         if extension.lower() not in [".jpg", ".jpeg", ".png"]:
             return None
 
         md_content = ""
 
-        # Add metadata
         metadata = self._get_metadata(local_path)
         if metadata:
             for f in [
@@ -649,8 +591,8 @@ class ImageConverter(MediaConverter):
         with open(local_path, "rb") as image_file:
             image_base64 = base64.b64encode(image_file.read()).decode("utf-8")
 
-        # Providers add their own image envelope; encoded_image is bare base64.
-        # Use the selected model rather than a Claude default on OpenAI/Ollama.
+        # encoded_image is bare base64; the provider adds its own envelope.
+        # Use the selected model, not a Claude default.
         response = asyncio.run(model_call(
             input=prompt, encoded_image=image_base64,
             model=settings_store_.get_setting("model"),
@@ -669,8 +611,7 @@ class UnsupportedFormatException(BaseException):
 
 
 class MarkdownConverter:
-    """(In preview) An extremely simple text-based document reader, suitable for LLM use.
-    This reader will convert common file-types or webpages to Markdown."""
+    """Converts common file types and web pages to Markdown for LLM use."""
 
     def __init__(
         self,
@@ -704,13 +645,8 @@ class MarkdownConverter:
     def convert(
         self, source: Union[str, requests.Response], **kwargs: Any
     ) -> DocumentConverterResult:  # TODO: deal with kwargs
-        """
-        Args:
-            - source: can be a string representing a path or url, or a requests.response object
-            - extension: specifies the file extension to use when interpreting the file. If None, infer from source (path, uri, content-type, etc.)
-        """
+        """Convert a path, URL or requests.Response to Markdown."""
 
-        # Local path or url
         if isinstance(source, str):
             if (
                 source.startswith("http://")
@@ -720,18 +656,15 @@ class MarkdownConverter:
                 return self.convert_url(source, **kwargs)
             else:
                 return self.convert_local(source, **kwargs)
-        # Request response
         elif isinstance(source, requests.Response):
             return self.convert_response(source, **kwargs)
 
     def convert_local(
         self, path: str, **kwargs: Any
     ) -> DocumentConverterResult:  # TODO: deal with kwargs
-        # Prepare a list of extensions to try (in order of priority)
         ext = kwargs.get("file_extension")
         extensions = [ext] if ext is not None else []
 
-        # Get extension alternatives from the path and puremagic
         base, ext = os.path.splitext(path)
         self._append_ext(extensions, ext)
         self._append_ext(extensions, self._guess_ext_magic(path))
@@ -743,16 +676,14 @@ class MarkdownConverter:
     def convert_stream(
         self, stream: Any, **kwargs: Any
     ) -> DocumentConverterResult:  # TODO: deal with kwargs
-        # Prepare a list of extensions to try (in order of priority)
         ext = kwargs.get("file_extension")
         extensions = [ext] if ext is not None else []
 
-        # Save the file locally to a temporary file. It will be deleted before this method exits
+        # Temp file is removed before this method exits.
         handle, temp_path = tempfile.mkstemp()
         fh = os.fdopen(handle, "wb")
         result = None
         try:
-            # Write to the temporary file
             content = stream.read()
             if isinstance(content, str):
                 fh.write(content.encode("utf-8"))
@@ -760,10 +691,8 @@ class MarkdownConverter:
                 fh.write(content)
             fh.close()
 
-            # Use puremagic to check for more extension options
             self._append_ext(extensions, self._guess_ext_magic(temp_path))
 
-            # Convert
             result = self._convert(temp_path, extensions, **kwargs)
         # Clean up
         finally:
@@ -778,7 +707,6 @@ class MarkdownConverter:
     def convert_url(
         self, url: str, **kwargs: Any
     ) -> DocumentConverterResult:  # TODO: fix kwargs type
-        # Send a HTTP request to the URL
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0"
         response = self._requests_session.get(
             url, stream=True, headers={"User-Agent": user_agent}
@@ -789,40 +717,33 @@ class MarkdownConverter:
     def convert_response(
         self, response: requests.Response, **kwargs: Any
     ) -> DocumentConverterResult:  # TODO fix kwargs type
-        # Prepare a list of extensions to try (in order of priority)
         ext = kwargs.get("file_extension")
         extensions = [ext] if ext is not None else []
 
-        # Guess from the mimetype
         content_type = response.headers.get("content-type", "").split(";")[0]
         kwargs["content_type"] = content_type
         self._append_ext(extensions, mimetypes.guess_extension(content_type))
 
-        # Read the content disposition if there is one
         content_disposition = response.headers.get("content-disposition", "")
         m = re.search(r"filename=([^;]+)", content_disposition)
         if m:
             base, ext = os.path.splitext(m.group(1).strip("\"'"))
             self._append_ext(extensions, ext)
 
-        # Read from the extension from the path
         base, ext = os.path.splitext(urlparse(response.url).path)
         self._append_ext(extensions, ext)
 
-        # Save the file locally to a temporary file. It will be deleted before this method exits
+        # Temp file is removed before this method exits.
         handle, temp_path = tempfile.mkstemp()
         fh = os.fdopen(handle, "wb")
         result = None
         try:
-            # Download the file
             for chunk in response.iter_content(chunk_size=512):
                 fh.write(chunk)
             fh.close()
 
-            # Use puremagic to check for more extension options
             self._append_ext(extensions, self._guess_ext_magic(temp_path))
 
-            # Convert
             result = self._convert(temp_path, extensions, url=response.url)
         except Exception as e:
             print(f"Error in converting: {e}")
@@ -845,19 +766,16 @@ class MarkdownConverter:
         self, local_path: str, extensions: List[Union[str, None]], **kwargs
     ) -> DocumentConverterResult:
         error_trace = ""
-        for ext in extensions + [None]:  # Try last with no extension
+        for ext in extensions + [None]:
             for converter in self._page_converters:
                 _kwargs = copy.deepcopy(kwargs)
 
-                # Overwrite file_extension appropriately
                 if ext is None:
                     if "file_extension" in _kwargs:
                         del _kwargs["file_extension"]
                 else:
                     _kwargs.update({"file_extension": ext})
 
-                # If we hit an error log it and keep trying
-                # print(f"trying converter: {converter.__class__.__name__}")
                 try:
                     res = converter.convert(local_path, **_kwargs)
                 except Exception as e:
@@ -868,22 +786,18 @@ class MarkdownConverter:
                     continue
 
                 if res is not None:
-                    # Normalize the content
                     res.text_content = "\n".join(
                         [line.rstrip() for line in re.split(r"\r?\n", res.text_content)]
                     )
                     res.text_content = re.sub(r"\n{3,}", "\n\n", res.text_content)
 
-                    # Todo
                     return res
 
-        # If we got this far without success, report any exceptions
         if len(error_trace) > 0:
             raise FileConversionException(
                 f"Could not convert '{local_path}' to Markdown. File type was recognized as {extensions}. While converting the file, the following error was encountered:\n\n{error_trace}"
             )
 
-        # Nothing can handle it!
         raise UnsupportedFormatException(
             f"Could not convert '{local_path}' to Markdown. The formats {extensions} are not supported."
         )
@@ -895,13 +809,11 @@ class MarkdownConverter:
         ext = ext.strip()
         if ext == "":
             return
-        # if ext not in extensions:
         if True:
             extensions.append(ext)
 
     def _guess_ext_magic(self, path):
         """Use puremagic (a Python implementation of libmagic) to guess a file's extension based on the first few bytes."""
-        # Use puremagic to guess
         try:
             guesses = puremagic.magic_file(path)
             if len(guesses) > 0:

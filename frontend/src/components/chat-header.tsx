@@ -1,5 +1,4 @@
 import { useSession } from '../contexts/SessionContext';
-import { useBackgroundProcesses } from '../hooks/use-background-processes';
 import { BannerMark } from './banner';
 import { Tip } from './tip';
 import type { ModalKind } from './command-modal';
@@ -10,7 +9,6 @@ import type { ModalKind } from './command-modal';
 // Each segment carries a tooltip, since "3 gated" means nothing on its own.
 export function ChatHeader({ onOpenModal }: { onOpenModal: (k: ModalKind) => void }) {
   const { session, files, refreshFiles } = useSession();
-  const bgProcesses = useBackgroundProcesses();
   if (!session) return null;
 
   const dir = session.project_dir.replace(/^\/Users\/[^/]+/, '~');
@@ -107,33 +105,6 @@ export function ChatHeader({ onOpenModal }: { onOpenModal: (k: ModalKind) => voi
             rewind
           </button>
         </Tip>
-
-        {bgProcesses.length > 0 && (
-          <>
-            <span className="opacity-30">·</span>
-            <Tip
-              text={
-                <>
-                  <strong>
-                    {bgProcesses.length === 1 ? '1 background process' : `${bgProcesses.length} background processes`}
-                  </strong>{' '}
-                  — started with <code>&amp;</code> via bash_ and still running.
-                  <ul className="mt-1 space-y-0.5">
-                    {bgProcesses.map((p) => (
-                      <li key={p.pid} className="font-mono text-[10px] opacity-70">
-                        PID {p.pid}: {p.command} ({p.age}s)
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              }
-            >
-              <span className="cursor-help">
-                ◇ {bgProcesses.length} {bgProcesses.length === 1 ? 'process' : 'processes'}
-              </span>
-            </Tip>
-          </>
-        )}
 
         <span className="opacity-30">·</span>
 

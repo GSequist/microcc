@@ -6,7 +6,6 @@ from micro_cc.postgres_store import pg_store_
 
 _SETTINGS_PATH = Path.home() / ".micro-cc" / "settings.json"
 
-# Mirrors claude_loop_.DEFAULT_DANGEROUS (duplicated to avoid circular import).
 _DEFAULT_DANGEROUS = ["bash_", "edit_", "write_"]
 DEFAULT_MAX_SUBAGENTS = 4
 
@@ -19,6 +18,8 @@ def _use_postgres() -> bool:
 def _defaults() -> dict:
     return {
         "dangerous": _DEFAULT_DANGEROUS,
+        # True: a model check auto-allows gated calls it judges safe; asks only when unsure.
+        "auto_gate": False,
         "model": model_catalog.DEFAULT_MODEL,
         "tokens_budget": model_catalog.DEFAULT_TRIM_BUDGET,
         # Reasoning effort picked in /model; None = the model's own default_effort.
@@ -27,6 +28,8 @@ def _defaults() -> dict:
         "max_subagents": DEFAULT_MAX_SUBAGENTS,
         # Mod side pane open at exit, {"name", "width"}; {} = none. Reopened at TUI start.
         "pane": {},
+        # Last version whose release note was dismissed (utils/whats_new.py).
+        "seen_version": None,
     }
 
 
@@ -112,6 +115,38 @@ def edit_setting(
         store[key] = value
     _save(store)
     return f"Setting for {key} saved"
+
+
+def gated_tools() -> set:
+    """Tools that ask before running; the one source of truth for TUI, web and claude_loop."""
+    return set(get_setting("dangerous") or [])
+
+
+def set_gated(tools) -> None:
+    edit_setting("dangerous", sorted(set(tools)))
+
+
+_ACTING_TOOLS = ["bash_", "write_", "edit_", "computer", "browser"]
+# /dangerous presets for non-technical users; each sets the gated tools and auto_gate together.
+GATE_PRESETS = {
+    "careful": {"label": "Careful", "tools": _ACTING_TOOLS, "auto": False,
+                "description": "always ask before running code, changing files or using the browser/computer"},
+    "auto": {"label": "Auto", "tools": _ACTING_TOOLS, "auto": True,
+             "description": "Claude checks each action and asks only when it's risky or unsure"},
+    "trusted": {"label": "Trusted", "tools": [], "auto": False, "description": "never ask"},
+}
+
+
+def apply_preset(key: str) -> None:
+    p = GATE_PRESETS[key]
+    set_gated(p["tools"])
+    edit_setting("auto_gate", p["auto"])
+
+
+def current_preset() -> str:
+    """Preset key matching the current settings, else "custom"."""
+    gated, auto = gated_tools(), bool(get_setting("auto_gate"))
+    return next((k for k, p in GATE_PRESETS.items() if set(p["tools"]) == gated and p["auto"] == auto), "custom")
 
 
 def max_subagents() -> int:
