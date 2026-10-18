@@ -135,6 +135,15 @@ jobs:
           wsl -d Ubuntu -e sh -c 'export PATH=$HOME/.local/bin:$PATH; command -v microcc'
           if ($LASTEXITCODE -ne 0) { throw "microcc not found in WSL" }
           $global:LASTEXITCODE = 0
+      - name: re-run install.ps1 (existing distro path)
+        shell: pwsh
+        env:
+          MICROCC_WSL_INSTALL: "0"
+        run: |
+          ./install.ps1
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "second install.ps1 run exited $code" }
+      # last: overlays the checkout and may leave Windows Chrome running
       - name: browser + computer inside WSL
         shell: pwsh
         run: |
@@ -149,11 +158,3 @@ jobs:
           wsl -d Ubuntu -e $py tests/smoke_browser.py
           if ($LASTEXITCODE -ne 0) { throw "browser smoke failed in WSL" }
           $global:LASTEXITCODE = 0
-      - name: re-run install.ps1 (existing distro path)
-        shell: pwsh
-        env:
-          MICROCC_WSL_INSTALL: "0"
-        run: |
-          ./install.ps1
-          $code = $LASTEXITCODE
-          if ($code -ne 0) { throw "second install.ps1 run exited $code" }
