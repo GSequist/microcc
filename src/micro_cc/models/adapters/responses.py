@@ -76,6 +76,8 @@ async def stream_response(resp_stream) -> ResponseStream:
             yield {"type": "text_delta", "text": ev.delta}
         elif et == "response.reasoning_summary_text.delta":
             yield {"type": "thinking_delta", "thinking": ev.delta}
+        elif et == "response.output_item.added" and getattr(ev.item, "type", "") == "function_call":
+            yield {"type": "tool_use_start", "name": getattr(ev.item, "name", "")}
         elif et == "response.output_item.done":
             items.append(ev.item)
         elif et == "response.completed":

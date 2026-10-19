@@ -4,7 +4,7 @@ import base64
 import io
 from math import ceil
 
-from rich.console import Console, Group
+from rich.console import Console
 from rich.text import Text
 from PIL import Image as PILImage
 
@@ -130,41 +130,53 @@ class MessageRow:
 
 
 class StreamingRow:
-    """Streaming text/thinking block; append() writes directly, no buffering."""
+    """Streaming text/thinking block; append() buffers, reveal() paces what renders."""
 
     def __init__(self, mode: str = "text"):
         self._mode = mode  # "text" or "thinking"
-        self._content = ""
-        self._stable_content = ""
-        self._stable_rendered = None
+        self._content = ""  # everything received
+        self._shown = 0  # chars revealed so far
+        # Lines up to the last "\n\n" are cached so a frame only lays out the tail paragraph.
+        self._stable_len = 0
+        self._stable_width: int | None = None
+        self._stable_lines: list[str] = []
         self._cached_width: int | None = None
         self._cached_lines: list[str] | None = None
 
     def append(self, chunk: str) -> None:
         self._content += chunk
-        self.invalidate()
 
-    def _build(self):
-        if self._mode == "thinking":
-            parts = [Text(glyph("thinking"), style="dim italic")]
-            if self._content:
-                parts.append(render_md(self._content, dim=True))
-            return Group(*parts)
+    def backlog(self) -> int:
+        return len(self._content) - self._shown
 
-        boundary = self._content.rfind("\n\n")
-        if boundary > len(self._stable_content):
-            self._stable_content = self._content[:boundary]
-            self._stable_rendered = render_md(self._stable_content)
+    def reveal(self, n: int) -> int:
+        """Show up to n more chars; returns how many were revealed."""
+        k = min(n, self.backlog())
+        if k > 0:
+            self._shown += k
+            self.invalidate()
+        return k
 
-        if self._stable_rendered and boundary > 0:
-            suffix = self._content[boundary:]
-            return Group(self._stable_rendered, render_md(suffix))
-        return render_md(self._content) if self._content else Text("")
+    def _md_lines(self, text: str, width: int) -> list[str]:
+        dim = self._mode == "thinking"
+        boundary = text.rfind("\n\n")
+        if boundary <= 0:
+            return _render_to_lines(render_md(text, dim=dim), width)
+        if boundary != self._stable_len or width != self._stable_width:
+            self._stable_lines = _render_to_lines(render_md(text[:boundary], dim=dim), width)
+            self._stable_len, self._stable_width = boundary, width
+        return self._stable_lines + _render_to_lines(render_md(text[boundary:], dim=dim), width)
 
     def render(self, width: int) -> list[str]:
         if self._cached_width == width and self._cached_lines is not None:
             return self._cached_lines
-        lines = _render_to_lines(self._build(), width)
+        text = self._content[:self._shown]
+        if not text:
+            lines = []  # nothing revealed yet: take no space while an earlier row still types
+        elif self._mode == "thinking":
+            lines = _render_to_lines(Text(glyph("thinking"), style="dim italic"), width)[:1] + self._md_lines(text, width)
+        else:
+            lines = self._md_lines(text, width)
         self._cached_width = width
         self._cached_lines = lines
         return lines

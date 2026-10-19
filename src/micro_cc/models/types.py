@@ -49,11 +49,16 @@ class ThinkingDelta(TypedDict):
     thinking: str
 
 
+class ToolUseStart(TypedDict):
+    type: Literal["tool_use_start"]
+    name: str
+
+
 class ResponseEvent(TypedDict):
     type: Literal["response"]
     response: Response
     usage: Usage
 
 
-StreamEvent = TextDelta | ThinkingDelta | ResponseEvent
+StreamEvent = TextDelta | ThinkingDelta | ToolUseStart | ResponseEvent
 ResponseStream = AsyncIterator[StreamEvent]

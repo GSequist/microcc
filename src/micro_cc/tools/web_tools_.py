@@ -1,10 +1,22 @@
-from micro_cc.browser.browser_manager import BrowserManager
+import threading
+
 from dotenv import load_dotenv
-import requests
 
 load_dotenv()
 
-browser_manager = BrowserManager()
+_bm = None
+_bm_lock = threading.Lock()  # web tools may run concurrently in threads
+
+
+def _browser_manager():
+    """Built on first web tool call; the browser stack (bs4, pdfminer, mammoth, ...) is slow to import."""
+    global _bm
+    with _bm_lock:
+        if _bm is None:
+            from micro_cc.browser.browser_manager import BrowserManager
+
+            _bm = BrowserManager()
+        return _bm
 
 
 def google_search(query: str, filter_year: int = None, *, project_dir) -> str:
@@ -14,7 +26,7 @@ def google_search(query: str, filter_year: int = None, *, project_dir) -> str:
         query: Text query to search for
         filter_year: Ignored; no year filter is applied
     """
-    browser = browser_manager.get_browser(project_dir)
+    browser = _browser_manager().get_browser(project_dir)
     browser.visit_page(f"google: {query}", filter_year=None)
     header, content = browser._state()
     return header.strip() + "\n=======================\n" + content
@@ -26,7 +38,7 @@ def visit_url(url: str, *, project_dir) -> str:
     Args:
         url: The URL to visit
     """
-    browser = browser_manager.get_browser(project_dir)
+    browser = _browser_manager().get_browser(project_dir)
     browser.visit_page(url)
     header, content = browser._state()
     return header.strip() + "\n=======================\n" + content
@@ -39,9 +51,11 @@ def archive_search(url: str, date: str, *, project_dir) -> str:
         url: The URL to find in archive
         date: Target date as YYYYMMDD
     """
-    browser = browser_manager.get_browser(project_dir)
+    browser = _browser_manager().get_browser(project_dir)
     base_api = f"https://archive.org/wayback/available?url={url}"
     archive_api = base_api + f"&timestamp={date}"
+    import requests
+
     res_with_ts = requests.get(archive_api).json()
     res_without_ts = requests.get(base_api).json()
 
@@ -71,7 +85,7 @@ def archive_search(url: str, date: str, *, project_dir) -> str:
 
 def page_up(project_dir) -> str:
     """Scroll up one page."""
-    browser = browser_manager.get_browser(project_dir)
+    browser = _browser_manager().get_browser(project_dir)
     browser.page_up()
     header, content = browser._state()
     return header.strip() + "\n=======================\n" + content
@@ -79,7 +93,7 @@ def page_up(project_dir) -> str:
 
 def page_down(project_dir) -> str:
     """Scroll down one page."""
-    browser = browser_manager.get_browser(project_dir)
+    browser = _browser_manager().get_browser(project_dir)
     browser.page_down()
     header, content = browser._state()
     return header.strip() + "\n=======================\n" + content
@@ -91,7 +105,7 @@ def find_on_page(search_string: str, *, project_dir) -> str:
     Args:
         search_string: Text to find; supports wildcards like '*'
     """
-    browser = browser_manager.get_browser(project_dir)
+    browser = _browser_manager().get_browser(project_dir)
     result = browser.find_on_page(search_string)
     header, content = browser._state()
 
@@ -103,7 +117,7 @@ def find_on_page(search_string: str, *, project_dir) -> str:
 
 def find_next(project_dir) -> str:
     """Find next occurrence of previous search."""
-    browser = browser_manager.get_browser(project_dir)
+    browser = _browser_manager().get_browser(project_dir)
     result = browser.find_next()
     header, content = browser._state()
 
@@ -119,7 +133,7 @@ def download_from_url(url: str, *, project_dir) -> str:
     Args:
         url: URL of the file to download
     """
-    browser = browser_manager.get_browser(project_dir)
+    browser = _browser_manager().get_browser(project_dir)
     browser.visit_page(url)
     header, content = browser._state()
     return header.strip() + "\n=======================\n" + content
@@ -131,6 +145,6 @@ def text_file(filename: str, *, project_dir) -> str:
     Args:
         filename: Name of a previously downloaded file
     """
-    browser = browser_manager.get_browser(project_dir)
+    browser = _browser_manager().get_browser(project_dir)
     content = browser.read_downloaded_file(filename)
     return content if content else f"Could not read file: {filename}"

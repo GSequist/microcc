@@ -4,8 +4,6 @@ import os
 from functools import partial
 
 from dotenv import load_dotenv
-from jsonschema import validators
-from jsonschema.exceptions import best_match
 
 from micro_cc.execute_tool import execute_tool_call
 from micro_cc.models import model_call
@@ -169,6 +167,9 @@ def _loaded_names(msgs) -> set:
 
 def _arg_error(schema: dict, args: dict) -> str | None:
     """Validate args against schema; return error message or None."""
+    from jsonschema import validators  # lazy: ~25ms at startup, only needed on a tool call
+    from jsonschema.exceptions import best_match
+
     input_schema = schema.get("input_schema") or {}
     try:
         cls = validators.validator_for(input_schema)
@@ -458,6 +459,8 @@ whole conversation history, including compacted turns.
                         spin_tripped = True
                         break
                     yield {"type": "thinking_delta", "content": chunk}
+                elif event["type"] == "tool_use_start":  # args still streaming; lets the UI name the call early
+                    yield {"type": "tool_use_start", "name": event["name"]}
                 elif event["type"] == "response":
                     response = event["response"]
                     api_usage = event.get("usage", {})

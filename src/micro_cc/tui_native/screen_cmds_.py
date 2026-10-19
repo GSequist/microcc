@@ -27,7 +27,7 @@ from micro_cc.tui_native import login_ui_
 
 async def cmd_clear(app):
     # Finalize streaming row BEFORE clearing message_list to prevent stray row re-addition.
-    app._finalize_streaming()
+    app._finalize_streaming(flush=True)
     app.message_list.clear()
     app._msg_rows = []
 

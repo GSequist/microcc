@@ -37,6 +37,7 @@ from micro_cc.tui_native.etype_handler_ import ETYPES
 from micro_cc.utils.project_files_ import list_project_files, rank_file_matches
 from micro_cc.models import catalog as model_catalog
 from micro_cc.models.providers import active_provider, any_configured
+from micro_cc.models.client import prewarm as model_prewarm
 from micro_cc.utils import settings_store_, whats_new
 from micro_cc.utils.tokenization_simple import load_token_stats
 from micro_cc.claude_loop_ import claude_loop
@@ -108,6 +109,10 @@ class MicroTui():
     _ESC_CLEAR_TIMEOUT = 1.5
     _SPINNER = glyph("spinner")
     _RENDER_FRAME = 0.03  # cadence do_render is called at while the app is running
+    # Streamed text reveal per frame: drain the backlog over ~_REVEAL_CATCHUP frames, clamped so it stays smooth.
+    _REVEAL_MIN = 12
+    _REVEAL_MAX = 120
+    _REVEAL_CATCHUP = 8
     _STATIC_HINT_LINE_MAXLEN = 200
     _STATUS_LINE_TIMEOUT = 0.3
     _STATUS_LINE_MAXLEN = 200
@@ -134,6 +139,7 @@ class MicroTui():
         ## "working on…" nudge (above the input) while a query is active
         self._working_timer = None
         self._spin_i = 0
+        self._pending_tool: str | None = None  # tool whose args are still streaming
         # _login_stage: None or the env-var name being collected; _login_values: {name: value}
         self._login_stage = None
         self._login_provider = None
@@ -178,6 +184,9 @@ class MicroTui():
         self._pending_input: asyncio.Event | None = None
         self._pending_result = None
         self._streaming: StreamingRow | None = None
+        self._prewarm_task: asyncio.Task | None = None  # held so the warm-up task is not GC'd mid-flight
+        # Finalized rows still revealing their backlog; swapped for MessageRows once caught up.
+        self._draining: list[tuple[StreamingRow, dict]] = []
         # Tracked explicitly: nothing else cancels the do_query task, so ESC wouldn't stop the stream.
         self._current_query_task: asyncio.Task | None = None
         self._update_available = None
@@ -292,6 +301,8 @@ class MicroTui():
     async def _render_loop(self) -> None:
         while self._running:
             if self.tui.autoscroll_tick():
+                self._dirty = True
+            if self._tick_stream():
                 self._dirty = True
             if self._dirty:
                 try:
@@ -529,6 +540,7 @@ class MicroTui():
             settings_store_.edit_setting("reasoning_effort", item.chosen)
         self._trim_budget = model_catalog.effective_trim_budget(self._current_model)
         self._refresh_status()
+        self._prewarm_task = asyncio.create_task(model_prewarm(self._current_model))
 
     def _on_theme_picked(self, item: PanelItem) -> None:
         """Apply and persist selected theme preset."""
@@ -614,18 +626,44 @@ class MicroTui():
             self.messages_scroll.scroll_to_end()
         self.request_render()
 
-    def _finalize_streaming(self) -> None:
+    def _finalize_streaming(self, flush: bool = False) -> None:
+        """Close the live row; it keeps revealing in place unless flush swaps every draining row now."""
         if self._streaming is not None:
-            content = self._streaming.get_content()
-            mode = self._streaming._mode
-            self.message_list.remove(self._streaming)
-            self._streaming = None
+            row, self._streaming = self._streaming, None
+            content = row.get_content()
             if content.strip():
-                msg = {"type": mode, "content": content}
-                row = MessageRow(msg)
+                msg = {"type": row._mode, "content": content}
                 self._msg_rows.append(msg)
-                self.message_list.add(row)
-            self.request_render()
+                self._draining.append((row, msg))
+            else:
+                self.message_list.remove(row)
+        if flush:
+            for row, _msg in self._draining:
+                row.reveal(row.backlog())
+        self._swap_drained()
+        self.request_render()
+
+    def _swap_drained(self) -> None:
+        while self._draining and not self._draining[0][0].backlog():
+            row, msg = self._draining.pop(0)
+            try:
+                self.message_list.replace(row, MessageRow(msg))
+            except ValueError:
+                pass  # list was cleared under it
+
+    def _tick_stream(self) -> bool:
+        """Reveal streamed text in order, faster as the backlog grows; True if anything changed."""
+        rows = [r for r, _ in self._draining] + ([self._streaming] if self._streaming else [])
+        backlog = sum(r.backlog() for r in rows)
+        if not backlog:
+            return False
+        n = max(self._REVEAL_MIN, min(self._REVEAL_MAX, -(-backlog // self._REVEAL_CATCHUP)))
+        for r in rows:
+            n -= r.reveal(n)
+            if n <= 0:
+                break
+        self._swap_drained()
+        return True
 
     # ============================================= other
 
@@ -766,6 +804,7 @@ class MicroTui():
             if self._working_timer is not None:
                 self._working_timer.cancel()
                 self._working_timer = None
+            self._pending_tool = None
             self.working.update("")
             self.request_render()
 
@@ -780,9 +819,10 @@ class MicroTui():
         active = next(
             (t for t in store.values() if t.get("status") == "in_progress"), None
         )
-        label = (
-            (active.get("activeForm") or active.get("content")) if active else "Working"
-        )
+        if self._pending_tool:
+            label = f"Preparing {self._pending_tool}"
+        else:
+            label = (active.get("activeForm") or active.get("content")) if active else "Working"
         self._spin_i += 1
         self.working.update(shimmer(f"{label}…", self._spin_i, theme_store_.get("banner_dim"), theme_store_.get("fg")))
         self.request_render()
@@ -811,10 +851,10 @@ class MicroTui():
         """Reload message list from disk when another writer appends (e.g., /gui)."""
         all_msgs = load_msgs(self._project_dir)
 
+        self._finalize_streaming(flush=True)
         container = self.message_list
         container.clear()
         self._msg_rows = []
-        self._finalize_streaming()
 
         history_msgs = history_mount_(all_msgs)
         for m in history_msgs:
@@ -997,7 +1037,7 @@ class MicroTui():
                 # A tool turn already carries its text in the flushed assistant message.
                 if partial and self._loop_msgs[-1:] and self._loop_msgs[-1].get("role") != "assistant":
                     self._loop_msgs.append({"role": "assistant", "content": partial})
-            self._finalize_streaming()
+            self._finalize_streaming(flush=True)
             store_msgs(self._project_dir, self._loop_msgs)
         err = {"type": "error", "content": " interrupted"}
         self._msg_rows.append(err)
@@ -1447,6 +1487,10 @@ class MicroTui():
         self._running = True
         self._render_task = asyncio.create_task(self._render_loop())
         self.request_render()
+
+        # After first paint: SDK import + TLS handshake happen while the user types, not on Enter.
+        if any_configured():
+            self._prewarm_task = asyncio.create_task(model_prewarm(self._current_model))
 
         # App is up: tell the supervisor so the boot-failure counter is cleared (see self_heal_).
         try:

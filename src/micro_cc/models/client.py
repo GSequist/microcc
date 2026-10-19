@@ -1,5 +1,7 @@
 """Single entry point for conversational, background, and vision calls."""
 
+import asyncio
+import weakref
 from importlib import import_module
 
 from micro_cc.models.types import Response, ResponseStream
@@ -10,6 +12,34 @@ _APIS = {
     "openai-chat": "openai_chat",
     "openai-responses": "openai_responses",
 }
+
+
+# loop -> {key: SDK client}; an httpx pool is bound to the loop that opened it.
+_CLIENTS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def cached_client(key: tuple, build):
+    """Reuse one SDK client (and its warm connections) per key on the running loop."""
+    per_loop = _CLIENTS.setdefault(asyncio.get_running_loop(), {})
+    if key not in per_loop:
+        per_loop[key] = build()
+    return per_loop[key]
+
+
+async def prewarm(model: str | None = None) -> None:
+    """Import the active provider's SDK and open its connection so the first message skips both."""
+    try:
+        from micro_cc.models import catalog, providers
+
+        provider = providers.active_provider()
+        alias = model or providers.default_model(provider)
+        _model_id, api = catalog.resolve(alias, provider)
+        module = await asyncio.to_thread(import_module, f"micro_cc.models.apis.{_APIS[api]}")
+        client = module.client_for(provider, alias)
+        # Unauthenticated HEAD: opens DNS/TCP/TLS into the pool, bills nothing.
+        await asyncio.wait_for(client._client.head(str(client.base_url)), timeout=10)
+    except Exception:
+        pass
 
 
 async def model_call(

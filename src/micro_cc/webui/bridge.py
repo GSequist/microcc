@@ -17,9 +17,12 @@ SSE_DONE = "data: [DONE]\n\n"
 # Events that flush the transcript to disk; same set start_headless_ persists on.
 _PERSIST_ON = {"tool_call", "tool_result", "final_text", "done", "error"}
 
-# Reveal in fixed-size slices, paced with sleep so a concurrent /api/chat/stop still gets scheduled.
-_FRAME = 0.02
-_CHARS_PER_TICK = 2
+# Reveal each delta over ~_TICKS_PER_DELTA slices (sized _MIN.._MAX chars), paced with sleep so a
+# concurrent /api/chat/stop still gets scheduled; bounded per delta so the stream never falls behind.
+_FRAME = 0.015
+_TICKS_PER_DELTA = 3
+_MIN_SLICE = 4
+_MAX_SLICE = 80
 
 
 def sse(chunk: dict) -> str:
@@ -74,8 +77,9 @@ async def stream(gen, msg_id, project_dir):
 
     async def reveal(chunk_type, block_id, text):
         """Yield `text` as small SSE deltas, sleeping between each (the smoothing step)."""
-        for i in range(0, len(text), _CHARS_PER_TICK):
-            yield sse({"type": chunk_type, "id": block_id, "delta": text[i:i + _CHARS_PER_TICK]})
+        size = min(_MAX_SLICE, max(_MIN_SLICE, -(-len(text) // _TICKS_PER_DELTA)))
+        for i in range(0, len(text), size):
+            yield sse({"type": chunk_type, "id": block_id, "delta": text[i:i + size]})
             await asyncio.sleep(_FRAME)
 
     last_live = None

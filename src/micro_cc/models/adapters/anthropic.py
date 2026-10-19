@@ -65,6 +65,8 @@ async def stream_response(raw_stream, unstealth=None) -> ResponseStream:
         elif event.type == "content_block_start":
             if event.content_block.type == "tool_use":
                 current_tool = {"id": event.content_block.id, "name": event.content_block.name, "input_json": ""}
+                name = unstealth(current_tool["name"]) if unstealth else current_tool["name"]
+                yield {"type": "tool_use_start", "name": name}
 
         elif event.type == "content_block_delta":
             if event.delta.type == "text_delta":

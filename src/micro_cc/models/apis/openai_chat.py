@@ -19,6 +19,7 @@ from micro_cc.models.catalog import (
     PROVIDERS, anthropic_beta_headers, compat, max_output_for, resolve_effort, supports_thinking,
     wants_summarized_display,
 )
+from micro_cc.models.client import cached_client
 from micro_cc.models.providers import credentials
 from micro_cc.models.retry import first_event_timeout, retry_call
 from micro_cc.models.schema import tools_to_chat
@@ -161,12 +162,17 @@ def _thinking_body(dialect, alias, reasoning_effort) -> dict:
     return {}
 
 
+def client_for(provider: str, alias: str, timeout=480):
+    base_url, api_key = credentials(provider)
+    key = ("openai", provider, timeout, base_url, api_key)
+    return cached_client(key, lambda: AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout))
+
+
 async def call(provider, alias, model_id, *, input, encoded_image=None, tools=None, stream=False,
                thinking=False, reasoning_effort=None, max_tokens=None, client_timeout=480, pdf=None, retries=3):
     c = compat(provider)
     dialect = c.get("reasoning")
-    base_url, api_key = credentials(provider)
-    client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=client_timeout)
+    client = client_for(provider, alias, client_timeout)
 
     if dialect == "ollama":
         max_tokens = max_tokens or int(os.getenv("OLLAMA_MAX_OUTPUT") or 4096)

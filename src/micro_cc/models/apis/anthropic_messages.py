@@ -11,6 +11,7 @@ import os
 from anthropic import AsyncAnthropic, AsyncAnthropicBedrockMantle, AsyncAnthropicVertex
 
 from micro_cc.models.adapters.anthropic import response as wrap_response, stream_response
+from micro_cc.models.client import cached_client
 from micro_cc.models.catalog import (
     PROVIDERS, anthropic_beta_headers, compat, fallback_params, max_output_for, resolve_effort,
     supports_thinking, wants_summarized_display,
@@ -98,6 +99,14 @@ def build_client(provider: str, timeout, betas: list | None = None):
     return AsyncAnthropic(api_key=api_key or None, base_url=base_url, timeout=timeout, default_headers=headers)
 
 
+def client_for(provider: str, alias: str, timeout=480):
+    """Cached client; credentials are in the key so a refreshed OAuth token builds a fresh one."""
+    betas = anthropic_beta_headers(alias) if compat(provider).get("betas") else []
+    project = os.getenv(PROVIDERS.get(provider, {}).get("project_env", ""))
+    key = ("anthropic", provider, timeout, tuple(betas), credentials(provider), region(provider), project)
+    return cached_client(key, lambda: build_client(provider, timeout, betas))
+
+
 def _image(data: str) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
 
@@ -164,7 +173,7 @@ async def call(provider, alias, model_id, *, input, encoded_image=None, tools=No
     if missing:
         print(f"\n[{provider} model_call]: missing dependency: {missing}", flush=True)
         return None
-    client = build_client(provider, client_timeout, anthropic_beta_headers(alias) if betas_on else [])
+    client = client_for(provider, alias, client_timeout)
 
     system, messages = _build_messages(input, encoded_image, pdf)
     if oauth:

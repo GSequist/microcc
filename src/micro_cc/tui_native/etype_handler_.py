@@ -32,7 +32,13 @@ async def handle_error(app, event, container, tool_call_rows, approval_rows):
     app._scroll_to_bottom()
 
 
+async def handle_tool_use_start(app, event, container, tool_call_rows, approval_rows):
+    app._pending_tool = event.get("name") or None
+    app._tick_working()
+
+
 async def handle_tool_call(app, event, container, tool_call_rows, approval_rows):
+    app._pending_tool = None
     store_msgs(app._project_dir, app._loop_msgs)
     app._finalize_streaming()
     msg = {
@@ -63,22 +69,13 @@ async def handle_tool_result(app, event, container, tool_call_rows, approval_row
         app._scroll_to_bottom()
 
 
-# Pace text/thinking deltas with sleep between slices; throttles source to prevent backlog.
-_FRAME = 0.012
-_CHARS_PER_TICK = 6
-
-
+# Buffer only; the render loop paces the reveal (app._tick_stream) so the stream is never throttled.
 async def _stream_delta(app, event, container, mode):
     if app._streaming is None or app._streaming._mode != mode:
         app._finalize_streaming()
         app._streaming = StreamingRow(mode=mode)
         container.add(app._streaming)
-    text = event.get("content", "")
-    row = app._streaming
-    for i in range(0, len(text), _CHARS_PER_TICK):
-        row.append(text[i:i + _CHARS_PER_TICK])
-        app.request_render()
-        await asyncio.sleep(_FRAME)
+    app._streaming.append(event.get("content", ""))
 
 
 async def handle_text_delta(app, event, container, tool_call_rows, approval_rows):
@@ -90,6 +87,7 @@ async def handle_thinking_delta(app, event, container, tool_call_rows, approval_
 
 
 async def handle_turn_boundary(app, event, container, tool_call_rows, approval_rows):
+    app._pending_tool = None
     app._refresh_status()
 
     if not app._queue:
@@ -191,6 +189,7 @@ ETYPES = {
     "done": handle_done,
     "error": handle_error,
     "text_delta": handle_text_delta,
+    "tool_use_start": handle_tool_use_start,
     "thinking_delta": handle_thinking_delta,
     "approval_request": handle_approval_request,
     "question_asked": handle_question_asked,

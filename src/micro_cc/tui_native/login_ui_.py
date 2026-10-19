@@ -7,7 +7,6 @@ from micro_cc.models import catalog as model_catalog
 from micro_cc.models.providers import ensure_package
 from micro_cc.tui_native.option_panel_ import PanelItem
 from micro_cc.utils import settings_store_
-from micro_cc.utils.claude_subscription import discover_claude_code_token, oauth_login_flow
 from micro_cc.utils.helpers import (
     apply_login,
     apply_project_keys,
@@ -59,6 +58,8 @@ def _keep_or_reset_model(app, provider: str) -> None:
 async def claude_code_login(app, provider: str = "claude-code") -> None:
     """Handle OAuth authentication via Claude Code."""
     app._input_mode = "query_active"
+    from micro_cc.utils.claude_subscription import discover_claude_code_token, oauth_login_flow  # lazy: pulls httpx
+
     app._oauth_cancel_event = threading.Event()
     try:
         token = discover_claude_code_token()

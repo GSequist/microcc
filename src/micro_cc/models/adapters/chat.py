@@ -99,6 +99,7 @@ async def stream_response(raw_stream, *, reasoning: Reasoning = "none") -> Respo
                     "name": tc.function.name if tc.function else "",
                     "args": "",
                 }
+                yield {"type": "tool_use_start", "name": tool_calls[tc.index]["name"]}
             if tc.function and tc.function.arguments:
                 tool_calls[tc.index]["args"] += tc.function.arguments
 
