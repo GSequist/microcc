@@ -1,7 +1,3 @@
-<p align="center"><img src="assets/logo.png" alt="micro-cc" width="160"></p>
-
-# micro-cc
-
 ```
                    88
                    ""
