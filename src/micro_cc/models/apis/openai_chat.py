@@ -26,6 +26,8 @@ from micro_cc.models.schema import tools_to_chat
 
 FALLBACK_MAX_TOKENS = 120000
 IMAGE_PLACEHOLDER = "[image attached — see following message]"
+# OpenRouter app attribution: lists microcc in openrouter.ai app rankings
+OPENROUTER_HEADERS = {"HTTP-Referer": "https://microcc.xyz", "X-OpenRouter-Title": "microcc"}
 
 
 def _image_part(source: dict) -> dict:
@@ -164,8 +166,10 @@ def _thinking_body(dialect, alias, reasoning_effort) -> dict:
 
 def client_for(provider: str, alias: str, timeout=480):
     base_url, api_key = credentials(provider)
+    headers = OPENROUTER_HEADERS if provider == "openrouter" else None
     key = ("openai", provider, timeout, base_url, api_key)
-    return cached_client(key, lambda: AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout))
+    return cached_client(key, lambda: AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout,
+                                                  default_headers=headers))
 
 
 async def call(provider, alias, model_id, *, input, encoded_image=None, tools=None, stream=False,
