@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from micro_cc.claude_loop_ import claude_loop, GATEABLE_TOOLS
 from micro_cc.models import catalog as model_catalog
+from micro_cc.models.providers import active_provider
 from micro_cc.utils import command_registry, hidden_prompts, hints, settings_store_, whats_new
 from micro_cc.utils.msg_store_ import (
     store_msgs,
@@ -335,6 +336,7 @@ async def post_chat(request: Request):
 
             session.STATE["stop"].clear()
             session.STATE["partial"] = []
+            notice = None
             if resuming:
                 # Approvals resume with a bool (False if /deny stashed one); questions with the answers dict.
                 kind = session.STATE["pending_kind"]
@@ -343,17 +345,20 @@ async def post_chat(request: Request):
                 gen = session.STATE["gen"]
             else:
                 msgs = session.STATE["msgs"] = load_msgs(project_dir)
+                saved = settings_store_.get_setting("model") or model_catalog.DEFAULT_MODEL
+                model, replaced = model_catalog.usable_model(saved, active_provider())
+                notice = model_catalog.stale_model_notice(saved) if replaced else None
                 gen = session.STATE["gen"] = claude_loop(
                     query=query,
                     msgs=msgs,
                     project_dir=project_dir,
-                    model=settings_store_.get_setting("model") or model_catalog.DEFAULT_MODEL,
+                    model=model,
                     max_tokens=session.STATE["trim_budget"],
                     surface="gui",
                 )
 
             try:
-                async for chunk in bridge.stream(gen, f"msg-{uuid.uuid4().hex[:12]}", project_dir):
+                async for chunk in bridge.stream(gen, f"msg-{uuid.uuid4().hex[:12]}", project_dir, notice):
                     yield chunk
                     if session.STATE["stop"].is_set():
                         break

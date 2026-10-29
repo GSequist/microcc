@@ -3,7 +3,10 @@ import json
 import os
 import time
 
+from micro_cc.utils.system_prompt_ import HEAD_KEY, PATCH_KEY
 from micro_cc.utils.tool_safety_ import is_read_only
+
+_SYSTEM_KEYS = (HEAD_KEY, PATCH_KEY)  # system prompt versioning markers (system_prompt_)
 
 
 def log_dropped_message(source: str, project_dir: str, count: int) -> None:
@@ -87,6 +90,9 @@ def normalize_message(msg: dict) -> dict:
         if len(normalized["content"]) == 1 and normalized["content"][0].get("type") == "text":
             normalized["content"] = normalized["content"][0]["text"]
 
+    for key in _SYSTEM_KEYS:
+        if key in msg:
+            normalized[key] = msg[key]
     return normalized
 
 
@@ -108,11 +114,15 @@ def is_valid_message(msg) -> bool:
 
 
 def reconstruct_message(normalized: dict) -> dict:
-    """Reconstruct API-compatible message from stored format."""
-    return {
+    """Reconstruct API-compatible message from stored format; wires read only role and content."""
+    msg = {
         "role": normalized["role"],
         "content": normalized.get("content", "")
     }
+    for key in _SYSTEM_KEYS:
+        if key in normalized:
+            msg[key] = normalized[key]
+    return msg
 
 
 REPAIR_RESULT_TEXT = (

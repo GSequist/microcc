@@ -12,10 +12,16 @@ os.environ.pop("MICRO_CC_POSTGRES_URL", None)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from micro_cc.tui_native.message_row_ import MessageRow  # noqa: E402
+from micro_cc.utils.subagent_notice_ import block  # noqa: E402
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tui_render_golden.json"
 _LONG = "\n".join(f"line {i} of a long result" for i in range(120))
 _BIG = "x" * 6000
+_NOTICE = "\n".join([
+    block(name="alpha", project_dir="/w/alpha", status="DONE", summary="built it", result="Built **x**.\n\n- one\n- two",
+          usage="1,200 tokens · 3 tool uses · 1m02s", transcript="/t/alpha.jsonl"),
+    block(name="beta", project_dir="/w/beta", status="FAILED", summary="no network"),
+])
 
 CASES = {
     "user": {"type": "user", "content": "hello there\nsecond line"},
@@ -42,6 +48,10 @@ CASES = {
     "approval_write_exp": {"type": "approval", "name": "write_", "input": {"file_path": "/f.py", "content": "y" * 700}, "expanded": True},
     "approval_other": {"type": "approval", "name": "web_", "input": {"url": "http://x"}},
     "approval_other_exp": {"type": "approval", "name": "web_", "input": {"url": "http://x"}, "expanded": True},
+    "notice": {"type": "user", "content": _NOTICE},
+    "notice_expanded": {"type": "user", "content": _NOTICE, "expanded": True},
+    "notice_queued": {"type": "user_queued", "content": _NOTICE},
+    "notice_legacy": {"type": "user", "content": "[subagent checkpoint]\n✓ alpha — DONE: built it\n\nYou have subagents running."},
     "unknown": {"type": "mystery"},
 }
 

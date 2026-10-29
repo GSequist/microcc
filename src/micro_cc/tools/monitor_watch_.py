@@ -1,6 +1,5 @@
-"""Streaming watches: a shell command whose stdout lines are pushed into the live TUI as they
-happen (monitor_ action="watch"). In-process only, no persistence. Headless runs refuse,
-since nothing would read the events.
+"""Streaming watches: a shell command whose stdout lines are pushed as new turns as they happen
+(monitor_ action="watch"). In-process only, no persistence. Refused when no session listens.
 """
 
 import asyncio
@@ -10,12 +9,12 @@ import time
 import uuid
 from pathlib import Path
 
-from micro_cc.tools.bash_tool import _SHELL, _bash_env
+from micro_cc.tools.bash_tool import _bash_env
 from micro_cc.utils.msg_store_ import _get_storage_dir
 
 _watches: dict[str, dict] = {}
 
-# Set by start_live_tui_.start(); None means no interactive session (start_watch refuses).
+# Set by the TUI or a headless run; None means nothing listens (start_watch refuses).
 _wake_callback = None
 
 # Lines arriving within this window are batched into one notification.
@@ -38,6 +37,7 @@ def list_watches() -> list[dict]:
             "description": w["description"],
             "command": w["command"],
             "age": int(time.time() - w["started_at"]),
+            "persistent": w["persistent"],
         }
         for watch_id, w in _watches.items()
         if w["status"] == "running"
@@ -65,9 +65,8 @@ async def start_watch(
 ) -> str:
     if _wake_callback is None:
         return (
-            "[monitor watch unavailable: no interactive session is listening "
-            "for pushed events right now — watches only work inside the live "
-            "TUI, not headless/batch runs. Use action='check' instead.]"
+            "[monitor watch unavailable: no session is listening for pushed "
+            "events right now. Use action='check' instead.]"
         )
 
     watch_id = uuid.uuid4().hex[:8]
@@ -91,6 +90,7 @@ async def start_watch(
         "status": "running",
         "fire_times": [],
         "output_path": str(out_path),
+        "persistent": persistent,
     }
     _watches[watch_id]["reader_task"] = asyncio.ensure_future(_reader_loop(watch_id))
     _watches[watch_id]["stderr_task"] = asyncio.ensure_future(_stderr_to_file(watch_id))
@@ -188,6 +188,9 @@ def _finish(watch_id: str, reason: str) -> None:
     if entry is None:
         return
     entry["status"] = "stopped"
+    timeout_task = entry.get("timeout_task")
+    if timeout_task is not None and not timeout_task.done():
+        timeout_task.cancel()  # a sleeping guard would otherwise hold a headless drain open
     if _wake_callback is not None:
         _wake_callback(f"[monitor: {entry['description']}] {reason}")
 

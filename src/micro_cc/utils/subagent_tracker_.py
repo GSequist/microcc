@@ -79,6 +79,13 @@ def _pid_alive(pid) -> bool:
     return True
 
 
+def _transcript_size(project_dir: str) -> int:
+    try:
+        return (_get_storage_dir(project_dir) / "messages.jsonl").stat().st_size
+    except OSError:
+        return 0
+
+
 def add_tracked(
     caller_project_dir: str, subagent_project_dir: str, *,
     max_running: int | None = None,
@@ -113,8 +120,9 @@ def add_tracked(
                     f"monitor_ before relaunching."
                 )
         subagents[subagent_project_dir] = {
-            "status": "RUNNING", "notified": False, "updated_at": time.time(),
+            "status": "RUNNING", "notified": False, "updated_at": time.time(), "started_at": time.time(),
             "pid": os.getpid(),  # Detect stale RUNNING entries if subagent crashes.
+            "baseline": _transcript_size(subagent_project_dir),  # replies before this offset are a prior run's
         }
         _write(caller_project_dir, data)
     _with_lock(caller_project_dir, _do)

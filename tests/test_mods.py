@@ -262,7 +262,7 @@ class TestCommands(ModsCase):
         rows, sent, builtin_runs = [], [], []
 
         def make(mode="idle"):
-            app = SimpleNamespace(prompt=PromptInput(), _input_mode=mode, _gui_url="", _queue=[],
+            app = SimpleNamespace(prompt=PromptInput(), _input_mode=mode, _gui_url="", _queue=[], _whats_new_row=None,
                                   _flash_status=lambda t, seconds=3: self.notes.append(t))
 
             async def mount(msg):

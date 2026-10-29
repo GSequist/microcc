@@ -10,7 +10,7 @@ from micro_cc.tui_native.diff_viewer_ import build_diff_lines
 from micro_cc.tui_native.glyphs_ import glyph
 from micro_cc.tui_native.md_render_ import render_md
 from micro_cc import mods_
-from micro_cc.utils import theme_store_
+from micro_cc.utils import status_marker, subagent_notice_, theme_store_
 
 _MAX_EXPANDED_LINES = 40
 
@@ -43,12 +43,47 @@ def helpers() -> SimpleNamespace:
 
 # --- builtin renderers ---------------------------------------------------
 
+def _user_line(content, queued=False):
+    if queued:
+        return Text(f"{glyph('queued')} {content}", style=f"dim italic {theme_store_.get('queued')}")
+    return Text.assemble((f"{glyph('user_prompt')} ", theme_store_.get("accent")), (content, theme_store_.get("fg")))
+
+
+def _notice(notice, msg, queued=False):
+    """Subagent notification turn as a compact card: one status line per child, click to show results; trailing text below."""
+    notes = notice["notes"]
+    expandable = any(n["result"] for n in notes)
+    hint = glyph("hint_collapse") if msg.get("expanded") else glyph("hint_expand")
+    parts = []
+    for i, n in enumerate(notes):
+        color = status_marker.color(n["status"])
+        line = Text.assemble(
+            (f"{glyph('subagent')} ", "dim"), (status_marker.SYMBOL.get(n["status"], "?"), color),
+            (f" {n['name']}", "bold"), (f" — {n['summary']}", "dim" if queued else theme_store_.get("fg")),
+            *([(f"   ({hint})", "dim italic")] if expandable and i == 0 else []),
+        )
+        parts.append(line)
+        if msg.get("expanded") and n["result"]:
+            parts.append(render_md(cap_lines(n["result"])))
+            meta = " · ".join(x for x in (n["usage"], n["transcript"]) if x)
+            parts += [Text(meta, style="dim italic")] if meta else []
+    if msg.get("expanded") and expandable:
+        parts.append(Text(glyph("rule") * 40, style="dim"))
+    if queued:
+        parts.insert(0, Text(glyph("queued"), style=f"dim italic {theme_store_.get('queued')}"))
+    if notice["text"]:
+        parts.append(Text(notice["text"], style=f"dim italic {theme_store_.get('queued')}") if queued else _user_line(notice["text"]))
+    return Group(*parts) if msg.get("expanded") else Text("\n").join(parts)
+
+
 def _user(msg, r):
-    return Text.assemble((f"{glyph('user_prompt')} ", theme_store_.get("accent")), (msg["content"], theme_store_.get("fg")))
+    notice = subagent_notice_.parse(msg["content"])
+    return _notice(notice, msg) if notice else _user_line(msg["content"])
 
 
 def _user_queued(msg, r):
-    return Text(f"{glyph('queued')} {msg['content']}", style=f"dim italic {theme_store_.get('queued')}")
+    notice = subagent_notice_.parse(msg["content"])
+    return _notice(notice, msg, queued=True) if notice else _user_line(msg["content"], queued=True)
 
 
 def _text(msg, r):
@@ -61,6 +96,10 @@ def _thinking(msg, r):
 
 def _error(msg, r):
     return Text(f"{glyph('error')} {msg['content']}", style=f"italic {theme_store_.get('error')}")
+
+
+def _mcp_auth(msg, r):
+    return Text(msg["content"], style=theme_store_.get("warn"))
 
 
 def _tool_call(msg, r, ansi_result=False):
@@ -194,6 +233,7 @@ BUILTIN = {
     "tool_call:bash_": _tool_call_bash,
     "tool_call:edit_": _tool_call_edit,
     "error": _error,
+    "mcp_auth": _mcp_auth,
     "approval": _approval,
     "approval:bash_": _approval_bash,
     "approval:edit_": _approval_edit,

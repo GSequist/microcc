@@ -1,5 +1,8 @@
 """Ask-user question flow on the OptionPanel; module functions taking the app."""
 
+from rich.markup import escape
+
+from micro_cc.utils import theme_store_
 from micro_cc.tui_native.option_panel_ import PanelItem
 from micro_cc.tui_native.panel_layout_ import fit
 
@@ -17,13 +20,15 @@ def show_current(app) -> None:
     if not q["options"]:
         # Freeform stage: question above the real prompt, which is the answer box.
         app._option_panel.close()
-        app.ask_question_text.update(q["question"])
-        app.prompt.placeholder = q["question"]
+        accent = theme_store_.get("accent")
+        app.ask_question_text.update(f"[bold {accent}]● Question for you — type your answer below[/]\n{escape(q['question'])}")
+        app.prompt.placeholder = "Type your answer and press ⏎ (esc to skip)"
         return
     items = [PanelItem(o["label"], o["label"], o.get("description", "")) for o in q["options"]]
-    app._option_panel.max_visible, app._option_panel.max_desc_lines = fit(app, items, q["question"])
+    panel = app._option_panel
+    panel.max_visible, panel.max_desc_lines, panel.max_title_lines = fit(app, items, q["question"])
     multi = bool(q.get("multiSelect"))
-    app._option_panel.open(
+    panel.open(
         items,
         on_select=(lambda its: advance(app, [it.label for it in its])) if multi
         else (lambda it: advance(app, it.label)),

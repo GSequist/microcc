@@ -5,12 +5,13 @@ from typing import Optional, TYPE_CHECKING
 import json
 import platform
 
-from micro_cc.tools.mcp_client_ import resolve_mcp_tools
+from micro_cc.tools.mcp_client_ import normalize_config, resolve_mcp_tools
 
 # Import all discoverable tools
 from micro_cc.tools.browser_tool_ import browser
 from micro_cc.tools.computer_tool_ import computer
 from micro_cc.tools.message_session_ import message_session_
+from micro_cc.tools.monitor_ import monitor_
 from micro_cc.tools.reload_tool_ import reload_harness_
 from micro_cc.tools.web_tools_ import (
     visit_url,
@@ -42,6 +43,23 @@ def _register(func, search_text: str):
     }
 
 
+async def timer_(delay: str, prompt: str, *, project_dir: str, repeat: bool = False, durable: bool = False) -> str:
+    """Wake yourself later: `prompt` arrives as a new turn after `delay` ("20m", "2h", or a 5-field cron).
+    One-shot unless repeat=True (recurring auto-expires after 7 days). Minimum 1 minute; fires only in the
+    interactive session. durable=True survives restarts. Cancel/list via monitor_(action="unschedule"/"schedules").
+
+    Args:
+        delay: interval like "20m"/"2h", or a 5-field cron in local time.
+        prompt: what to tell yourself when it fires.
+        repeat: repeat on that cadence instead of firing once.
+        durable: persist across restarts.
+    """
+    return await monitor_(
+        "schedule", project_dir=project_dir, spec=delay, prompt=prompt, recurring=repeat or None, durable=durable
+    )
+
+
+_register(timer_, "timer alarm wake remind reminder later delay wait schedule sleep cron interval follow up check back in")
 _register(message_session_, "message notify tell list find discover other running micro-cc sessions peers terminal cross-session communicate")
 _register(reload_harness_, "reload restart relaunch harness self apply changes edited source mods mod modification")
 _register(browser, "browser chrome playwright navigate click type web automation interact page form")
@@ -114,19 +132,12 @@ def _scan_mcps_dir(mcps_dir: Path) -> dict:
     if not mcps_dir.is_dir():
         return catalog
 
-    for entry in mcps_dir.iterdir():
+    for entry in sorted(mcps_dir.iterdir()):
         config_file = entry / "mcp.json" if entry.is_dir() else entry
         if config_file.suffix != ".json" or not config_file.exists():
             continue
         try:
-            data = json.loads(config_file.read_text(encoding="utf-8"))
-            server = data["server"]
-            name = server.get("name", entry.stem)
-            catalog[name] = {
-                "server": server,
-                "search_text": data.get("search_text", name),
-                "auth_env": data.get("auth_env"),
-            }
+            catalog.update(normalize_config(json.loads(config_file.read_text(encoding="utf-8")), entry.stem))
         except Exception:
             continue
 
@@ -163,7 +174,8 @@ def list_mcps(*, project_dir: str = "") -> str:
 
     lines = ["# Available MCP servers", ""]
     for name, entry in catalog.items():
-        url = entry["server"].get("url", "")
+        server = entry["server"]
+        url = server.get("url") or " ".join([server.get("command", ""), *map(str, server.get("args") or [])])
         lines.append(f"**{name}** — {entry['search_text']}")
         lines.append(f"  {url}")
         lines.append("")
@@ -258,7 +270,7 @@ async def search_tools(
         if name in TOOL_CATALOG:
             sections.append(f"## {name}\n{schema_text(TOOL_CATALOG[name]['schema'])}")
             continue
-        mcp_tools, routing, failures = await resolve_mcp_tools([mcp_catalog[name]])
+        mcp_tools, routing, failures = await resolve_mcp_tools([mcp_catalog[name]], project_dir)
         if failures:
             sections.append(f"## {name}\n" + "\n".join(failures))
             continue

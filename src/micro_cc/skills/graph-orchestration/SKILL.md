@@ -25,6 +25,10 @@ it into the background itself, and returns within a second or two with one of:
   (the user's /subagents setting, default 4) is reached: wait for a checkpoint
   wakeup, or stop one, then spawn it again. Don't retry in a loop.
 
+Orchestration is one level deep: a subagent's own `microcc-headless` spawns
+are REFUSED (start_headless_.py's _nested_refusal), so plan every agent from
+the boss.
+
 (Mechanism: start_headless_.py's _spawn_detached. `--foreground` makes it
 block instead, which from bash_ means hitting bash_'s own timeout — avoid.)
 microcc-headless runs project_dir's conversation through ONE autonomous turn with
@@ -90,8 +94,12 @@ You'll see an ambient status line under the input showing every tracked
 subagent as one glyph + short name (▶ running, ✓ done, ✗ failed, ⏸ paused,
 ? needs input), and you'll automatically get woken up with a new turn the
 instant one of them hits a checkpoint — so you genuinely don't need to sit
-and poll. You can still call monitor_(action="check", targets=[project_dirs...])
-any time you want an on-demand full-detail snapshot instead of waiting to be
+and poll. That turn carries one `<subagent-notification>` block per finished
+subagent: name, project_dir, status, summary, its full final reply in
+`<result>` (long replies are cut, with the transcript path for the rest),
+usage and the transcript path — act on it directly, no tool call needed to
+read the result. You can still call monitor_(action="check", targets=[project_dirs...])
+any time you want an on-demand sweep of every subagent instead of waiting to be
 woken (e.g. right after spawning a batch). Calling it repeatedly, including on
 an already-finished subagent, is safe — it will not cause a duplicate wakeup
 or resurrect something already cleaned up. monitor_ is only in scope on a
@@ -108,14 +116,16 @@ filter (e.g. `tail -f <path> | grep --line-buffered <pattern>`) over
 whatever you're watching, pushed to you as its own turn the moment a line
 matches, so you never have to remember to check back in. Stop it early with
 monitor_(action="stop", watch_id=...); it auto-stops itself if it ever fires
-too fast for a real filter to explain. Only works in the live interactive
-session, same reason the ambient status line/wakeup mechanism itself does —
-a headless/batch run has no idle loop standing by to receive a push.
+too fast for a real filter to explain. Works in the live session and in a
+top-level headless run, which stays up after its final reply until its
+subagents checkpoint and its watches end (or --wait-timeout seconds pass
+with no wakeup; it resets on every wakeup). A subagent never waits: it ends
+at its final reply, so watches are refused there.
 
 Mechanism: utils/subagent_tracker_.py (one record per subagent, one file per
 boss, fcntl-locked since a subagent is a separate OS process) and
-start_live_tui_.py's _poll_subagents_tick/_wake_for_subagent (the 3s polling
-loop that updates the status line and fires wakeups); monitor_'s own
+tools/monitor_.py's poll_checkpoints/checkpoint_turn (the 3s poll shared by
+the TUI's tui_native/pollers_.py and headless's _next_wake); monitor_'s own
 status-reading logic is in tools/monitor_.py, and the streaming watch
 mechanism is in tools/monitor_watch_.py.
 
@@ -189,8 +199,8 @@ the tracker's pid field instead.
 
 Once you have the pid: `bash_("kill <pid>")`. Do NOT also try to edit, delete, or "clean up" the tracker file yourself
 afterward, and do NOT grep/find anywhere just to "locate" or "verify" the
-tracker - that's the mistake that reliably times out a turn. start_live_tui_.py's
-_poll_subagents_tick already self-heals this on its own next 3s tick: it
+tracker - that's the mistake that reliably times out a turn. tools/monitor_.py's
+poll_checkpoints (run by tui_native/pollers_.py and headless) already self-heals this on its own next 3s tick: it
 notices `os.kill(pid, 0)` now raises ProcessLookupError, marks that entry
 FAILED itself with summary "process is no longer running (stopped or killed
 before finishing)", and fires the same checkpoint wakeup you'd get from a

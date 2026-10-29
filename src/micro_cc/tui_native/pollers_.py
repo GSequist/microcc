@@ -57,64 +57,22 @@ def poll_memory_review_tick(app) -> None:
 async def poll_subagents_tick(app, *, cold_start: bool = False) -> None:
     """Poll subagents every 3s, display status, fire wakeups on checkpoint."""
     from micro_cc.utils import subagent_tracker_
-    from micro_cc.tools.monitor_ import poll_status, format_status_glyph
-    from micro_cc.utils.inbox_store_ import peek_pending_count
+    from micro_cc.tools.monitor_ import poll_checkpoints, format_status_glyph, _DONE_STATUSES
 
-    data = subagent_tracker_.read_tracked(app._project_dir)
-    subagents = data["subagents"]
-    app._tracked_subagents = list(subagents)
+    rows = poll_checkpoints(app._project_dir, app._subagent_poll_cache)
+    app._tracked_subagents = [r["target"] for r in rows]
 
-    if not subagents:
+    if not rows:
         app._subagent_snapshot = []
         app.subagent_status.update("")
         app.request_render()
         return
 
     display_lines = []
-    wakeups = []
     snapshot = []
-    for target, entry in subagents.items():
-        cached = app._subagent_poll_cache.get(target)
-        info, new_stat = poll_status(target, cached)
-        app._subagent_poll_cache[target] = new_stat
-
-        if info is None:
-            # Unchanged since last poll: reuse the last known status.
-            status = entry["status"]
-            if status not in app._SUBAGENT_CHECKPOINT_STATUSES:
-                # A killed subagent never writes a terminal STATUS, so detect it via pid liveness.
-                pid = entry.get("pid")
-                if pid is not None:
-                    try:
-                        os.kill(pid, 0)
-                    except ProcessLookupError:
-                        name = os.path.basename(target.rstrip("/")) or target
-                        info = {
-                            "resolved": target,
-                            "name": name,
-                            "status": "FAILED",
-                            "summary": "process is no longer running (stopped or killed before finishing)",
-                            "pending": peek_pending_count(target),
-                        }
-                        status = info["status"]
-                        subagent_tracker_.update_status(
-                            app._project_dir, target, status
-                        )
-                        if not entry["notified"]:
-                            wakeups.append((target, info))
-                    except PermissionError:
-                        pass  # pid got reused by something we don't own — can't tell, leave as-is
-        else:
-            status = info["status"]
-            if status != entry["status"]:
-                subagent_tracker_.update_status(app._project_dir, target, status)
-            if (
-                status in app._SUBAGENT_CHECKPOINT_STATUSES
-                and not entry["notified"]
-            ):
-                wakeups.append((target, info))
-
-        if status in app._SUBAGENT_TERMINAL_STATUSES and entry["notified"]:
+    for r in rows:
+        target, entry, info, status = r["target"], r["entry"], r["info"], r["status"]
+        if status in _DONE_STATUSES and entry["notified"]:
             # Already notified: hide from the status line, prune() reaps it.
             continue
 
@@ -145,23 +103,20 @@ async def poll_subagents_tick(app, *, cold_start: bool = False) -> None:
         app.subagent_status.update("")
     app.request_render()
 
-    for target, info in wakeups:
-        await wake_for_subagent(app, info, cold_start=cold_start)
-        subagent_tracker_.mark_notified(app._project_dir, target)
+    woken = [r for r in rows if r["wake"]]
+    if woken:
+        await wake_for_subagents(app, woken, cold_start=cold_start)
+        for r in woken:
+            subagent_tracker_.mark_notified(app._project_dir, r["target"])
 
     # Reap every tick; prune only drops entries already notified, so it can't race mark_notified.
     subagent_tracker_.prune(app._project_dir)
 
-async def wake_for_subagent(app, info: dict, *, cold_start: bool = False) -> None:
-    """Wake boss for a subagent checkpoint it hasn't seen, like an incoming message."""
-    from micro_cc.tools.monitor_ import format_status_line
+async def wake_for_subagents(app, rows: list, *, cold_start: bool = False) -> None:
+    """Wake boss once for every subagent checkpoint it hasn't seen, like an incoming message."""
+    from micro_cc.tools.monitor_ import checkpoint_turn
 
-    prefix = app._SUBAGENT_COLD_START_PREFIX if cold_start else ""
-    content = (
-        f"{prefix}[subagent checkpoint]\n{format_status_line(info)}\n\n"
-        f"{app._SUBAGENT_WAKEUP_REMINDER}"
-    )
-    await app._inject_incoming_turn(content)
+    await app._inject_incoming_turn(checkpoint_turn(rows, cold_start=cold_start))
 
 async def subagent_poll_loop(app) -> None:
     while True:

@@ -12,6 +12,9 @@ from micro_cc.models.types import ContentBlock, Response, ResponseStream, Usage
 Reasoning = Literal["none", "litellm", "ollama", "openrouter", "read"]
 
 
+_STOP = {"length": "max_tokens", "stop": "end_turn", "tool_calls": "tool_use"}
+
+
 def _reasoning_text(obj, reasoning: Reasoning) -> str:
     if reasoning == "litellm":
         return getattr(obj, "reasoning_content", None) or ""
@@ -69,7 +72,8 @@ def response(raw, *, reasoning: Reasoning = "none") -> Response:
         blocks.append(ContentBlock(
             type="tool_use", name=tc.function.name, input=args, id=tc.id, parse_error=parse_error,
         ))
-    return Response(content=blocks, usage=_usage(raw))
+    finish = getattr(raw.choices[0], "finish_reason", None) or ""
+    return Response(content=blocks, usage=_usage(raw), stop_reason=_STOP.get(finish, finish))
 
 
 async def stream_response(raw_stream, *, reasoning: Reasoning = "none") -> ResponseStream:
@@ -78,12 +82,14 @@ async def stream_response(raw_stream, *, reasoning: Reasoning = "none") -> Respo
     thinking = ""
     tool_calls = {}  # index -> {id, name, args}; insertion order is call order
     usage = {}
+    finish = ""
 
     async for chunk in raw_stream:
         # include_usage may produce a choices=[] trailer on any chat backend.
         usage.update(_usage(chunk))
         if not chunk.choices:
             continue
+        finish = getattr(chunk.choices[0], "finish_reason", None) or finish
         delta = chunk.choices[0].delta
         if delta.content:
             text += delta.content
@@ -126,5 +132,5 @@ async def stream_response(raw_stream, *, reasoning: Reasoning = "none") -> Respo
         blocks.append(ContentBlock(
             type="tool_use", name=tc["name"], input=args, id=tc["id"], parse_error=parse_error,
         ))
-    result = Response(content=blocks, usage=usage)
+    result = Response(content=blocks, usage=usage, stop_reason=_STOP.get(finish, finish))
     yield {"type": "response", "response": result, "usage": usage}

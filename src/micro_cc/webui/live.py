@@ -15,7 +15,7 @@ def subagents(project_dir: str) -> list:
     out = []
     for target, entry in subagent_tracker_.read_tracked(project_dir)["subagents"].items():
         stat, last = _poll.get(target, (None, None))
-        info, stat = poll_status(target, stat)
+        info, stat = poll_status(target, stat, entry.get("baseline", 0))
         last = info or last
         _poll[target] = (stat, last)
         # The TUI poller writes terminal states (incl. pid-death FAILED) to the tracker.

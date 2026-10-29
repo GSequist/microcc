@@ -335,9 +335,10 @@ class TestShippedFiles(unittest.TestCase):
             if p.get("auth") != "oauth":
                 self.assertTrue(set(p["requires"]) <= set(p["login"]), pid)
 
+    @mock.patch.object(catalog, "MODELS", catalog._BUILTIN_MODELS)  # packaged defaults, not the remote cache
     def test_resolve_effort_clamps_to_model(self):
         self.assertEqual(catalog.resolve_effort("sonnet-5", "xhigh"), "xhigh")
-        self.assertEqual(catalog.resolve_effort("opus-4.6", "xhigh"), "high")
+        self.assertEqual(catalog.resolve_effort("opus-4.6", "xhigh"), "medium")
         self.assertEqual(catalog.resolve_effort("gpt-6-sol", "minimal"), "minimal")
         self.assertIsNone(catalog.resolve_effort("haiku-5.5", "high"))
         self.assertIsNone(catalog.resolve_effort("unknown-model", "high"))

@@ -1,6 +1,7 @@
 """Tool-approval prompt on the OptionPanel; module functions taking the app."""
 
 from micro_cc.tui_native.option_panel_ import PanelItem
+from micro_cc.tui_native.panel_layout_ import fit
 from micro_cc.tui_native.theme_ import _sgr
 from micro_cc.utils import theme_store_
 from micro_cc.utils.tool_safety_ import explain_gated, gate_risk
@@ -31,15 +32,19 @@ def show(app, name: str, inp) -> None:
     app.statusbar.update("")
     app.static_hintbar.update("")
     risk, reason = gate_risk(name, inp, app._project_dir)
-    app._option_panel.open(
-        [
-            PanelItem("yes", "Yes"),
-            PanelItem("always", "Yes, always", f"stop asking for {name}"),
-            PanelItem("no", "No", "Model is told and asks what to do instead"),
-        ],
+    items = [
+        PanelItem("yes", "Yes"),
+        PanelItem("always", "Yes, always", f"stop asking for {name}"),
+        PanelItem("no", "No", "Model is told and asks what to do instead"),
+    ]
+    title = f"{_badge(risk, reason)}  {explain_gated(name, inp)}\n{name} · {_summary(inp)}"
+    panel = app._option_panel
+    panel.max_visible, panel.max_desc_lines, panel.max_title_lines = fit(app, items, title)
+    panel.open(
+        items,
         on_select=lambda it: resolve(app, {"yes": True, "always": "always", "no": False}[it.value]),
         on_cancel=lambda: resolve(app, False),
-        title=f"{_badge(risk, reason)}  {explain_gated(name, inp)}\n{name} · {_summary(inp)}",
+        title=title,
     )
 
 

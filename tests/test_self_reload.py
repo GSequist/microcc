@@ -13,6 +13,7 @@ supervisor's decision logic is exercised with start_/reinstall/execv faked.
 """
 
 import contextlib
+import functools
 import io
 import os
 import sys
@@ -121,6 +122,28 @@ def _fake_supervisor_env(monkeypatch_root):
     return rec, mod
 
 
+def _restores_env(fn):
+    """Undo what _fake_supervisor_env overrides so later tests see the real modules."""
+    names = ("_STATE_PATH", "_CRASH_LOG", "_reinstall", "_start_catalog_refresh", "_is_source_checkout")
+
+    @functools.wraps(fn)
+    def run():
+        saved = {n: getattr(sh, n) for n in names}
+        execv, argv, live = os.execv, sys.argv[:], sys.modules.get("micro_cc.start_live_tui_")
+        try:
+            return fn()
+        finally:
+            for n, v in saved.items():
+                setattr(sh, n, v)
+            os.execv, sys.argv[:] = execv, argv
+            if live is None:
+                sys.modules.pop("micro_cc.start_live_tui_", None)
+            else:
+                sys.modules["micro_cc.start_live_tui_"] = live
+    return run
+
+
+@_restores_env
 def test_boot_recovery_bounded():
     d = tempfile.mkdtemp()
     rec, mod = _fake_supervisor_env(d)
@@ -191,6 +214,7 @@ def test_boot_recovery_bounded():
         _fail("a post-boot crash must not trigger a reinstall")
 
 
+@_restores_env
 def test_source_checkout_never_reinstalls():
     d = tempfile.mkdtemp()
     rec, mod = _fake_supervisor_env(d)

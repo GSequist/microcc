@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 
 from micro_cc.execute_tool import execute_tool_call
 from micro_cc.models import model_call
+from micro_cc.models.client import thinking_origin
+from micro_cc.utils import system_prompt_
 from micro_cc.models.catalog import DEFAULT_MODEL, DEFAULT_TRIM_BUDGET
 from micro_cc.utils import settings_store_
 from micro_cc.utils.tool_limits import cap_for, MAX_TOOL_RESULTS_PER_MESSAGE
@@ -34,6 +36,7 @@ from micro_cc.tools.search_tool_ import (
     TOOL_CATALOG,
 )
 from micro_cc.tools.mcp_client_ import resolve_mcp_tools, call_mcp_tool
+from micro_cc.tools.mcp_oauth import auth_listener
 from micro_cc.utils.msg_store_ import load_summary, load_checkpoint, compact_checkpoint, store_msgs
 from micro_cc.utils.tokenization_simple import token_cutter, token_stats, save_token_stats, detect_cache_miss, record_prompt_segments
 from micro_cc.utils.claude_md_loader import load_claude_md_file
@@ -136,6 +139,35 @@ _SPIN_NUDGE = (  # Injected when _SpinGuard trips
     "multi-step, record it with todo_tool_ instead of holding it in thinking.\n"
     "</system-reminder>"
 )
+
+_EMPTY_NUDGE = (  # Injected when a turn ends with no text and no tool call
+    "<system-reminder>\nYour last turn {why} and produced no text and no tool "
+    "call, so it was discarded. Do not re-plan from scratch in thinking. Emit the "
+    "next concrete tool call now, or, if the task is done, give your final answer.\n"
+    "</system-reminder>"
+)
+REPROMPT_LIMIT = 3  # Consecutive stalled/empty turns re-prompted before the turn fails
+
+
+async def _with_auth_notices(aw, out: list):
+    """Await aw, yielding an `mcp_auth` event per OAuth login prompt raised meanwhile; result is appended to out."""
+    q = asyncio.Queue()
+    task = asyncio.ensure_future(aw)
+    try:
+        with auth_listener(q.put_nowait):
+            while not task.done():
+                getter = asyncio.ensure_future(q.get())
+                await asyncio.wait({task, getter}, return_when=asyncio.FIRST_COMPLETED)
+                if getter.done():
+                    yield {"type": "mcp_auth", "message": getter.result()}
+                else:
+                    getter.cancel()
+        while not q.empty():
+            yield {"type": "mcp_auth", "message": q.get_nowait()}
+        out.append(task.result())
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 def _partition_tool_batches(ordered_blocks):
@@ -241,8 +273,6 @@ async def claude_loop(
 
     yield {"type": "status", "message": "", "msgs": msgs}
 
-    claude_md_section = f"\n\n<project-instructions>\n{claude_md_content}\n</project-instructions>" if claude_md_content else ""  # Built per call, never stored
-
     orchestration_line = (
         "- Multi-subagent orchestration: read_skill('graph-orchestration') to "
         "self-initiate a /graph-style orchestration any time you judge a task "
@@ -250,16 +280,44 @@ async def claude_loop(
         "doesn't have to type /graph first."
     ) if surface == "tui" else ""
 
-    system_prompt_msg = {
-        "role": "system",
-        "content": f"""You are micro cognitive compute - a CLI assistant. You have full system access and thus using code you can achieve any task.
+    def _build_memory_manifest() -> str | None:
+        """Index memory keys across global and project scopes."""
+        parts = []
+        global_items = memory_store_.list_memories()
+        if global_items:
+            parts.append(
+                "Global (all projects):\n"
+                + "\n".join(f"- {it['key']} — {it['description']}" for it in global_items)
+            )
+        project_items = memory_store_.list_memories(project_dir=project_dir)
+        if project_items:
+            parts.append(
+                "Project (this project_dir only):\n"
+                + "\n".join(f"- {it['key']} — {it['description']}" for it in project_items)
+            )
+        return "\n\n".join(parts) if parts else None
+
+    # Volatile parts of the system prompt; the head is rendered from the conversation's first set (system_prompt_).
+    sections = {name: text for name, text in {
+        "date": datetime.datetime.now().strftime("%B %d, %Y"),
+        "orchestration": orchestration_line,
+        "skills": skills_summary,
+        "claude_md": claude_md_content,
+        "memory": _build_memory_manifest(),
+    }.items() if text}
+
+    def _system_msgs(s: dict) -> list:
+        claude_md_section = f"\n\n<project-instructions>\n{s['claude_md']}\n</project-instructions>" if s.get("claude_md") else ""
+        system_prompt_msg = {
+            "role": "system",
+            "content": f"""You are micro cognitive compute - a CLI assistant. You have full system access and thus using code you can achieve any task.
 
 ## Environment
 - You are running LOCALLY on the user's machine (on the metal), NOT a remote server
 - You have direct access to the local filesystem, Desktop, Documents, etc.
 - Project directory: {project_dir}
 - Your own source code lives at: {package_dir} (not project_dir) — plain, editable .py. You can change the harness itself: edit it, then once the user allows it call reload_harness_ (load it with search_tools) to restart into your change, otherwise it never takes effect; the conversation persists across the restart. Before changing the harness, read the customizing-micro-cc skill: it says which changes belong in ~/.micro-cc (they survive updates) and which edit core (overwritten by the next /update).
-- Date: {datetime.datetime.now().strftime("%B %d, %Y")}
+- Date: {s.get("date", "")}
 
 ## Core Tools (always available)
 - bash_: Execute shell commands (runs in project_dir, use path param or absolute paths for elsewhere)
@@ -281,7 +339,7 @@ and the error carries the schema, so retry from that.
 Do this when you need a capability you don't currently have: web research,
 browser, computer_use, message_session_ (list and message other live
 micro-cc sessions), etc.
-{orchestration_line}
+{s.get("orchestration", "")}
 
 ## Planning Tools
 - todo_tool_: For multi-step complex work, write a todo plan and keep on track.
@@ -298,7 +356,7 @@ conversation grows forever
 search_history_(query=..., limit=...): full-text search over this project's
 whole conversation history, including compacted turns.
 
-{skills_summary}
+{s.get("skills", "")}
 {claude_md_section}
 
 ## Guidelines
@@ -306,9 +364,18 @@ whole conversation history, including compacted turns.
 - Use absolute paths when working outside project_dir
 - When writing to user, remove all mannered prose
 """,
-        # cache breakpoint: tools + this prompt, byte-identical across iterations of this call
-        "cache_control": {"type": "ephemeral"},
-    }
+            # cache breakpoint: tools + this prompt, byte-identical across iterations of this call
+            "cache_control": {"type": "ephemeral"},
+        }
+        if not s.get("memory"):
+            return [system_prompt_msg]
+        # Own system block with its own cache breakpoint.
+        memory_manifest_msg = {
+            "role": "system",
+            "content": f"## Long-term Memory\nKey+description index for both scopes — call memory_(action=\"get\", key=..., scope=...) to expand an entry.\n\n{s['memory']}",
+            "cache_control": {"type": "ephemeral"},
+        }
+        return [system_prompt_msg, memory_manifest_msg]
 
     images = [encoded_image] if isinstance(encoded_image, str) else (encoded_image or [])
     if images:
@@ -326,37 +393,11 @@ whole conversation history, including compacted turns.
         content = f"""
 {query}\n
         """
-    msgs.append({"role": "user", "content": content})
-
-    def _build_memory_manifest() -> str | None:
-        """Index memory keys across global and project scopes."""
-        parts = []
-        global_items = memory_store_.list_memories()
-        if global_items:
-            parts.append(
-                "Global (all projects):\n"
-                + "\n".join(f"- {it['key']} — {it['description']}" for it in global_items)
-            )
-        project_items = memory_store_.list_memories(project_dir=project_dir)
-        if project_items:
-            parts.append(
-                "Project (this project_dir only):\n"
-                + "\n".join(f"- {it['key']} — {it['description']}" for it in project_items)
-            )
-        return "\n\n".join(parts) if parts else None
-
-    _memory_manifest_baseline = _build_memory_manifest()
-    # Own system block with its own cache breakpoint; frozen for the turn so memory edits don't miss the prompt cache.
-    memory_manifest_msg = (
-        {
-            "role": "system",
-            "content": f"## Long-term Memory\nKey+description index for both scopes — call memory_(action=\"get\", key=..., scope=...) to expand an entry.\n\n{_memory_manifest_baseline}",
-            "cache_control": {"type": "ephemeral"},
-        }
-        if _memory_manifest_baseline is not None
-        else None
-    )
-    _last_shown_manifest = _memory_manifest_baseline
+    query_msg = {"role": "user", "content": content}
+    system_prompt_.sync(msgs, sections, query_msg)  # a changed section becomes a hidden patch before the query
+    msgs.append(query_msg)
+    _last_shown_manifest = sections.get("memory")
+    reprompts = 0  # consecutive stalled/empty turns
 
     while True:
         checkpoint = load_checkpoint(project_dir)
@@ -418,16 +459,12 @@ whole conversation history, including compacted turns.
             )
         else:
             trimmed_rest = token_cutter(msgs, max_tokens)
-        trimmed_loop_msgs = (  # Cache: system, memory, transcript, ephemeral
-            [system_prompt_msg]
-            + ([memory_manifest_msg] if memory_manifest_msg else [])
-            + trimmed_rest
-            + status_msgs
-        )
+        system_msgs = _system_msgs(system_prompt_.head(msgs, trimmed_rest))
+        trimmed_loop_msgs = system_msgs + trimmed_rest + status_msgs  # Cache: system, memory, transcript, ephemeral
 
         record_prompt_segments(
             tool_schemas,
-            [system_prompt_msg] + ([memory_manifest_msg] if memory_manifest_msg else []),
+            system_msgs,
         )
 
         pending = None
@@ -451,7 +488,10 @@ whole conversation history, including compacted turns.
             spin_guard = _SpinGuard()
             spin_tripped = False
             async for event in stream:
-                if event["type"] == "text_delta":
+                if event["type"] == "stream_reset":  # Re-sent mid-turn: nothing streamed so far counts
+                    response, api_usage, spin_guard = None, {}, _SpinGuard()
+                    yield {"type": "turn_reset", "message": f"stream dropped ({event['error']}) — partial turn discarded, re-sending"}
+                elif event["type"] == "text_delta":
                     yield {"type": "text_delta", "content": event["text"]}
                 elif event["type"] == "thinking_delta":
                     chunk = event["thinking"]
@@ -466,8 +506,12 @@ whole conversation history, including compacted turns.
                     api_usage = event.get("usage", {})
 
             if spin_tripped:  # Drop partial turn; nudge stays out of cache
+                reprompts += 1
+                if reprompts > REPROMPT_LIMIT:
+                    yield {"type": "error", "message": f"thinking stalled {reprompts} turns in a row — giving up"}
+                    break
                 msgs.append({"role": "user", "content": _SPIN_NUDGE, "_ephemeral": True})
-                yield {"type": "error", "message": "thinking stalled (short-line loop) — turn cut and model re-prompted"}
+                yield {"type": "turn_reset", "message": "thinking stalled (short-line loop) — turn cut and model re-prompted"}
                 continue
 
             cache_miss = None  # Detect before token_stats overwritten
@@ -510,6 +554,7 @@ whole conversation history, including compacted turns.
                             "signature": thinking_block.signature,
                             # OpenAI Responses can't replay reasoning without the block id.
                             "id": thinking_block.id,
+                            "origin": thinking_origin(model, provider, system_msgs),
                         }
                     )
                 if text_block:
@@ -542,7 +587,10 @@ whole conversation history, including compacted turns.
                         else:
                             for server in visible_loaded:
                                 if server in mcp_catalog and server not in resolved_mcp_names:
-                                    mcp_tools, routing, failures = await resolve_mcp_tools([mcp_catalog[server]])
+                                    resolved = []
+                                    async for ev in _with_auth_notices(resolve_mcp_tools([mcp_catalog[server]], project_dir), resolved):
+                                        yield ev
+                                    mcp_tools, routing, failures = resolved[0]
                                     for failure in failures:
                                         yield {"type": "error", "message": failure}
                                     if not failures:
@@ -650,9 +698,11 @@ whole conversation history, including compacted turns.
                     if is_mcp:
                         return call_mcp_tool(
                             mcp_routing[inner_name]["url"],
-                            inner_name,
+                            mcp_routing[inner_name].get("tool", inner_name),
                             inner_args,
                             headers=mcp_routing[inner_name].get("headers"),
+                            entry=mcp_routing[inner_name].get("entry"),
+                            project_dir=project_dir,
                         )
                     return execute_tool_call(inner_block(tb), tools, project_dir, model)
 
@@ -665,7 +715,8 @@ whole conversation history, including compacted turns.
 
                 # Reads in a row run in parallel; a mutating tool runs alone.
                 for is_safe, batch in _partition_tool_batches(ordered_blocks):
-                    await asyncio.gather(*(_run_and_record(tb, is_mcp) for tb, is_mcp in batch))
+                    async for ev in _with_auth_notices(asyncio.gather(*(_run_and_record(tb, is_mcp) for tb, is_mcp in batch)), []):
+                        yield ev
 
                 for tid, answered in answered_by_id.items():
                     results_by_id[tid] = answered["answered"]
@@ -816,6 +867,7 @@ whole conversation history, including compacted turns.
                 # Results are durable before the next model call, not after it.
                 store_msgs(project_dir, msgs)
 
+                reprompts = 0
                 # The one safe point to splice plain user messages between tool rounds.
                 yield {"type": "turn_boundary"}
 
@@ -833,9 +885,18 @@ whole conversation history, including compacted turns.
                         "message": "Claude declined to continue with this request"
                         + (f" (flagged: {category})." if category else "."),
                     }
-                else:
-                    yield {"type": "final_text"}
-                break
+                    break
+                # Empty turn (e.g. all reasoning, cut at max_tokens): drop it and re-prompt, like a spin.
+                reprompts += 1
+                capped = response.stop_reason == "max_tokens"
+                if reprompts > REPROMPT_LIMIT:
+                    yield {"type": "error", "message": f"model returned {reprompts} empty turns in a row"
+                           + (" (output cap hit while thinking)" if capped else "")}
+                    break
+                why = "hit the output-token cap while still thinking" if capped else "ended"
+                msgs.append({"role": "user", "content": _EMPTY_NUDGE.format(why=why), "_ephemeral": True})
+                yield {"type": "turn_reset", "message": f"empty turn{' (output cap hit while thinking)' if capped else ''} — model re-prompted"}
+                continue
 
         except asyncio.CancelledError:
             break

@@ -33,8 +33,7 @@ class Usage(TypedDict, total=False):
 class Response:
     content: list = field(default_factory=list)
     usage: Usage = field(default_factory=dict)
-    # "" / None unless an Anthropic-family adapter sets them.
-    # "refusal" (empty content, safety stop) is checked by claude_loop_.
+    # Anthropic naming ("max_tokens", "refusal", ...); other adapters map onto it, "" if unknown.
     stop_reason: str = ""
     stop_details: object = None
 
@@ -60,5 +59,12 @@ class ResponseEvent(TypedDict):
     usage: Usage
 
 
-StreamEvent = TextDelta | ThinkingDelta | ToolUseStart | ResponseEvent
+class StreamReset(TypedDict):
+    """Stream died mid-turn and was re-sent: drop everything streamed before this."""
+    type: Literal["stream_reset"]
+    error: str
+    attempt: int
+
+
+StreamEvent = TextDelta | ThinkingDelta | ToolUseStart | ResponseEvent | StreamReset
 ResponseStream = AsyncIterator[StreamEvent]

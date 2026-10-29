@@ -9,7 +9,7 @@ from micro_cc.utils.msg_store_ import load_msgs, _get_storage_dir
 from micro_cc.utils.inbox_store_ import peek_pending_count
 from micro_cc.utils.subagent_tracker_ import read_tracked
 from micro_cc.utils.tokenization_simple import peek_token_stats
-from micro_cc.utils import status_marker
+from micro_cc.utils import status_marker, subagent_notice_
 from micro_cc.tools.bash_tool import list_background_processes, get_output_tail
 from micro_cc.tools.monitor_watch_ import start_watch, stop_watch, list_watches
 from micro_cc.tools import monitor_schedule_ as sched
@@ -21,11 +21,20 @@ _POLL_TAIL_BYTES = 8192
 _DONE_STATUSES = {"DONE", "FAILED"}
 
 
-def _last_assistant_reply(msgs: list) -> str | None:
+def _final_reply(msgs: list) -> str | None:
+    """Last text-only message if the assistant's; a newer user turn (e.g. a relaunch prompt) means still running."""
     for msg in reversed(msgs):
-        if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
-            return msg["content"]
+        if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
+            return msg["content"] if msg["role"] == "assistant" else None
     return None
+
+
+def _past_baseline(resolved: str, baseline: int) -> bool:
+    """True once the transcript has grown past the size it had when this run registered."""
+    try:
+        return (_get_storage_dir(resolved) / "messages.jsonl").stat().st_size > baseline
+    except OSError:
+        return False
 
 
 def _last_raw_message(path) -> dict | None:
@@ -120,7 +129,8 @@ def get_subagent_status(project_dir: str, caller_project_dir: str | None = None)
     resolved = os.path.abspath(os.path.expanduser(project_dir))
     name = os.path.basename(resolved.rstrip("/")) or resolved
 
-    reply = _last_assistant_reply(load_msgs(resolved))
+    entry = read_tracked(caller_project_dir)["subagents"].get(resolved, {}) if caller_project_dir else {}
+    reply = _final_reply(load_msgs(resolved)) if _past_baseline(resolved, entry.get("baseline", -1)) else None
     if reply is None:
         status, summary = "RUNNING", "no completed turn yet"
     else:
@@ -144,9 +154,9 @@ def get_subagent_status(project_dir: str, caller_project_dir: str | None = None)
     }
 
 
-def poll_status(project_dir: str, cached_stat: tuple | None) -> tuple:
+def poll_status(project_dir: str, cached_stat: tuple | None, baseline: int = 0) -> tuple:
     """Cheap poll variant of get_subagent_status for the TUI tick.
-    Skips when (mtime, size) is unchanged; otherwise reads only the file tail.
+    Skips when (mtime, size) is unchanged; otherwise reads only the file tail past `baseline` (the run's start).
     Returns (info_or_None, new_stat)."""
     resolved =os.path.abspath(os.path.expanduser(project_dir))
     path = _get_storage_dir(resolved) / "messages.jsonl"
@@ -160,23 +170,25 @@ def poll_status(project_dir: str, cached_stat: tuple | None) -> tuple:
         return None, cached_stat
 
     name = os.path.basename(resolved.rstrip("/")) or resolved
-    offset = max(0, st.st_size - _POLL_TAIL_BYTES)
+    if baseline > st.st_size:
+        baseline = 0  # transcript was rewritten shorter; the turn-order rule still applies
+    offset = max(baseline, st.st_size - _POLL_TAIL_BYTES)
     with open(path, "rb") as f:
         f.seek(offset)
         raw = f.read()
 
-    reply = None
-    for line in reversed(raw.decode("utf-8", errors="replace").splitlines()):
-        line = line.strip()
-        if not line:
-            continue
+    msgs = []
+    for line in raw.decode("utf-8", errors="replace").splitlines():
         try:
-            msg = json.loads(line)
+            msgs.append(json.loads(line))
         except json.JSONDecodeError:
-            continue  # the tail read may have cut into the middle of a line
-        if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
-            reply = msg["content"]
-            break
+            continue  # blank, or the tail read cut into the middle of a line
+    reply = _final_reply(msgs)
+    if reply is None and not msgs and offset > baseline and b"\n" not in raw.rstrip(b"\n"):
+        # The tail sits inside one huge last line (a long final reply): read that line in full.
+        last = _last_raw_message(path) or {}
+        if last.get("role") == "assistant" and isinstance(last.get("content"), str):
+            reply = last["content"]
 
     if reply is None:
         status, summary = "RUNNING", "no completed turn yet"
@@ -221,6 +233,74 @@ def format_status_line(info: dict) -> str:
     if info.get("activity"):
         line += f"\n    {info['activity']}"
     return line
+
+
+CHECKPOINT_STATUSES = {"DONE", "FAILED", "PAUSED", "NEEDS_INPUT"}
+
+COLD_START_PREFIX = subagent_notice_.COLD_START_PREFIX
+
+
+def poll_checkpoints(caller_project_dir: str, cache: dict) -> list[dict]:
+    """One poll over tracked subagents: [{target, entry, info, status, wake}]; a dead RUNNING pid becomes FAILED."""
+    from micro_cc.utils.subagent_tracker_ import update_status, _pid_alive
+
+    rows = []
+    for target, entry in read_tracked(caller_project_dir)["subagents"].items():
+        info, cache[target] = poll_status(target, cache.get(target), entry.get("baseline", 0))
+        if info is None:
+            # Unchanged since last poll: a killed subagent never writes a terminal STATUS, so check its pid.
+            status = entry["status"]
+            pid = entry.get("pid")
+            if status not in CHECKPOINT_STATUSES and pid is not None and not _pid_alive(pid):
+                name = os.path.basename(target.rstrip("/")) or target
+                info = {
+                    "resolved": target, "name": name, "status": "FAILED",
+                    "summary": "process is no longer running (stopped or killed before finishing)",
+                    "pending": peek_pending_count(target),
+                }
+                status = "FAILED"
+                update_status(caller_project_dir, target, status)
+        else:
+            status = info["status"]
+            if status != entry["status"]:
+                update_status(caller_project_dir, target, status)
+                entry.update(status=status, updated_at=time.time())  # mirror the write for checkpoint_turn
+        wake = info is not None and status in CHECKPOINT_STATUSES and not entry["notified"]
+        rows.append({"target": target, "entry": entry, "info": info, "status": status, "wake": wake})
+    return rows
+
+
+def _run_usage(msgs: list, entry: dict, tokens: dict | None) -> str:
+    """"N tokens · N tool uses · 3m12s" for the child's latest run (it starts at the prompt carrying STATUS_INSTRUCTIONS)."""
+    start = max((i for i, m in enumerate(msgs) if m.get("role") == "user" and isinstance(m.get("content"), str)
+                 and status_marker.STATUS_INSTRUCTIONS in m["content"]), default=0)
+    uses = sum(1 for m in msgs[start:] if m.get("role") == "assistant" and isinstance(m.get("content"), list)
+               for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_use")
+    parts = [f"{_tokens_used(tokens):,} tokens"] if _tokens_used(tokens) else []
+    parts.append(f"{uses} tool uses")
+    if entry.get("started_at"):
+        parts.append(_fmt_age(entry.get("updated_at", time.time()) - entry["started_at"]))
+    return " · ".join(parts)
+
+
+def checkpoint_turn(rows: list[dict], *, cold_start: bool = False) -> str:
+    """User turn waking the boss: one self-contained <subagent-notification> per woken poll_checkpoints row."""
+    blocks = []
+    for r in rows:
+        info, target = r["info"], r["target"]
+        transcript = str(_get_storage_dir(target) / "messages.jsonl")
+        # Nothing written since this run registered: no result or usage from a prior run.
+        msgs = load_msgs(target) if _past_baseline(target, r["entry"].get("baseline", -1)) else []
+        reply = _final_reply(msgs) or ""
+        # A killed child's last reply can still be stale; only attach one that matches this status.
+        status, _summary, body = status_marker.parse(reply) if reply.strip() else ("", "", "")
+        blocks.append(subagent_notice_.block(
+            name=info["name"], project_dir=target, status=info["status"], summary=info["summary"],
+            result=subagent_notice_.cap_result(body, transcript) if status == info["status"] else "",
+            usage=_run_usage(msgs, r["entry"], info.get("tokens")), unread_mail=info.get("pending"),
+            transcript=transcript,
+        ))
+    return (COLD_START_PREFIX if cold_start else "") + "\n".join(blocks)
 
 
 _STATUS_GLYPH_NAME_MAXLEN = 30
@@ -285,8 +365,8 @@ async def monitor_(
 
     action="watch": start a live streaming watch. `command` is a shell pipeline whose stdout
     lines are events (e.g. `tail -f server.log | grep --line-buffered ERROR`); `description`
-    labels every notification. Matching lines arrive as their own turn, no polling needed.
-    Live interactive session only. persistent=True runs for the whole session; otherwise it is
+    labels every notification. Matching lines arrive as their own turn, no polling needed
+    (a top-level headless run stays up until its watches end). persistent=True runs for the whole session; otherwise it is
     killed after timeout_ms (default 5 min, max 1h). Stderr goes to a file: if the command
     seems to fail, check it with action="check" targets=[watch_id]. A watch that fires too
     fast is auto-stopped with a notice to tighten the filter.

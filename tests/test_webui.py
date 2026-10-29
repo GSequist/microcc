@@ -301,9 +301,9 @@ class GuiTests(unittest.TestCase):
         from micro_cc.utils import subagent_tracker_ as tr
         from micro_cc.utils.msg_store_ import store_msgs as store
         sub = tempfile.mkdtemp(prefix="mcc-sub-")
+        tr.add_tracked(self.proj, sub)  # a child registers before its run writes
         store(sub, [{"role": "user", "content": "go"},
                     {"role": "assistant", "content": "working\nSTATUS: DONE — wrote the report"}])
-        tr.add_tracked(self.proj, sub)
         row = self.client.get("/api/subagents").json()["subagents"][0]
         self.assertEqual(row["target"], sub)
         self.assertEqual((row["name"], row["status"], row["summary"]), (os.path.basename(sub), "DONE", "wrote the report"))
@@ -460,8 +460,8 @@ class GuiTests(unittest.TestCase):
     def test_stream_carries_subagent_status_as_a_data_part(self):
         from micro_cc.utils import subagent_tracker_ as tr
         sub = tempfile.mkdtemp(prefix="mcc-sub-")
+        tr.add_tracked(self.proj, sub)  # a child registers before its run writes
         store_msgs(sub, [{"role": "user", "content": "go"}, {"role": "assistant", "content": "STATUS: NEEDS_INPUT — which db?"}])
-        tr.add_tracked(self.proj, sub)
         ev = _events(self.chat("hi", [{"text": "ok"}]))
         parts = [e for e in ev if e["type"] == "data-subagents"]
         self.assertEqual(len(parts), 1)  # unchanged snapshots are not re-sent

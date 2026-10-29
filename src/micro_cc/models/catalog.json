@@ -258,7 +258,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["low", "medium", "high", "xhigh", "max"],
-        "default": "high",
+        "default": "medium",
         "summarized": true
       },
       "ids": {
@@ -275,7 +275,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["low", "medium", "high", "xhigh", "max"],
-        "default": "high",
+        "default": "medium",
         "summarized": true
       },
       "server_fallback": true,
@@ -293,7 +293,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["low", "medium", "high", "xhigh", "max"],
-        "default": "high",
+        "default": "medium",
         "summarized": true
       },
       "ids": {
@@ -310,7 +310,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["low", "medium", "high", "xhigh", "max"],
-        "default": "high",
+        "default": "medium",
         "summarized": true
       },
       "server_fallback": true,
@@ -328,7 +328,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["low", "medium", "high", "xhigh", "max"],
-        "default": "high",
+        "default": "medium",
         "summarized": true
       },
       "ids": {
@@ -345,7 +345,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["low", "medium", "high", "xhigh", "max"],
-        "default": "high",
+        "default": "medium",
         "summarized": true
       },
       "ids": {
@@ -362,7 +362,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["low", "medium", "high", "max"],
-        "default": "high"
+        "default": "medium"
       },
       "ids": {
         "anthropic": "claude-opus-4-6",
@@ -377,7 +377,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["low", "medium", "high", "max"],
-        "default": "high"
+        "default": "medium"
       },
       "ids": {
         "anthropic": "claude-sonnet-4-6",
@@ -409,7 +409,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["minimal", "low", "medium", "high"],
-        "default": "high"
+        "default": "medium"
       },
       "ids": {
         "litellm": {
@@ -425,7 +425,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["minimal", "low", "medium", "high"],
-        "default": "high"
+        "default": "medium"
       },
       "ids": {
         "litellm": {
@@ -441,7 +441,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["minimal", "low", "medium", "high"],
-        "default": "high"
+        "default": "medium"
       },
       "ids": {
         "litellm": {
@@ -457,7 +457,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["minimal", "low", "medium", "high"],
-        "default": "high"
+        "default": "medium"
       },
       "ids": {
         "litellm": {
@@ -473,7 +473,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["minimal", "low", "medium", "high"],
-        "default": "high"
+        "default": "medium"
       },
       "ids": {
         "litellm": {
@@ -489,7 +489,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["minimal", "low", "medium", "high"],
-        "default": "high"
+        "default": "medium"
       },
       "ids": {
         "litellm": {
@@ -505,7 +505,7 @@
       "max_output": 128000,
       "reasoning": {
         "levels": ["minimal", "low", "medium", "high"],
-        "default": "high"
+        "default": "medium"
       },
       "ids": {
         "litellm": {

@@ -85,6 +85,7 @@ class OptionPanel:
         primary_max: int = DEFAULT_PRIMARY_MAX,
         theme: Theme | None = None,
         max_desc_lines: int = MAX_DESC_LINES,
+        max_title_lines: int | None = None,
     ):
         self._show, self._hide = show, hide  # injected by the host: where the panel lives
         self.is_open = False
@@ -99,6 +100,7 @@ class OptionPanel:
         self.primary_max = max(1, max(primary_min, primary_max))
         self.theme = theme  # None = the active color set, read at render
         self.max_desc_lines = max(1, max_desc_lines)
+        self.max_title_lines = max_title_lines  # None = uncapped; overflow is ellipsized
         self._all_items: list[PanelItem] = []
         self.items: list[PanelItem] = []
         self.selected_index = 0
@@ -116,6 +118,7 @@ class OptionPanel:
 
     def close(self) -> None:
         self.is_open = False
+        self.max_title_lines = None
         self._hide()
 
     def confirm(self) -> None:
@@ -226,11 +229,16 @@ class OptionPanel:
             return []
         theme = self.theme or default_theme()
         # First title line bold, any further lines (after \n) dim detail.
-        lines = [
-            (theme.title if n == 0 else theme.description)(f" {w}")
+        wrapped = [
+            (n, w)
             for n, para in enumerate(self.title.split("\n") if self.title else [])
             for w in _wrap_text(para, max(1, width - 2))
         ]
+        cap = self.max_title_lines
+        if cap and len(wrapped) > cap:
+            n, last = wrapped[cap - 1]
+            wrapped = wrapped[:cap - 1] + [(n, _wrap_text_capped(last + " …", max(1, width - 2), 1)[0])]
+        lines = [(theme.title if n == 0 else theme.description)(f" {w}") for n, w in wrapped]
         if not self.items:
             return lines + [theme.no_match("  No matches")]
 

@@ -36,6 +36,7 @@ async def cmd_clear(app):
     if app._subagent_viewing_target is not None:
         app._subagent_viewing_target = None
         app.main_split.left = app.messages_scroll
+        app.prompt.placeholder = ""
     if app._bgproc_viewing:
         app._hide_bgproc_detail()
 

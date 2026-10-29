@@ -314,6 +314,18 @@ def models_for(provider: str, current_model: str | None) -> list:
     return [alias for alias in MODEL_OPTIONS if key in MODELS[alias].get("ids", {})]
 
 
+def usable_model(alias: str | None, provider: str) -> tuple:
+    """(alias to run, replaced). A saved alias the catalog no longer serves falls back to DEFAULT_MODEL."""
+    p = PROVIDERS.get(provider, {})
+    if p.get("free_text") or not alias or p.get("ids_from", provider) in MODELS.get(alias, {}).get("ids", {}):
+        return alias, False
+    return DEFAULT_MODEL, True
+
+
+def stale_model_notice(alias: str) -> str:
+    return f"model {alias} saved in your settings is outdated, using {DEFAULT_MODEL} — hit /models and choose an available one"
+
+
 def resolve(alias: str, provider: str) -> tuple:
     """(model id, api) for `alias` on `provider`. Unknown aliases pass through unchanged,
     so a typo fails at the API instead of silently running another model."""

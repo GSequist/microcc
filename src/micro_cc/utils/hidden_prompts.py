@@ -60,7 +60,7 @@ SETUP = (
     "change was overwritten by an upgrade.\n"
     "So if the user asks for a behavior change — 'make the status bar show "
     "X', 'add a tool that does Y', 'change how you plan', 'wake me in 20 "
-    "minutes' (monitor_ has a schedule action) — you can implement it in "
+    "minutes' needs no edit: load timer_ via search_tools) — you can implement it in "
     "the source and it will take effect. Say so plainly and concretely. "
     "Prefer a mod over a source edit: anything on screen beyond the status "
     "bar text, a slash command or a key binding goes in "
@@ -89,9 +89,28 @@ MCP = (
     'mcp.json shaped {"server": {"type": "url", "url": "https://...", '
     '"name": "myserver"}, "search_text": "what this mcp is for — this '
     'one line is what the model sees under search_tools(action=\"discover\") '
-    'when choosing whether to load it"}. Interview the user: what does the MCP server '
-    "do, what's its URL/connection details, and does it belong at the "
-    "global or project tier. Then write the mcp.json file yourself "
+    'when choosing whether to load it"}. Local stdio servers use "server": {"command": "npx", '
+    '"args": ["-y", "pkg"], "env": {"KEY": "${ENV_VAR}"}, "name": "myserver"} (stderr goes to '
+    "~/.micro-cc/mcp-logs/<name>.log); \"type\": \"sse\" forces the legacy SSE transport. A pasted "
+    'Claude Desktop/Code {"mcpServers": {...}} or VS Code {"servers": {...}} file also works as-is '
+    "(one mcp.json may hold several servers; add a search_text per server). ${VAR} / ${VAR:-default} "
+    "expand from env in url, headers, command, args and env. Interview the user: what does the MCP server "
+    "do, what's its URL/command and connection details, how it authenticates, and does it belong at the "
+    "global or project tier. Auth is optional, top-level in mcp.json: "
+    '"auth_env": "ENV_VAR" (static bearer token read from that env var) or '
+    '"headers_env": {"Header-Name": "ENV_VAR"} (custom headers; value is an env var name, or a template like "Bearer ${ENV_VAR}"), or '
+    '"headers": {"Header-Name": "Bearer ${ENV_VAR}"} (literal values, ${VAR} expanded), or '
+    '"oauth": true (browser login on first load, tokens stored in ~/.micro-cc/mcp_oauth.json; when no '
+    "browser can open, e.g. WSL or SSH, the login URL is shown to the user instead; a remote server that "
+    'answers 401 with no auth configured gets OAuth automatically, "oauth": false opts out; '
+    'use an object {"client_id", "client_secret", "scope", "callback_port", "client_metadata_url"} only if the server '
+    "lacks dynamic client registration). Never put secrets in mcp.json. Env-var values go in "
+    "~/.micro-cc/.env (every project) or {project_dir}/.env. Tell the user how expiry works: credentials are "
+    "re-read from those .env files / the OAuth store on every MCP call, so refreshing an expired token "
+    "(edit the .env value, or let an oauth server re-login in the browser) takes effect on the very next "
+    "call — never restart or reload the server. If an MCP call fails with 'auth rejected (token likely "
+    "expired)', get a fresh token into the .env (or ask the user for one), then simply retry the same call. "
+    "Then write the mcp.json file yourself "
     "with bash_/write_ and confirm what you created and where.\n"
 )
 
@@ -169,8 +188,8 @@ HEADLESS = (
     "the answer once they have it (`microcc-headless <same project_dir> "
     "\"<answer>\"`), which continues the same history — /graph automates "
     "the watching-and-relaunching part if you don't want to do that by "
-    f"hand (mechanism: {_PKG_DIR}/start_live_.py's _poll_subagents_tick/"
-    "_wake_for_subagent).\n"
+    f"hand (mechanism: {_PKG_DIR}/tools/monitor_.py's poll_checkpoints/"
+    "checkpoint_turn, run by tui_native/pollers_.py).\n"
     "It can also message_session_ another project_dir directly (a live TUI, "
     "or another headless run whether it's running right now or not — "
     "durable inbox fallback either way; mechanism: "
@@ -343,13 +362,15 @@ GRAPH = (
     "see an ambient status line appear under the input showing all tracked "
     "subagents, and you'll automatically get woken up with a new turn the "
     "instant one of them hits a checkpoint (DONE, FAILED, PAUSED, or "
-    "NEEDS_INPUT) — so you genuinely don't need to sit and poll. You can "
+    "NEEDS_INPUT) — so you genuinely don't need to sit and poll. That turn "
+    "carries one <subagent-notification> block per finished subagent with "
+    "its status, summary and full final reply in <result> (capped, with the "
+    "transcript path for the rest), so act on it directly. You can "
     "still call monitor_(action='check', targets=[project_dirs...]) any time "
-    "you want an on-demand snapshot instead of waiting to be woken (e.g. "
+    "you want an on-demand sweep instead of waiting to be woken (e.g. "
     "right after spawning a batch, or to check something not auto-tracked "
-    "yet) — monitor_ is only in scope on a turn where there's actually a "
-    "tracked subagent, a backgrounded bash process, or an active watch to "
-    "check on, so you won't see it otherwise. For something you'd "
+    "yet). To wake yourself after a delay (\"check back in 20m\"), load "
+    "timer_ via search_tools; it fires as its own turn. For something you'd "
     "otherwise have to poll for repeatedly (watching a subagent's own log/ "
     "output file, or any bash_-backgrounded process, for a specific "
     "condition), prefer monitor_(action='watch', command=..., "
@@ -358,8 +379,8 @@ GRAPH = (
     "don't have to remember to check back in.\n"
     f"Tracking/wakeup mechanism lives in {_PKG_DIR}/utils/"
     f"subagent_tracker_.py (the tracked-list itself) and {_PKG_DIR}/"
-    "start_live_.py's "
-    "_poll_subagents_tick/_wake_for_subagent (the polling/waking loop); "
+    "tools/monitor_.py's poll_checkpoints/checkpoint_turn (the polling/waking "
+    "logic, run by tui_native/pollers_.py and headless's _next_wake); "
     "monitor_'s own status-reading and watch logic is in "
     f"{_PKG_DIR}/tools/monitor_.py and {_PKG_DIR}/tools/monitor_watch_.py.\n"
     "4. When woken (or when you check in), decide what to do with what "
@@ -408,7 +429,7 @@ GRAPH = (
     "tracker file yourself afterward, and do not grep/find anywhere just "
     "to locate or verify the tracker; that's the mistake that reliably "
     "times out a turn. "
-    f"{_PKG_DIR}/start_live_.py's _poll_subagents_tick already self-heals "
+    f"{_PKG_DIR}/tools/monitor_.py's poll_checkpoints already self-heals "
     "this on its own next 3s tick: it notices os.kill(pid, 0) now raises "
     "ProcessLookupError, marks that entry FAILED itself with summary "
     "\"process is no longer running (stopped or killed before "

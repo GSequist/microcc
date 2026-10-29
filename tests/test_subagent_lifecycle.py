@@ -356,6 +356,34 @@ class DetachedSpawnTests(unittest.TestCase):
                 got = {b.get("tool_use_id") for b in nxt if isinstance(b, dict)} if isinstance(nxt, list) else set()
                 self.assertLessEqual(ids, got)
 
+    def test_subagent_spawning_a_subagent_is_refused_without_leftovers(self):
+        self.env["MICROCC_SUBAGENT_DIR"] = os.path.join(self.work, "agent0")  # as inherited from a subagent's bash_
+        target = os.path.join(self.work, "nested")
+        out = self._spawn("nested")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        verdict = json.loads(out.stdout.strip().splitlines()[-1])
+        self.assertEqual(verdict["status"], "REFUSED")
+        self.assertIn("one level deep", verdict["summary"])
+        self.assertFalse(os.path.exists(target))
+        self.assertNotIn(target, tracker.read_tracked(self.boss)["subagents"])
+
+    def test_spawn_from_a_no_subagents_run_is_refused_without_leftovers(self):
+        self.env["MICROCC_SUBAGENT_DIR"] = "--no-subagents"  # as inherited from a --no-subagents run's bash_
+        for extra in ([], ["--foreground"]):
+            target = os.path.join(self.work, "kid" + "".join(extra))
+            out = subprocess.run(
+                [sys.executable, "-m", "micro_cc.start_headless_", target, "do it", "--model", "fake-model",
+                 "--output-format", "json", *extra],
+                env=self.env, capture_output=True, text=True, timeout=60,
+            )
+            verdict = json.loads(out.stdout.strip().splitlines()[-1])
+            self.assertIn(verdict["status"], ("REFUSED", "FAILED"), extra)  # detached: REFUSED; foreground: run result
+            self.assertIn("disabled for this run (--no-subagents)", verdict["summary"])
+            self.assertFalse(os.path.exists(target), extra)
+            stores = list((Path(_TMP_HOME) / ".micro-cc" / "projects").glob(os.path.basename(target).replace("-", "_") + "_*"))
+            self.assertEqual(stores, [], extra)  # no storage dir / headless.log either
+            self.assertNotIn(target, tracker.read_tracked(self.boss)["subagents"])
+
     def test_refused_synchronously_when_cap_reached(self):
         from micro_cc.utils import settings_store_
         settings_store_.edit_setting("max_subagents", 1)

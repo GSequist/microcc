@@ -1,6 +1,7 @@
 """Single entry point for conversational, background, and vision calls."""
 
 import asyncio
+import hashlib
 import weakref
 from importlib import import_module
 
@@ -26,13 +27,59 @@ def cached_client(key: tuple, build):
     return per_loop[key]
 
 
+def _system_hash(msgs) -> str:
+    """Short hash of the system messages; signed thinking is rejected once the system prompt changes."""
+    text = "\n".join(
+        m["content"] for m in msgs
+        if isinstance(m, dict) and m.get("role") == "system" and isinstance(m.get("content"), str)
+    )
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+def _alias(model: str | None, provider: str) -> str:
+    """The requested alias, or the provider default when none is given or the catalog dropped it."""
+    from micro_cc.models import catalog, providers
+
+    return catalog.usable_model(model, provider)[0] if model else providers.default_model(provider)
+
+
+def _origin(provider: str, model_id: str, msgs) -> str:
+    return f"{provider}/{model_id}/{_system_hash(msgs)}"
+
+
+def thinking_origin(model: str | None, provider: str | None, system_msgs: list) -> str:
+    """'provider/model_id/system_hash' stamped on thinking blocks; they replay only to the same origin."""
+    from micro_cc.models import catalog, providers
+
+    provider = provider or providers.active_provider()
+    model_id, _api = catalog.resolve(_alias(model, provider), provider)
+    return _origin(provider, model_id, system_msgs)
+
+
+def drop_foreign_thinking(msgs: list, origin: str) -> list:
+    """Remove thinking from another model or system prompt (or unstamped); its signature/blob 400s on replay."""
+    out = []
+    for msg in msgs:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list) or msg.get("role") != "assistant":
+            out.append(msg)
+            continue
+        kept = [
+            b for b in content
+            if not (isinstance(b, dict) and b.get("type") == "thinking")
+            or b.get("origin") == origin
+        ]
+        out.append({**msg, "content": kept} if len(kept) != len(content) else msg)
+    return out
+
+
 async def prewarm(model: str | None = None) -> None:
     """Import the active provider's SDK and open its connection so the first message skips both."""
     try:
         from micro_cc.models import catalog, providers
 
         provider = providers.active_provider()
-        alias = model or providers.default_model(provider)
+        alias = _alias(model, provider)
         _model_id, api = catalog.resolve(alias, provider)
         module = await asyncio.to_thread(import_module, f"micro_cc.models.apis.{_APIS[api]}")
         client = module.client_for(provider, alias)
@@ -68,9 +115,11 @@ async def model_call(
     provider = provider or providers.active_provider()
     if provider not in catalog.PROVIDERS:
         raise ValueError(f"Unknown model provider: {provider!r}")
-    alias = model or providers.default_model(provider)
+    alias = _alias(model, provider)
     model_id, api = catalog.resolve(alias, provider)
     module = import_module(f"micro_cc.models.apis.{_APIS[api]}")
+    if isinstance(input, list):
+        input = drop_foreign_thinking(input, _origin(provider, model_id, input))
     return await module.call(
         provider, alias, model_id,
         input=input,

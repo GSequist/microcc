@@ -69,6 +69,7 @@ async def stream_response(resp_stream) -> ResponseStream:
     """
     items = []
     usage = {}
+    stop = ""
 
     async for ev in resp_stream:
         et = ev.type
@@ -80,11 +81,14 @@ async def stream_response(resp_stream) -> ResponseStream:
             yield {"type": "tool_use_start", "name": getattr(ev.item, "name", "")}
         elif et == "response.output_item.done":
             items.append(ev.item)
-        elif et == "response.completed":
+        elif et in ("response.completed", "response.incomplete"):
+            details = getattr(ev.response, "incomplete_details", None)
+            if getattr(details, "reason", "") == "max_output_tokens":
+                stop = "max_tokens"
             u = ev.response.usage
             if u:
                 usage["input"] = getattr(u, "input_tokens", 0)
                 usage["output"] = getattr(u, "output_tokens", 0)
 
     blocks = [b for item in items for b in _blocks_from_item(item)]
-    yield {"type": "response", "response": Response(content=blocks, usage=usage), "usage": usage}
+    yield {"type": "response", "response": Response(content=blocks, usage=usage, stop_reason=stop), "usage": usage}

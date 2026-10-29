@@ -5,6 +5,7 @@ Owns the text/reasoning/step block framing the SDK requires.
 
 import asyncio
 import json
+import time
 import uuid
 
 from micro_cc.cache import state_store
@@ -43,7 +44,7 @@ def _compaction_flash(project_dir):
     })
 
 
-async def stream(gen, msg_id, project_dir):
+async def stream(gen, msg_id, project_dir, notice=None):
     """Drive `gen` and yield SSE strings; returns on finish or suspension (session.STATE["pending"] says which)."""
     in_text = in_thinking = step_open = False
     text_id = thinking_id = None
@@ -98,6 +99,8 @@ async def stream(gen, msg_id, project_dir):
         ]
 
     yield sse({"type": "start", "messageId": msg_id})
+    if notice:
+        yield sse({"type": "data-status", "id": "status", "data": {"text": notice, "at": time.time_ns() // 1_000_000}})
     for c in live_parts():
         yield c
 
@@ -219,6 +222,16 @@ async def stream(gen, msg_id, project_dir):
             for c in (close_thinking(), close_text()):
                 if c:
                     yield c
+
+        elif etype == "turn_reset":
+            session.STATE["partial"] = []  # discarded turn: never persisted on a later cancel
+            for c in (close_thinking(), close_text()):
+                if c:
+                    yield c
+            yield sse({"type": "data-status", "id": "status", "data": {"text": event.get("message", ""), "at": time.time_ns() // 1_000_000}})
+
+        elif etype == "mcp_auth":
+            yield sse({"type": "data-status", "id": "status", "data": {"text": event.get("message", ""), "at": time.time_ns() // 1_000_000}})
 
         elif etype == "error":
             for c in close_all():

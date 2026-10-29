@@ -2,6 +2,9 @@
 import re
 
 STATUS_INSTRUCTIONS = (
+    "Before you finish, review your work against the original request: check each requirement "
+    "and the evidence that it is met, run anything you built the way it was asked to be used, "
+    "sanity-check the figures you report, and fix what falls short.\n"
     "When you are done, end your reply with exactly one line and nothing after it:\n"
     "STATUS: DONE — <one-line summary of what you did>\n"
     "or STATUS: NEEDS_INPUT — <one-line question for the user>\n"

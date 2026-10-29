@@ -10,7 +10,7 @@ from PIL import Image as PILImage
 
 from micro_cc import mods_
 from micro_cc.tui_native.md_render_ import render_md, rich_theme
-from micro_cc.utils import theme_store_
+from micro_cc.utils import subagent_notice_
 from micro_cc.tui_native.glyphs_ import glyph
 from micro_cc.tui_native.renderers_ import render_msg
 from micro_cc.tui_native.detect_images_ import (
@@ -120,7 +120,8 @@ class MessageRow:
 
     def toggle_expanded(self) -> bool:
         t = self._msg.get("type")
-        expandable = t == "approval" or (t == "tool_call" and self._msg.get("result") is not None)
+        expandable = t == "approval" or (t == "tool_call" and self._msg.get("result") is not None) or (
+            t in ("user", "user_queued") and any(n["result"] for n in (subagent_notice_.parse(self._msg["content"]) or {"notes": []})["notes"]))
         if expandable:
             self._msg["expanded"] = not self._msg.get("expanded", False)
             self.invalidate_cache()

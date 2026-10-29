@@ -20,6 +20,7 @@ DEFAULTS = {
     "spinner": "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
     "bgproc": "◇",
     "watch": "◎",
+    "subagent": "⚙",
     "stalled": "⚠",
     "project": "⏣",
     "hint": "⌖",

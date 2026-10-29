@@ -325,6 +325,18 @@ def format_background_status() -> str | None:
     return "Background process update:\n" + "\n".join(lines)
 
 
+def kill_background_process(pid: int) -> bool:
+    """SIGKILL one tracked process's group (the whole `cmd &` job); False if untracked."""
+    info = _background_procs.get(pid)
+    if info is None:
+        return False
+    try:
+        os.killpg(info["pgid"], signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    return True
+
+
 def kill_background_processes() -> int:
     """SIGKILL leftover bash_ process groups on headless-subagent SIGTERM; returns the count signalled."""
     killed = 0

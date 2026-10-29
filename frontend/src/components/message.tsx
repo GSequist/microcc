@@ -9,6 +9,8 @@ import { AssistantMark } from './banner';
 import { ToolCall } from './tool-call';
 import { LoadingSkeleton } from './tool-skeleton';
 import { TOOL_LABELS } from './tool-registry';
+import { SubagentNotice } from './subagent-notice';
+import { parseNotices } from '../lib/subagent-notice';
 
 
 // ─── PreviewMessage ──────────────────────────────────────────────
@@ -60,8 +62,11 @@ const PurePreviewMessage = ({
             }
 
             if (part.type === 'text') {
-              const isLongMessage = part.text.length > 400;
-              return (
+              const notice = message.role === 'user' ? parseNotices(part.text) : null;
+              const text = notice ? notice.text : part.text;
+              if (notice && !text) return <SubagentNotice key={key} notices={notice.notes} />;
+              const isLongMessage = text.length > 400;
+              const bubble = (
                 <div key={key} className={cn("flex flex-row gap-2 items-start min-w-0",
                   message.role === 'user' ? "justify-end" : "")}>
                   {message.role === 'user' ? (
@@ -70,7 +75,7 @@ const PurePreviewMessage = ({
                       isLongMessage ? "max-h-32 overflow-y-auto" : ""
                     )}>
                       <div className="px-3 py-2">
-                        <Markdown>{part.text}</Markdown>
+                        <Markdown>{text}</Markdown>
                       </div>
                       {isLongMessage && (
                         <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-muted to-transparent pointer-events-none" />
@@ -96,6 +101,12 @@ const PurePreviewMessage = ({
                   )}
                 </div>
               );
+              return notice ? (
+                <div key={key} className="flex flex-col gap-1 min-w-0">
+                  <SubagentNotice notices={notice.notes} />
+                  {bubble}
+                </div>
+              ) : bubble;
             }
 
             // ── Attachments ──

@@ -32,6 +32,32 @@ async def handle_error(app, event, container, tool_call_rows, approval_rows):
     app._scroll_to_bottom()
 
 
+async def handle_mcp_auth(app, event, container, tool_call_rows, approval_rows):
+    """MCP OAuth login prompt: show the auth URL inline (no browser on WSL/SSH, or as a fallback)."""
+    row = {"type": "mcp_auth", "content": event.get("message", "")}
+    app._msg_rows.append(row)
+    container.add(MessageRow(row))
+    app._scroll_to_bottom()
+
+
+async def handle_turn_reset(app, event, container, tool_call_rows, approval_rows):
+    """Discarded partial turn: drop its streamed rows (trailing text/thinking) so the replay isn't doubled."""
+    if app._streaming is not None:
+        container.remove(app._streaming)
+        app._streaming = None
+    while app._msg_rows and app._msg_rows[-1].get("type") in ("text", "thinking"):
+        msg = app._msg_rows.pop()
+        rows = [r for r, m in app._draining if m is msg]
+        rows += [e.component for e in container.entries if getattr(e.component, "_msg", None) is msg]
+        app._draining = [(r, m) for r, m in app._draining if m is not msg]
+        for row in rows:
+            container.remove(row)
+    err = {"type": "error", "content": event.get("message", "turn reset")}
+    app._msg_rows.append(err)
+    container.add(MessageRow(err))
+    app._scroll_to_bottom()
+
+
 async def handle_tool_use_start(app, event, container, tool_call_rows, approval_rows):
     app._pending_tool = event.get("name") or None
     app._tick_working()
@@ -188,6 +214,8 @@ ETYPES = {
     "final_text": handle_final_text,
     "done": handle_done,
     "error": handle_error,
+    "turn_reset": handle_turn_reset,
+    "mcp_auth": handle_mcp_auth,
     "text_delta": handle_text_delta,
     "tool_use_start": handle_tool_use_start,
     "thinking_delta": handle_thinking_delta,

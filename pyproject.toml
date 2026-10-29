@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "micro-cc"
-version = "0.2.113"
+version = "0.2.126"
 description = "Harness that gives frontier models full system access — shell, filesystem, browser, MCP — running directly on the metal."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,9 +13,10 @@ authors = [{name = "George Salapa"}]
 classifiers = ["License :: OSI Approved :: MIT License"]
 
 dependencies = [
-    "anthropic>=0.125.0",
+    "anthropic>=2.2.0",
     "anyio>=4.0",
     "beautifulsoup4>=4.14",
+    "certifi>=2026.10.19",
     "fastapi>=0.135",
     "google-search-results>=2.4",
     "httpx>=0.28",

@@ -24,7 +24,7 @@ from micro_cc.models.providers import credentials
 from micro_cc.models.retry import first_event_timeout, retry_call
 from micro_cc.models.schema import tools_to_chat
 
-FALLBACK_MAX_TOKENS = 120000
+FALLBACK_MAX_TOKENS = 64000  # unknown models: caps a runaway reasoning turn at ~half the old waste, still fits big writes
 IMAGE_PLACEHOLDER = "[image attached — see following message]"
 # OpenRouter app attribution: lists microcc in openrouter.ai app rankings
 OPENROUTER_HEADERS = {"HTTP-Referer": "https://microcc.xyz", "X-OpenRouter-Title": "microcc"}

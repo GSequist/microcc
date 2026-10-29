@@ -334,7 +334,9 @@ class DispatcherLoopTests(LoopCase):
         self.assertIn("### ask_wiki", res[0]["content"])
         self.assertIn('"input_schema"', res[0]["content"])
         self.assertEqual(res[1]["content"], "wiki answer")
-        self.mcp_call.assert_awaited_once_with("https://mcp.example/mcp", "ask_wiki", {"q": "why"}, headers=None)
+        self.mcp_call.assert_awaited_once()
+        self.assertEqual(self.mcp_call.await_args.args, ("https://mcp.example/mcp", "ask_wiki", {"q": "why"}))
+        self.assertIsNone(self.mcp_call.await_args.kwargs["headers"])
         self.assertTrue(res[2]["is_error"])
         self.assertEqual(len(set(model.tools_bytes)), 1)
 

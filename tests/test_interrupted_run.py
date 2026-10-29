@@ -4,13 +4,16 @@ scripted model. Mocked: model_call, checkpoint/memory/token-stats storage. No ne
 PostgresBackendTests run only when MICRO_CC_TEST_POSTGRES_URL is set (see docker-compose.yml).
 """
 
+import asyncio
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -25,7 +28,7 @@ from micro_cc.utils.msg_normalize_ import REPAIR_RESULT_TEXT, cut_short_calls, r
 from micro_cc.utils.msg_store_ import _get_storage_dir, load_checkpoint, load_msgs, store_checkpoint, store_msgs  # noqa: E402
 from micro_cc.postgres_store import pg_store_  # noqa: E402
 from micro_cc.utils.helpers import project_hash  # noqa: E402
-from test_use_tool_dispatcher import LoopCase, Scripted, final, turn, use  # noqa: E402
+from test_use_tool_dispatcher import LoopCase, Scripted, direct, final, turn, use  # noqa: E402
 
 PG_URL = os.environ.get("MICRO_CC_TEST_POSTGRES_URL", "")
 
@@ -213,6 +216,186 @@ class HeadlessResumeTests(LoopCase):
         roles = [json.loads(line)["role"] for line in lines]
         self.assertEqual(roles, ["user", "assistant", "user", "user", "assistant"])
         self.assertEqual(sunk[-1], 5)
+
+
+class HeadlessWaitTests(LoopCase):
+    """A headless boss stays up for its subagents, watches and mail, then exits clean."""
+
+    def setUp(self):
+        super().setUp()
+        from micro_cc.utils import subagent_tracker_ as tracker
+        self.tracker = tracker
+        self.boss = self.tmp.name
+        self.child, self.sleeper = self.track()
+        p = patch.object(headless, "WAKE_POLL_S", 0.05)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def track(self):
+        """Register a RUNNING subagent whose "process" is a sleeper."""
+        child = tempfile.mkdtemp(prefix="mcc-child-")
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait()))
+        self.tracker.add_tracked(self.boss, child)
+        data = self.tracker.read_tracked(self.boss)
+        data["subagents"][child]["pid"] = sleeper.pid
+        (_get_storage_dir(self.boss) / "tracked_subagents.json").write_text(json.dumps(data))
+        return child, sleeper
+
+    @staticmethod
+    def finish(child, summary):
+        store_msgs(child, [{"role": "user", "content": "go"},
+                           {"role": "assistant", "content": f"ok\nSTATUS: DONE — {summary}"}])
+
+    def seen(self, model) -> str:
+        return json.dumps(model.inputs)
+
+    async def test_wait_timeout_is_idle_and_resets_on_each_wakeup(self):
+        child2, _ = self.track()
+
+        async def staggered():
+            await asyncio.sleep(0.3)
+            self.finish(self.child, "first")
+            await asyncio.sleep(0.5)  # past 0.6s since start, within 0.6s of the first wakeup
+            self.finish(child2, "second")
+        model = Scripted(*[final("ack\nSTATUS: DONE — ack")] * 3)
+        bg = asyncio.ensure_future(staggered())
+        with patch("micro_cc.claude_loop_.model_call", model):
+            result = await headless.run_headless(self.boss, "orchestrate", wait_timeout=0.6)
+        await bg
+        self.assertEqual(result["status"], "DONE")
+        self.assertIn("first", self.seen(model))
+        self.assertIn("second", self.seen(model))
+
+    async def test_loop_limit_pause_is_not_turned_into_timeout(self):
+        model = Scripted(*[turn(use(f"t{i}", "get_weather", {"city": "Paris"})) for i in range(6)])
+        with patch("micro_cc.claude_loop_.model_call", model):
+            result = await headless.run_headless(self.boss, "orchestrate", max_loops=1, wait_timeout=0)
+        self.assertEqual(result["status"], "PAUSED")
+        self.assertIsNone(self.sleeper.poll())  # child left running for the relaunch
+        self.assertIn(self.child, self.tracker.read_tracked(self.boss)["subagents"])
+
+    async def test_kill_while_waiting_stops_children_and_ends_failed(self):
+        kill_state: dict = {}
+        model = Scripted(final("spawned\nSTATUS: DONE — spawned"))
+        # Real one cancels every task, this test's own included; the CLI kill path is covered in test_subagent_lifecycle.
+        with patch("micro_cc.claude_loop_.model_call", model), \
+                patch.object(headless, "_stop_background_work", AsyncMock()):
+            task = asyncio.ensure_future(headless.run_headless(self.boss, "orchestrate", kill_state=kill_state, wait_timeout=30))
+            await asyncio.sleep(0.4)
+            kill_state["signal"] = "SIGTERM"
+            task.cancel()
+            result = await task
+        self.assertEqual(result["status"], "FAILED")
+        self.assertIn("stopped by SIGTERM while waiting on " + os.path.basename(self.child), result["summary"])
+        self.assertEqual(self.sleeper.wait(timeout=5), -signal.SIGTERM)
+        self.assertEqual(self.tracker.read_tracked(self.boss)["subagents"], {})
+        self.assertTrue(load_msgs(self.boss)[-1]["content"].startswith("STATUS: FAILED — stopped by SIGTERM"))
+
+    async def test_subagent_ends_at_final_reply_and_cannot_watch(self):
+        sub = tempfile.mkdtemp(prefix="mcc-sub-")
+        watch = direct("w1", "monitor_", action="watch", command="sleep 1; echo late", description="build")
+        model = Scripted(turn(watch), final("waiting on build\nSTATUS: DONE — waiting on build"),
+                         *[final("late\nSTATUS: DONE — late result")] * 3)
+        with patch.dict(os.environ, {"MICROCC_CALLER_PROJECT_DIR": self.boss}), \
+                patch("micro_cc.claude_loop_.model_call", model):
+            os.environ.pop(headless._SUBAGENT_ENV, None)
+            result = await headless.run_headless(sub, "do it", wait_timeout=30)
+        self.assertEqual(len(model.inputs), 2)  # no wake turn after the final reply
+        self.assertIn("monitor watch unavailable", self.seen(model))
+        self.assertEqual(result["summary"], "waiting on build")
+        self.assertEqual(self.tracker.read_tracked(self.boss)["subagents"][sub]["status"], "RUNNING")
+
+    async def test_waits_for_child_checkpoint_and_mail_then_continues(self):
+        async def child_finishes():
+            await asyncio.sleep(0.3)
+            inbox.write_mail(self.boss, self.child, "partial findings")
+            self.finish(self.child, "child finished")
+        model = Scripted(final("spawned\nSTATUS: DONE — spawned"), final("merged\nSTATUS: DONE — merged"))
+        bg = asyncio.ensure_future(child_finishes())
+        with patch("micro_cc.claude_loop_.model_call", model):
+            result = await headless.run_headless(self.boss, "orchestrate", wait_timeout=30)
+        await bg
+        self.assertEqual((result["status"], result["summary"]), ("DONE", "merged"))
+        self.assertEqual(len(model.inputs), 2)
+        self.assertIn("<subagent-notification>", self.seen(model))
+        self.assertIn("child finished", self.seen(model))
+        self.assertIn("partial findings", self.seen(model))
+        self.assertEqual(self.tracker.read_tracked(self.boss)["subagents"], {})  # notified + pruned
+        self.assertEqual(inbox.peek_pending_count(self.boss), 0)
+
+    async def test_timeout_stops_children_and_exits_failed(self):
+        model = Scripted(final("spawned\nSTATUS: DONE — spawned"))
+        with patch("micro_cc.claude_loop_.model_call", model):
+            result = await headless.run_headless(self.boss, "orchestrate", wait_timeout=0.4)
+        self.assertEqual(result["status"], "FAILED")
+        self.assertIn("gave up after", result["summary"])
+        self.assertIn(os.path.basename(self.child), result["summary"])
+        self.assertEqual(self.sleeper.wait(timeout=5), -signal.SIGTERM)
+        self.assertEqual(self.tracker.read_tracked(self.boss)["subagents"], {})
+        self.assertTrue(load_msgs(self.boss)[-1]["content"].startswith("STATUS: FAILED — gave up"))
+
+    async def test_watch_events_wake_headless_run(self):
+        self.tracker.prune(self.boss)
+        (_get_storage_dir(self.boss) / "tracked_subagents.json").unlink()  # no subagents: watch only
+        watch = direct("w1", "monitor_", action="watch", command="sleep 0.2; echo hit-line", description="probe")
+        model = Scripted(turn(watch), final("watching\nSTATUS: DONE — watching"),
+                         *[final("seen\nSTATUS: DONE — seen")] * 3)
+        with patch("micro_cc.claude_loop_.model_call", model):
+            result = await headless.run_headless(self.boss, "watch it", wait_timeout=30)
+        self.assertEqual(result["status"], "DONE")
+        self.assertIn("Watch started", self.seen(model))
+        self.assertIn("[monitor: probe]", self.seen(model))
+        self.assertIn("hit-line", self.seen(model))
+        from micro_cc.tools import monitor_watch_
+        self.assertIsNone(monitor_watch_._wake_callback)
+        self.assertEqual(monitor_watch_.list_watches(), [])
+
+
+    async def test_no_subagents_run_is_single_pass_but_keeps_watches(self):
+        async def late_mail():  # arrives while the run waits on its watch; left for the next run
+            await asyncio.sleep(0.1)
+            inbox.write_mail(self.boss, self.child, "late mail")
+        bg = asyncio.ensure_future(late_mail())
+        watch = direct("w1", "monitor_", action="watch", command="sleep 0.4; echo hit-line", description="probe")
+        model = Scripted(turn(watch), final("watching\nSTATUS: DONE — watching"),
+                         *[final("seen\nSTATUS: DONE — seen")] * 3)
+        with patch.dict(os.environ, {}), patch("micro_cc.claude_loop_.model_call", model):
+            os.environ.pop(headless._SUBAGENT_ENV, None)
+            result = await headless.run_headless(self.boss, "watch it", wait_timeout=30, no_subagents=True)
+            refusal = headless._nested_refusal(os.path.join(self.boss, "kid"))  # what its bash_ spawns would get
+        await bg
+        self.assertEqual(result["status"], "DONE")
+        self.assertIn("hit-line", self.seen(model))  # watch still woke it
+        self.assertNotIn("subagent-notification", self.seen(model))
+        self.assertNotIn("late mail", self.seen(model))
+        self.assertEqual(inbox.peek_pending_count(self.boss), 1)
+        self.assertIn("disabled for this run (--no-subagents)", refusal)
+        self.assertIsNone(self.sleeper.poll())  # the stray child is left alone, not waited on or killed
+
+    async def test_no_subagents_without_watches_ends_at_final_reply(self):
+        model = Scripted(final("done\nSTATUS: DONE — done"))
+        with patch.dict(os.environ, {}), patch("micro_cc.claude_loop_.model_call", model):
+            os.environ.pop(headless._SUBAGENT_ENV, None)
+            result = await headless.run_headless(self.boss, "go", wait_timeout=30, no_subagents=True)
+        self.assertEqual((result["status"], len(model.inputs)), ("DONE", 1))
+
+    def test_no_subagents_prompt_hint(self):
+        self.assertIn(headless.NO_SUBAGENTS_HINT, headless._build_prompt("go", [], True))
+        self.assertNotIn(headless.NO_SUBAGENTS_HINT, headless._build_prompt("go", []))
+
+
+class NestedSpawnTests(unittest.TestCase):
+    def test_subagent_cannot_register_a_subagent(self):
+        boss, child, grandchild = (tempfile.mkdtemp(prefix=f"mcc-{n}-") for n in ("boss", "child", "grand"))
+        with patch.dict(os.environ, {}):
+            os.environ.pop(headless._SUBAGENT_ENV, None)
+            self.assertIsNone(headless._register(boss, child))
+            self.assertEqual(os.environ[headless._SUBAGENT_ENV], child)  # inherited by the child's bash_
+            refusal = headless._register(child, grandchild)
+        self.assertIn("one level deep", refusal)
+        from micro_cc.utils import subagent_tracker_ as tracker
+        self.assertEqual(tracker.read_tracked(child)["subagents"], {})
 
 
 @unittest.skipUnless(PG_URL, "set MICRO_CC_TEST_POSTGRES_URL to run against Postgres")

@@ -1142,6 +1142,11 @@ class MicroTui():
             self.prompt.clear()
             return
 
+        # Subagents run headless: plain text in their view goes to their inbox, folded at the next checkpoint.
+        if self._subagent_viewing_target is not None:
+            self._mail_subagent(self._subagent_viewing_target, query)
+            return
+
         # Encode image paths now so they ride this turn as content blocks.
         query, image_paths = extract_image_paths(query)
         encoded_image = [e for e in (sanitize_and_encode_image_(p) for p in image_paths) if e] or None
@@ -1223,13 +1228,17 @@ class MicroTui():
         tool_call_rows = {}
         approval_rows = {}
 
+        model, replaced = model_catalog.usable_model(self._current_model, active_provider())
+        if replaced:
+            self._flash_status(_markup_escape(model_catalog.stale_model_notice(self._current_model)), seconds=10)
+
         sleep_handle = _inhibit_sleep()
         try:
             async for event in claude_loop(
                 query=query,
                 msgs=self._loop_msgs,
                 project_dir=self._project_dir,
-                model=self._current_model,
+                model=model,
                 max_tokens=self._trim_budget,
                 surface="tui",
                 encoded_image=encoded_image,
@@ -1316,9 +1325,35 @@ class MicroTui():
             return
         items = self._bgproc_picker_items(procs, watches)
         self._bgproc_viewing = True
-        self._option_panel.max_visible, self._option_panel.max_desc_lines = panel_layout_.fit(self, items)
-        # Read-only peek: Enter and Esc both dismiss.
-        self._option_panel.open(items, on_select=lambda _it: self._hide_bgproc_detail(), on_cancel=self._hide_bgproc_detail)
+        self._option_panel.max_visible, self._option_panel.max_desc_lines, self._option_panel.max_title_lines = panel_layout_.fit(self, items)
+        self._option_panel.open(
+            items, on_select=self._kill_bgproc_item, on_cancel=self._hide_bgproc_detail,
+            title="enter kill · esc close",
+        )
+
+    def _kill_bgproc_item(self, item: PanelItem) -> None:
+        """Enter in the ctrl+b view: kill the selected process group or stop the watch, keep the view open."""
+        from micro_cc.tools.bash_tool import kill_background_process
+        from micro_cc.tools.monitor_watch_ import stop_watch
+
+        async def _stop(watch_id: str):
+            self._flash_status(_markup_escape(await stop_watch(watch_id)))
+            self._reopen_bgproc_detail()
+
+        if item.value.startswith("watch:"):
+            self._safe_task(_stop(item.value.removeprefix("watch:")), "stop watch")
+            return
+        if kill_background_process(int(item.value)):
+            self._flash_status(f"✓ killed PID {item.value}")
+        else:
+            self._flash_status(f"PID {item.value} already gone")
+        self._reopen_bgproc_detail()
+
+    def _reopen_bgproc_detail(self) -> None:
+        # confirm() closed the panel before on_select; reopen on what's left and refresh the pills.
+        self._bgproc_viewing = False
+        pollers_.poll_bgprocs_tick(self)
+        self._show_bgproc_detail()
 
     def _hide_bgproc_detail(self) -> None:
         self._bgproc_viewing = False
@@ -1336,10 +1371,6 @@ class MicroTui():
             self._option_panel.set_selected_value(current.value)
         self.request_render()
 
-    _SUBAGENT_CHECKPOINT_STATUSES = {"DONE", "FAILED", "PAUSED", "NEEDS_INPUT"}
-    # Truly final; PAUSED/NEEDS_INPUT still expect a relaunch, so they are never prunable.
-    _SUBAGENT_TERMINAL_STATUSES = {"DONE", "FAILED"}
-
     def enter_subagent_view(self, target: str) -> None:
         """Show a subagent's conversation, read off disk, in the message area."""
         self._subagent_viewing_target = target
@@ -1350,36 +1381,40 @@ class MicroTui():
             self.subagent_message_list.add(MessageRow(m))
         self.main_split.left = self.subagent_scroll_view
         self.subagent_scroll_view.scroll_to_end()
+        self.prompt.placeholder = f"message {self._subagent_name(target)} · lands at its next checkpoint"
+        self.request_render()
+
+    def _subagent_name(self, target: str) -> str:
+        row = next((s for s in self._subagent_snapshot if s["target"] == target), None)
+        return row["name"] if row else (os.path.basename(target.rstrip("/")) or target)
+
+    def _mail_subagent(self, target: str, text: str) -> None:
+        """Drop text in the viewed subagent's inbox; it folds in at its next turn boundary."""
+        from micro_cc.utils.inbox_store_ import write_mail
+
+        write_mail(target, self._project_dir, text)
+        self.prompt.clear()
+        msg = {"type": "user_queued", "content": text}
+        self.subagent_message_list.add(MessageRow(msg))
+        self.subagent_scroll_view.scroll_to_end()
+        row = next((s for s in self._subagent_snapshot if s["target"] == target), None)
+        name = self._subagent_name(target)
+        if row is not None and row["status"] == "RUNNING":
+            self._flash_status(f"✉ sent to {_markup_escape(name)} — folds in at its next checkpoint")
+        else:
+            self._flash_status(f"✉ {_markup_escape(name)} isn't running — queued for its next run", seconds=4)
         self.request_render()
 
     def exit_subagent_view(self) -> None:
         """Back to boss; reload from disk unless mid-turn, where the streaming row would reorder."""
         self._subagent_viewing_target = None
+        self.prompt.placeholder = ""
         self.main_split.left = self.messages_scroll
         self.messages_scroll.scroll_to_end()
         self.request_render()
         turn_active = self._current_query_task is not None and not self._current_query_task.done()
         if not turn_active:
             self._safe_task(self._reload_messages_from_disk(), "reload after subagent view exit")
-
-    # Status-agnostic: /graph and the graph-orchestration skill hold the mechanism.
-    _SUBAGENT_WAKEUP_REMINDER = (
-        "You have subagents running — spawned via bash_ + microcc-headless. "
-        "Call monitor_(action='check', targets=[project_dirs...]) for a full "
-        "status check across all of them, and check GRAPH_PLAN.md in this project "
-        "directory for what this means and what to do next. If you need the "
-        "full orchestration mechanism again (tracking/wakeup/coordination "
-        "details), call read_skill('graph-orchestration')."
-    )
-
-    # Cold-start prefix: after a restart the model may have no memory, so reloading the skill is mandatory.
-    _SUBAGENT_COLD_START_PREFIX = (
-        "[this is the first check since boss (re)started — you may have no "
-        "live memory of this orchestration even if it's mid-flight] Call "
-        "read_skill('graph-orchestration') now, before deciding anything, "
-        "to reload the full mechanism — then read GRAPH_PLAN.md for the "
-        "actual plan. Do not act on the checkpoint below until you have.\n\n"
-    )
 
     # ============================================= subagents
 
