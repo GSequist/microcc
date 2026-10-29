@@ -20,6 +20,7 @@ eggs/
 .eggs/
 lib/
 !frontend/src/lib/
+!src/micro_cc/skills/**/lib/
 lib64/
 parts/
 sdist/
