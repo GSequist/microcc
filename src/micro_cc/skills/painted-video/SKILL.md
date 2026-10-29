@@ -28,6 +28,17 @@ adding this skill did not touch `pyproject.toml` and never will. See **Install**
 
 ## Stage 0 — Install
 
+Detect the OS first (`uname -s`; on Linux also `grep -qi microsoft /proc/version` for WSL,
+`uname -m` for arch) and adapt the steps below to it:
+
+- **macOS**: as written (brew, `--use-angle=metal`).
+- **Linux / WSL2**: `install_stack.sh` uses apt, which can give an old Node on older Ubuntu —
+  require Node >= 18 (else install via NodeSource/nvm). Keep the project under `~/`, never `/mnt/c`
+  (frame writes crawl). No Chrome build for Linux arm64 — fall back to `chromium` and drop
+  `channel: 'chrome'`.
+- **Native Windows**: bash/brew/apt don't apply; use WSL2, or install Node/ffmpeg via winget
+  by hand.
+
 Check first, install only what's missing:
 
 ```bash
@@ -94,7 +105,9 @@ Prints ms/frame and any console/page errors from those frames. Fix issues here
 node render.mjs <t0> <t1> out/video.mp4 assets/song.mp3 [workers] [fps]
 ```
 
-Drives Chrome on the real GPU (`--use-angle=metal` on macOS). The bundled
+Drives Chrome on the real GPU (`--use-angle=metal` on macOS; edit the `args` in `render.mjs`/`check.mjs`
+for other OSes — e.g. drop it on Linux/WSL, where `--use-gl=angle --use-angle=swiftshader` is the
+software fallback, so use fewer workers/lower fps). The bundled
 headless shell falls back to software GL and is roughly 20x slower — if a
 render is unexpectedly slow, that's almost always why; check `channel: 'chrome'`
 resolved to a real Chrome install.
