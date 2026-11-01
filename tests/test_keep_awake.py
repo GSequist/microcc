@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "src"))
@@ -70,7 +71,43 @@ class KeepAwake(unittest.TestCase):
         self.assertTrue(ka.status()["held"])  # background still holds
         ka.hold("background", False)
         self.assertFalse(ka.status()["held"])
+        self.assertEqual(ka.status()["pid"], first)  # lingers for the next turn
+        ka.hold("turn")
+        self.assertEqual(ka.status()["pid"], first)  # reused, no respawn per turn
+        ka.release_all()
         self.assertIsNone(ka.status()["pid"])
+
+    def test_release_never_blocks(self):
+        """Turn end runs on the TUI event loop: stopping must not wait on the process."""
+        ka.hold("turn")
+        if ka.status()["method"] is None:
+            self.skipTest("no inhibitor on this OS")
+        t = time.monotonic()
+        ka.release_all()
+        self.assertLess(time.monotonic() - t, 0.2)
+
+    def test_broken_inhibitor_is_not_respawned(self):
+        """Locked-down Windows (no Add-Type), no logind, ...: one attempt, a reason, no spawn loop."""
+        spawned = []
+        real_popen = subprocess.Popen
+
+        def counting(*a, **k):
+            spawned.append(1)
+            return real_popen(*a, **k)
+        with patch.object(ka, "_command", lambda: ("fake", ["sh", "-c", "echo blocked by policy >&2; exit 1"])), \
+             patch.object(ka.subprocess, "Popen", counting), patch.object(ka, "LINGER_S", 0.2):
+            ka.hold("background")
+            self.assertTrue(_wait_for(lambda: ka.status()["error"], 5))
+            for _ in range(5):
+                ka.hold("background")
+                ka.hold("turn")
+                ka.hold("turn", False)
+            self.assertEqual(len(spawned), 1)
+            self.assertIn("blocked by policy", ka.status()["error"])
+            ka.hold("background", False)  # everyone left: after the linger it may try again
+            time.sleep(0.5)
+            ka.hold("turn")
+            self.assertEqual(len(spawned), 2)
 
     def test_os_sees_the_inhibitor(self):
         ka.hold("turn")

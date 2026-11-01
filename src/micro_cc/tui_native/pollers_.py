@@ -27,9 +27,14 @@ def poll_bgprocs_tick(app) -> None:
     ]
     watches = list_monitors()
     # Keep the machine awake while anything can still wake us; the turn holds its own.
-    keep_awake_.hold("background", bool(
-        watches or sched.load_schedules(app._project_dir)
-        or any(e.get("status") not in CHECKPOINT_STATUSES for e in tracked.values())))
+    background = bool(watches or sched.load_schedules(app._project_dir)
+                      or any(e.get("status") not in CHECKPOINT_STATUSES for e in tracked.values()))
+    keep_awake_.hold("background", background)
+    err = keep_awake_.status()["error"] if background else None
+    if err and not getattr(app, "_keep_awake_warned", False):
+        app._keep_awake_warned = True  # once per session
+        app._flash_status(_markup_escape(f"⚠ can't keep this computer awake ({err}); "
+                                         "disable sleep in system settings while microcc works"), seconds=12)
     if app._bgproc_viewing:
         app._refresh_bgproc_detail(procs, watches)
 
