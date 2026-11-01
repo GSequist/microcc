@@ -67,10 +67,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # root: the runner has no active logind session, so polkit denies a non-root block (desktops allow it)
       - name: keep awake (systemd-inhibit)
         env:
           MICROCC_KEEP_AWAKE_REQUIRED: "1"
-        run: python3 tests/test_keep_awake.py
+        run: sudo -E python3 tests/test_keep_awake.py
 
   linux-browser:
     # browser tool on a fresh install: WSLg-like display (xvfb) and no display (Win10 WSL / ssh)
