@@ -353,13 +353,15 @@ class HeadlessWaitTests(LoopCase):
 
 
     async def test_no_subagents_run_is_single_pass_but_keeps_watches(self):
-        async def late_mail():  # arrives while the run waits on its watch; left for the next run
-            await asyncio.sleep(0.1)
-            inbox.write_mail(self.boss, self.child, "late mail")
-        bg = asyncio.ensure_future(late_mail())
         watch = direct("w1", "monitor_", action="watch", command="sleep 0.4; echo hit-line", description="probe")
         model = Scripted(turn(watch), final("watching\nSTATUS: DONE — watching"),
                          *[final("seen\nSTATUS: DONE — seen")] * 3)
+
+        async def late_mail():  # arrives while the run waits on its watch; left for the next run
+            while len(model.inputs) < 2:  # after the final reply, not a wall-clock guess (slow on WSL /mnt)
+                await asyncio.sleep(0.01)
+            inbox.write_mail(self.boss, self.child, "late mail")
+        bg = asyncio.ensure_future(late_mail())
         with patch.dict(os.environ, {}), patch("micro_cc.claude_loop_.model_call", model):
             os.environ.pop(headless._SUBAGENT_ENV, None)
             result = await headless.run_headless(self.boss, "watch it", wait_timeout=30, no_subagents=True)
