@@ -2,7 +2,7 @@ name: install-test
 
 on:
   push:
-    paths: [install.sh, install.ps1, pyproject.toml, tests/smoke_browser.py, src/micro_cc/tools/browser_tool_.py, src/micro_cc/utils/keep_awake_.py, src/micro_cc/tools/monitor_*.py, tests/test_keep_awake.py, tests/test_monitor_poll.py, .github/workflows/install-test.yml]
+    paths: [install.sh, install.ps1, pyproject.toml, tests/smoke_browser.py, src/micro_cc/tools/browser_tool_.py, src/micro_cc/utils/keep_awake_.py, src/micro_cc/tools/monitor_*.py, tests/test_keep_awake.py, tests/test_monitor_poll.py, tests/test_interrupted_run.py, tests/test_subagent_lifecycle.py, .github/workflows/install-test.yml]
   schedule:
     - cron: "17 5 * * *"   # nightly: catches astral.sh / PyPI drift
   workflow_dispatch:
