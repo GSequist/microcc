@@ -86,7 +86,7 @@ class KeepAwake(unittest.TestCase):
                 self.fail("cannot query the OS for sleep inhibitors here")
             self.skipTest("cannot query the OS for sleep inhibitors here")
         self.assertTrue(_wait_for(lambda: (r := _os_report()) and r[1] in r[0]),
-                        f"inhibitor not reported by the OS ({st['method']}):\n{_os_report()[0]}")
+                        f"inhibitor not reported by the OS, status {ka.status()}:\n{_os_report()[0]}")
         print(f"\nkeep_awake: {st['method']} visible to the OS")
         marker_report = _os_report()
         ka.release_all()

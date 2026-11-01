@@ -6,6 +6,7 @@ import os
 import platform
 import shutil
 import subprocess
+import tempfile
 import time
 
 _holders: set[str] = set()
@@ -13,6 +14,7 @@ _proc: subprocess.Popen | None = None
 _method: str | None = None
 _error: str | None = None
 _started_at = 0.0
+_stderr = None  # temp file: why an inhibitor exited
 RESTART_AFTER_S = 60  # an inhibitor that dies sooner is broken here; don't respawn it every tick
 
 _ES_CONTINUOUS, _ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
@@ -56,7 +58,7 @@ def _command() -> tuple[str, list] | tuple[None, str]:
 
 
 def _start() -> None:
-    global _proc, _method, _error, _started_at
+    global _proc, _method, _error, _started_at, _stderr
     _started_at = time.monotonic()
     if os.name == "nt":
         import ctypes
@@ -68,15 +70,19 @@ def _start() -> None:
         _method, _error = None, argv
         return
     try:
+        _stderr = tempfile.TemporaryFile()
         _proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, start_new_session=True)
+                                 stderr=_stderr, start_new_session=True)
         _method, _error = method, None
     except OSError as e:
         _proc, _method, _error = None, None, f"{method} failed: {e}"
 
 
 def _stop() -> None:
-    global _proc
+    global _proc, _stderr
+    if _stderr is not None:
+        _stderr.close()
+        _stderr = None
     if os.name == "nt":
         import ctypes
         ctypes.windll.kernel32.SetThreadExecutionState(_ES_CONTINUOUS)
@@ -95,6 +101,15 @@ def _stop() -> None:
     _proc = None
 
 
+def _died_reason() -> str:
+    try:
+        _stderr.seek(0)
+        err = _stderr.read().decode("utf-8", "replace").strip()[-300:]
+    except (OSError, AttributeError, ValueError):
+        err = ""
+    return f"{_method} exited with code {_proc.returncode}" + (f": {err}" if err else "")
+
+
 def hold(tag: str, on: bool = True) -> None:
     """Add or drop holder `tag`; the inhibitor runs while any holder remains. Idempotent."""
     global _error
@@ -102,7 +117,7 @@ def hold(tag: str, on: bool = True) -> None:
     (_holders.add if on else _holders.discard)(tag)
     died = _proc is not None and _proc.poll() is not None
     if died and _error is None:
-        _error = f"{_method} exited with code {_proc.returncode}"
+        _error = _died_reason()
     if _holders and (not before or (died and time.monotonic() - _started_at > RESTART_AFTER_S)):
         _stop()
         _start()  # first holder, or the inhibitor died a while after starting: (re)start
@@ -116,6 +131,9 @@ def release_all() -> None:
 
 
 def status() -> dict:
+    global _error
     alive = os.name == "nt" or (_proc is not None and _proc.poll() is None)
+    if _proc is not None and not alive and _error is None:
+        _error = _died_reason()
     return {"held": bool(_holders) and alive, "holders": sorted(_holders), "method": _method, "error": _error,
             "pid": _proc.pid if _proc else None}
