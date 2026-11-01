@@ -6,6 +6,11 @@ from micro_cc.utils import settings_store_
 
 # Key = the version publish.sh will ship (pyproject + 1); versions without an entry show nothing.
 NOTES = {
+    "0.2.130": [
+        "Say \"point 2 is wrong\" and microcc fixes its last answer in place instead of writing a new one",
+        "Thinking now shows when you reopen or rewind a conversation, and is kept for the model on the same provider",
+        "LiteLLM: thinking is now sent back to the model correctly, for both Claude and GPT",
+    ],
     "0.2.129": [
         "Ask \"keep checking my emails\" (or files, or any API): microcc checks quietly and only wakes on new items",
         "Your computer stays awake while microcc has work running, on macOS, Linux and Windows (WSL)",

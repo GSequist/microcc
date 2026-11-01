@@ -120,7 +120,7 @@ class MessageRow:
 
     def toggle_expanded(self) -> bool:
         t = self._msg.get("type")
-        expandable = t == "approval" or (t == "tool_call" and self._msg.get("result") is not None) or (
+        expandable = t in ("approval", "folded") or (t == "tool_call" and self._msg.get("result") is not None) or (
             t in ("user", "user_queued") and any(n["result"] for n in (subagent_notice_.parse(self._msg["content"]) or {"notes": []})["notes"]))
         if expandable:
             self._msg["expanded"] = not self._msg.get("expanded", False)

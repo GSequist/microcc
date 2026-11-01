@@ -21,6 +21,7 @@ export function Chat() {
   const [modal, setModal] = useState<ModalKind>(null);
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
   const historyLoaded = useRef(false);
+  const amendPending = useRef(false);
 
   const {
     messages,
@@ -49,6 +50,7 @@ export function Chat() {
       if (part.type === 'data-question') {
         setQuestion((part as any).data as PendingQuestion);
       }
+      if (part.type === 'data-amended') amendPending.current = true;
     },
 
     onError: (error) => {
@@ -68,6 +70,18 @@ export function Chat() {
       })
       .catch(() => {});
   }, [setMessages]);
+
+  // amend_last_reply_ rewrote an earlier reply: once the turn ends, reload history so it shows revised and folded.
+  useEffect(() => {
+    if (status !== 'ready' || !amendPending.current) return;
+    amendPending.current = false;
+    fetch('/api/messages')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.messages) setMessages(data.messages);
+      })
+      .catch(() => {});
+  }, [status, setMessages]);
 
   useIncoming(
     status === 'ready' && !question,

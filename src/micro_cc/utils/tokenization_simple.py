@@ -186,7 +186,8 @@ def _msg_tokens(msg: dict) -> int:
         content, image_count = _content_for_token_count(content)
     if isinstance(content, (dict, list)):
         content = json.dumps(content)
-    return _approx_tokens(content or "") + image_count * _IMAGE_TOKEN_ESTIMATE
+    thinking = "".join(b.get("thinking", "") for b in msg.get("_thinking") or [] if isinstance(b, dict))  # replayed beside the text
+    return _approx_tokens((content or "") + thinking) + image_count * _IMAGE_TOKEN_ESTIMATE
 
 
 def total_tokens(messages: list[dict]) -> int:

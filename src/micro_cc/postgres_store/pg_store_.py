@@ -5,6 +5,7 @@ import os
 from micro_cc.postgres_store import schema_
 from micro_cc.utils.helpers import project_hash
 from micro_cc.utils.msg_normalize_ import normalize_message, reconstruct_message, repair_dangling_tool_use, is_valid_message, log_dropped_message
+from micro_cc.utils.amend_ import same_content
 
 # One row per message (BIGSERIAL id, so insertion order is read order).
 # Several processes can write one project_hash here, so writes take an advisory lock (_locked).
@@ -140,6 +141,29 @@ def rewind_msgs(project_dir: str, cut_idx: int) -> list:
                 _insert_rows(cur, phash, kept)
 
             return [reconstruct_message(m) for m in kept]
+
+        return _locked(conn, phash, _do)
+
+
+def amend_msg(project_dir: str, old: dict, new: dict) -> bool:
+    """UPDATE the newest assistant row whose content equals old's (scans the last 200 rows)."""
+    phash = project_hash(project_dir)
+    want = normalize_message(old)["content"]
+    with _connect() as conn:
+        def _do():
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, message FROM micro_cc_messages WHERE project_hash = %s ORDER BY id DESC LIMIT 200",
+                    (phash,),
+                )
+                for row_id, message in cur.fetchall():
+                    if isinstance(message, dict) and message.get("role") == "assistant" and same_content(message.get("content"), want):
+                        cur.execute(
+                            "UPDATE micro_cc_messages SET message = %s WHERE id = %s",
+                            (json.dumps(normalize_message(new)), row_id),
+                        )
+                        return True
+            return False
 
         return _locked(conn, phash, _do)
 

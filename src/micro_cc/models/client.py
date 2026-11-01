@@ -60,6 +60,14 @@ def drop_foreign_thinking(msgs: list, origin: str) -> list:
     """Remove thinking from another model or system prompt (or unstamped); its signature/blob 400s on replay."""
     out = []
     for msg in msgs:
+        if isinstance(msg, dict) and "_thinking" in msg:
+            # A final reply stores its thinking beside its string text; same-origin thinking goes back as blocks.
+            thinking = [b for b in msg["_thinking"] or [] if isinstance(b, dict) and b.get("origin") == origin]
+            msg = {k: v for k, v in msg.items() if k != "_thinking"}
+            if thinking and isinstance(msg.get("content"), str):
+                msg["content"] = [*thinking, {"type": "text", "text": msg["content"]}]
+            out.append(msg)
+            continue
         content = msg.get("content") if isinstance(msg, dict) else None
         if not isinstance(content, list) or msg.get("role") != "assistant":
             out.append(msg)

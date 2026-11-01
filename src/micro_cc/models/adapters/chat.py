@@ -15,6 +15,10 @@ Reasoning = Literal["none", "litellm", "ollama", "openrouter", "read"]
 _STOP = {"length": "max_tokens", "stop": "end_turn", "tool_calls": "tool_use"}
 
 
+def _field(obj, key):
+    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+
 def _reasoning_text(obj, reasoning: Reasoning) -> str:
     if reasoning == "litellm":
         return getattr(obj, "reasoning_content", None) or ""
@@ -80,6 +84,7 @@ async def stream_response(raw_stream, *, reasoning: Reasoning = "none") -> Respo
     """Yield deltas as received, then one response with assembled tool calls."""
     text = ""
     thinking = ""
+    signed = None  # LiteLLM: the complete signed thinking block, sent once after the deltas
     tool_calls = {}  # index -> {id, name, args}; insertion order is call order
     usage = {}
     finish = ""
@@ -98,6 +103,10 @@ async def stream_response(raw_stream, *, reasoning: Reasoning = "none") -> Respo
         if rc:
             thinking += rc
             yield {"type": "thinking_delta", "thinking": rc}
+        if reasoning == "litellm":
+            for tb in getattr(delta, "thinking_blocks", None) or []:
+                if _field(tb, "signature"):
+                    signed = (_field(tb, "thinking") or "", _field(tb, "signature"))
         for tc in delta.tool_calls or []:
             if tc.index not in tool_calls:
                 tool_calls[tc.index] = {
@@ -110,7 +119,10 @@ async def stream_response(raw_stream, *, reasoning: Reasoning = "none") -> Respo
                 tool_calls[tc.index]["args"] += tc.function.arguments
 
     blocks = []
-    if thinking:
+    if signed:
+        # Replay needs the signed block's exact text, which also repeats the streamed deltas.
+        blocks.append(ContentBlock(type="thinking", thinking=signed[0] or thinking, signature=signed[1]))
+    elif thinking:
         blocks.append(ContentBlock(type="thinking", thinking=thinking))
     if text:
         blocks.append(ContentBlock(type="text", text=text))

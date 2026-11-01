@@ -13,7 +13,14 @@ from micro_cc.tui_native import approval_ui_
 async def handle_done(app, event, container, tool_call_rows, approval_rows):
     store_msgs(app._project_dir, app._loop_msgs)
     app._finalize_streaming()
+    if getattr(app, "_amend_repaint", False):
+        app._amend_repaint = False
+        await app._reload_messages_from_disk()  # shows the revised reply with the correction turn folded under it
     app._scroll_to_bottom()
+
+
+async def handle_amended(app, event, container, tool_call_rows, approval_rows):
+    app._amend_repaint = True  # repaint at done: a mid-turn reload would cut the live stream
 
 
 async def handle_final_text(app, event, container, tool_call_rows, approval_rows):
@@ -223,4 +230,5 @@ ETYPES = {
     "question_asked": handle_question_asked,
     "turn_boundary": handle_turn_boundary,
     "cache_invalidate": handle_cache_invalidate,
+    "amended": handle_amended,
 }

@@ -1,4 +1,5 @@
 from micro_cc.tools.use_tool_ import resolve_call
+from micro_cc.utils.amend_ import AMENDED_KEY, fold_spans, text_of
 
 MAX_OUTPUT_CHARS = 4000
 
@@ -21,9 +22,24 @@ def to_ui_messages(msgs: list) -> list:
                     outputs[block.get("tool_use_id")] = str(block.get("content", ""))[:MAX_OUTPUT_CHARS]
 
     ui = []
+    spans = fold_spans(msgs)
+    skip_to = -1
     for i, msg in enumerate(msgs):
+        if i <= skip_to:
+            continue
         role = msg.get("role")
         content = msg.get("content", "")
+
+        if i in spans:
+            # Correction turn: one line under the reply it amended.
+            skip_to = spans[i]
+            ack = text_of(msgs[skip_to].get("content"))
+            ui.append({
+                "id": f"msg-{i}",
+                "role": "user",
+                "parts": [{"type": "data-folded", "data": {"note": content.strip(), "ack": ack.strip()}}],
+            })
+            continue
 
         if role == "system":
             continue
@@ -43,7 +59,8 @@ def to_ui_messages(msgs: list) -> list:
         if role != "assistant":
             continue
 
-        parts = []
+        parts = [{"type": "reasoning", "text": b.get("thinking", "")}
+                 for b in msg.get("_thinking") or [] if isinstance(b, dict) and b.get("thinking")]
         if isinstance(content, str):
             if content.strip():
                 parts.append({"type": "text", "text": content})
@@ -75,6 +92,9 @@ def to_ui_messages(msgs: list) -> list:
                     })
 
         if parts:
-            ui.append({"id": f"msg-{i}", "role": "assistant", "parts": parts})
+            row = {"id": f"msg-{i}", "role": "assistant", "parts": parts}
+            if msg.get(AMENDED_KEY):
+                row["metadata"] = {"amended": msg[AMENDED_KEY]}
+            ui.append(row)
 
     return ui

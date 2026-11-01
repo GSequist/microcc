@@ -10,6 +10,7 @@ from micro_cc.utils.helpers import project_hash
 from micro_cc.models.catalog import compaction_trigger_for, effective_trim_budget, summary_cap_for
 from micro_cc.utils.tokenization_simple import CHARS_PER_TOKEN, _approx_tokens, _msg_tokens, total_tokens, _drop_orphaned_tool_blocks, token_stats, save_token_stats
 from micro_cc.utils.msg_normalize_ import normalize_message, reconstruct_message, repair_dangling_tool_use, is_valid_message, log_dropped_message
+from micro_cc.utils.amend_ import same_content
 from micro_cc.postgres_store import pg_store_
 
 
@@ -203,6 +204,38 @@ def _rewind_msgs_local(project_dir: str, cut_idx: int) -> list:
         _persisted_len[project_dir] = len(kept)
 
     return [reconstruct_message(m) for m in kept]
+
+
+_AMEND_SCAN = 200  # rows scanned back from the tail for the reply to amend
+
+
+def amend_msg(project_dir: str, old: dict, new: dict, msgs: list | None = None) -> bool:
+    """Replace the newest stored assistant row whose content equals old's with new; False if none matches. msgs (post-amend) goes to the sink."""
+    if _use_postgres():
+        return pg_store_.amend_msg(project_dir, old, new)
+
+    jsonl_path = _get_storage_dir(project_dir) / "messages.jsonl"
+    want = normalize_message(old)["content"]
+    with _get_lock(project_dir):
+        if not jsonl_path.exists():
+            return False
+        lines = jsonl_path.read_text().splitlines(keepends=True)
+        for i in range(len(lines) - 1, max(len(lines) - _AMEND_SCAN, 0) - 1, -1):
+            try:
+                row = json.loads(lines[i])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("role") == "assistant" and same_content(row.get("content"), want):
+                lines[i] = json.dumps(normalize_message(new)) + "\n"
+                tmp = jsonl_path.with_suffix(".jsonl.tmp")
+                tmp.write_text("".join(lines))
+                os.replace(tmp, jsonl_path)  # row count unchanged, so _persisted_len stays valid
+                break
+        else:
+            return False
+    if msgs is not None:
+        _notify_sink(project_dir, msgs)
+    return True
 
 
 def erase_msgs(project_dir: str) -> None:

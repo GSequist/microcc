@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from micro_cc.execute_tool import execute_tool_call
 from micro_cc.models import model_call
 from micro_cc.models.client import thinking_origin
-from micro_cc.utils import system_prompt_
+from micro_cc.utils import system_prompt_, amend_
 from micro_cc.models.catalog import DEFAULT_MODEL, DEFAULT_TRIM_BUDGET
 from micro_cc.utils import settings_store_
 from micro_cc.utils.tool_limits import cap_for, MAX_TOOL_RESULTS_PER_MESSAGE
@@ -240,6 +240,10 @@ async def claude_loop(
     mcp_catalog = get_effective_mcp_catalog(project_dir)
     package_dir = os.path.dirname(os.path.abspath(__file__))
 
+    turn_start = len(msgs)  # this turn's rows start here; the reply before it is what amend_last_reply_ edits
+    amends = {"done": 0, "shown": 0}
+    amend_last_reply_ = amend_.make_tool(msgs, turn_start, project_dir, lambda: amends.__setitem__("done", amends["done"] + 1))
+
     default_tools = [
         bash_,
         read_, write_, edit_, glob_, grep_,
@@ -251,6 +255,7 @@ async def claude_loop(
         read_skill, list_skills, list_mcps,
         ask_user_question_tool_,
         monitor_,
+        amend_last_reply_,
     ]
     tool_schemas = []
     for tool in default_tools:
@@ -361,6 +366,7 @@ whole conversation history, including compacted turns.
 
 ## Guidelines
 - Read files before editing them
+- When the user says part of your previous reply is wrong, fix that passage with amend_last_reply_ instead of restating the answer, then reply in one short line
 - Use absolute paths when working outside project_dir
 - When writing to user, remove all mannered prose
 """,
@@ -460,6 +466,7 @@ whole conversation history, including compacted turns.
         else:
             trimmed_rest = token_cutter(msgs, max_tokens)
         system_msgs = _system_msgs(system_prompt_.head(msgs, trimmed_rest))
+        trimmed_rest = amend_.annotate(trimmed_rest)  # wire-only note on correction messages; storage untouched
         trimmed_loop_msgs = system_msgs + trimmed_rest + status_msgs  # Cache: system, memory, transcript, ephemeral
 
         record_prompt_segments(
@@ -539,6 +546,14 @@ whole conversation history, including compacted turns.
             tool_use_blocks = [
                 block for block in response.content if block.type == "tool_use"
             ]
+            stored_thinking = {
+                "type": "thinking",
+                "thinking": thinking_block.thinking,
+                "signature": thinking_block.signature,
+                # OpenAI Responses can't replay reasoning without the block id.
+                "id": thinking_block.id,
+                "origin": thinking_origin(model, provider, system_msgs),
+            } if thinking_block else None
 
             if tool_use_blocks:
                 malformed_by_id = {tb.id: tb.parse_error for tb in tool_use_blocks if tb.parse_error}  # Failed parses get is_error
@@ -546,17 +561,8 @@ whole conversation history, including compacted turns.
                 calls = {tb.id: resolve_call(tb) for tb in tool_use_blocks}  # Keys on inner call; literal in transcript
 
                 content_blocks = []
-                if thinking_block:
-                    content_blocks.append(
-                        {
-                            "type": "thinking",
-                            "thinking": thinking_block.thinking,
-                            "signature": thinking_block.signature,
-                            # OpenAI Responses can't replay reasoning without the block id.
-                            "id": thinking_block.id,
-                            "origin": thinking_origin(model, provider, system_msgs),
-                        }
-                    )
+                if stored_thinking:
+                    content_blocks.append(stored_thinking)
                 if text_block:
                     content_blocks.append({"type": "text", "text": text_block.text})
                 for tb in tool_use_blocks:
@@ -868,11 +874,20 @@ whole conversation history, including compacted turns.
                 store_msgs(project_dir, msgs)
 
                 reprompts = 0
+                if amends["done"] > amends["shown"]:
+                    amends["shown"] = amends["done"]
+                    yield {"type": "amended"}  # UIs repaint the revised reply from storage
                 # The one safe point to splice plain user messages between tool rounds.
                 yield {"type": "turn_boundary"}
 
             if not tool_use_blocks and text_block:
-                msgs.append({"role": "assistant", "content": text_block.text})
+                final = {"role": "assistant", "content": text_block.text}
+                if stored_thinking:
+                    # Text stays a string (finished-turn shape every reader expects); thinking rides beside it.
+                    final["_thinking"] = [stored_thinking]
+                if amends["done"] and amend_.pure_correction(msgs, turn_start):
+                    final[amend_.ACK_KEY] = True
+                msgs.append(final)
                 yield {"type": "final_text"}
                 break
 

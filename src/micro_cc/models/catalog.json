@@ -89,7 +89,8 @@
       "compat": {
         "reasoning": "litellm",
         "cache_control": true,
-        "betas": true
+        "betas": true,
+        "replay_reasoning": true
       }
     },
     "openai": {

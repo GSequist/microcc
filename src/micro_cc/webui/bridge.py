@@ -217,6 +217,9 @@ async def stream(gen, msg_id, project_dir, notice=None):
             for c in close_all():
                 yield c
 
+        elif etype == "amended":
+            yield sse({"type": "data-amended", "id": "amended", "data": {"at": time.time_ns() // 1_000_000}})  # client refetches history at finish
+
         elif etype == "final_text":
             session.STATE["partial"] = []  # now in msgs
             for c in (close_thinking(), close_text()):

@@ -25,6 +25,7 @@ DEFAULTS = {
     "project": "⏣",
     "hint": "⌖",
     "model": "◈",
+    "amended": "↻",
 }
 
 # Nerd Font icons: cell-width glyphs drawn to match the monospace font, unlike Unicode symbol fallbacks.
