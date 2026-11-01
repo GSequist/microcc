@@ -12,6 +12,7 @@ from micro_cc.utils.tokenization_simple import peek_token_stats
 from micro_cc.utils import status_marker, subagent_notice_
 from micro_cc.tools.bash_tool import list_background_processes, get_output_tail
 from micro_cc.tools.monitor_watch_ import start_watch, stop_watch, list_watches
+from micro_cc.tools import monitor_poll_ as polls
 from micro_cc.tools import monitor_schedule_ as sched
 from micro_cc.tools.use_tool_ import resolve_call
 
@@ -331,9 +332,36 @@ def _format_bgproc_line(pid: int) -> str:
     return line
 
 
+def list_monitors() -> list[dict]:
+    """Watches and polls for the TUI pill and ctrl+b view (same watch_id/description/command/age keys)."""
+    return list_watches() + polls.list_polls()
+
+
+async def stop_monitor(watch_id: str) -> str:
+    return polls.stop_poll(watch_id) or await stop_watch(watch_id)
+
+
+def _format_watch_or_poll(target: str) -> str | None:
+    """Status of a watch or poll id, with the watch's stderr tail; None if it is neither."""
+    from micro_cc.tools.monitor_watch_ import get_watch_output_path
+    if p := next((p for p in polls.list_polls() if p["watch_id"] == target), None):
+        line = f"◎ poll {target} — {p['description']}, every {p['every'] // 60}m, next in {p['next_in']}s"
+        return line + (f"\n  {p['fails']} failed probe(s), last: {p['last_error']}" if p["fails"] else "")
+    path = get_watch_output_path(target)
+    if path is None:
+        return None
+    running = any(w["watch_id"] == target for w in list_watches())
+    try:
+        tail = open(path, errors="replace").read()[-2000:].strip()
+    except OSError:
+        tail = ""
+    return (f"◎ watch {target} — {'running' if running else 'stopped'}"
+            + (f"\n  stderr:\n{tail}" if tail else "\n  (no stderr)"))
+
+
 async def monitor_(
     action: Literal[
-        "check", "watch", "stop", "list",
+        "check", "watch", "poll", "stop", "list",
         "schedule", "schedules", "unschedule",
     ],
     *,
@@ -349,6 +377,10 @@ async def monitor_(
     recurring: Optional[bool] = None,
     durable: bool = False,
     schedule_id: Optional[str] = None,
+    mcp_tool: Optional[str] = None,
+    mcp_args: Optional[dict] = None,
+    key: Optional[str] = None,
+    max_age_days: Optional[float] = None,
 ) -> str:
     """
     Background work: headless subagents, background bash PIDs, live streaming watches,
@@ -366,44 +398,62 @@ async def monitor_(
     action="watch": start a live streaming watch. `command` is a shell pipeline whose stdout
     lines are events (e.g. `tail -f server.log | grep --line-buffered ERROR`); `description`
     labels every notification. Matching lines arrive as their own turn, no polling needed
-    (a top-level headless run stays up until its watches end). persistent=True runs for the whole session; otherwise it is
+    (a top-level headless run stays up until its timed watches end; persistent ones do not
+    keep it alive). persistent=True runs for the whole session; otherwise it is
     killed after timeout_ms (default 5 min, max 1h). Stderr goes to a file: if the command
     seems to fail, check it with action="check" targets=[watch_id]. A watch that fires too
     fast is auto-stopped with a notice to tighten the filter.
 
-    action="stop": stop watch `watch_id` early.
-    action="list": active watches, in case a watch_id was lost.
+    action="poll": check something on an interval and wake only when NEW items appear (new
+    emails, new files, new API records). The probe is either a shell `command` (one item per
+    output line, e.g. `ls -1 ~/Desktop`) or an MCP tool (`mcp_tool` + `mcp_args`, the name you
+    would pass to use_tool_). `key` diffs JSON output by that field (e.g. "id") instead of by line.
+    `spec` is the interval ("5m"; minimum 1 minute). `prompt` holds the standing instructions,
+    repeated with every wake. Existing items count as seen at start; a probe that is unchanged
+    costs no tokens. It stops itself on expired MCP auth, after 5 failed probes in a row, or after
+    max_age_days (default 7, 0 = never), and wakes you with the reason. Interactive session only.
+
+    action="stop": stop watch or poll `watch_id` early.
+    action="list": active watches and polls, in case an id was lost.
 
     action="schedule": fire `prompt` later, once or repeating. `spec` is an interval
     ("20m", "2h", "every 5 minutes") or a 5-field cron in local time ("*/5 * * * *",
     "0 9 * * 1-5"). The prompt arrives as its own turn when due. Intervals default to one-shot,
-    cron defaults to recurring; override with recurring=True/False. durable=True persists across
-    restarts and self-reloads (default is session-only). Recurring schedules auto-expire after
-    7 days (one final fire, then deleted), so tell the user when you schedule one. Schedules
-    fire only while the interactive session is idle, never in a headless run.
+    cron defaults to recurring; override with recurring=True/False. Recurring schedules auto-expire
+    after max_age_days (default 7; one final fire, then deleted), so tell the user. Schedules fire
+    only in the interactive session, never in a headless run.
+
+    durable=True (watch/poll/schedule) survives closing and reopening microcc; by default they
+    last the session (persistent watches and polls also survive a self-reload).
 
     action="schedules": list every schedule (durable and session-only) with id, cadence, next fire.
     action="unschedule": cancel `schedule_id`.
 
     Args:
         targets: For "check": project_dir paths and/or PIDs, mixed freely.
-        command: For "watch": the shell pipeline to run.
-        description: For "watch"/"schedule": short label for notifications.
-        watch_id: For "stop": the id returned when the watch started.
+        command: For "watch": the shell pipeline to run. For "poll": the probe command.
+        description: For "watch"/"poll"/"schedule": short label for notifications.
+        watch_id: For "stop": the id returned when the watch or poll started.
         timeout_ms: For "watch": kill after this long unless persistent.
         persistent: For "watch": run for the whole session instead of timing out.
-        spec: For "schedule": interval or 5-field cron.
-        prompt: For "schedule": the prompt to enqueue when it fires.
+        spec: For "schedule": interval or 5-field cron. For "poll": interval.
+        prompt: For "schedule": the prompt to enqueue when it fires. For "poll": instructions sent with new items.
         recurring: For "schedule": repeat on cadence; default inferred from spec.
-        durable: For "schedule": persist across restarts (default False).
+        durable: For "watch"/"poll"/"schedule": survive restarts (default False).
         schedule_id: For "unschedule": the id returned when scheduled.
+        mcp_tool: For "poll": MCP tool to call as the probe, instead of command.
+        mcp_args: For "poll": arguments for mcp_tool.
+        key: For "poll": JSON field that identifies an item (e.g. "id"); omit to diff by line.
+        max_age_days: For "poll"/"schedule"/durable "watch": stop after this many days (default 7, 0 = never).
     """
     if action == "check":
         if not targets:
             return "Error: action='check' requires targets."
         lines = []
         for target in targets:
-            if target.strip().isdigit():
+            if line := _format_watch_or_poll(target.strip()):  # first: a hex id can be all digits
+                lines.append(line)
+            elif target.strip().isdigit():
                 lines.append(_format_bgproc_line(int(target.strip())))
             else:
                 info = get_subagent_status(target, caller_project_dir=project_dir)
@@ -416,21 +466,35 @@ async def monitor_(
         return await start_watch(
             command, description, project_dir=project_dir,
             timeout_ms=timeout_ms, persistent=persistent,
+            durable=durable, max_age_days=max_age_days,
+        )
+
+    if action == "poll":
+        if not description or not spec or bool(command) == bool(mcp_tool):
+            return "Error: action='poll' requires description, spec, and exactly one of command or mcp_tool."
+        every = sched.parse_interval(spec)
+        if every is None:
+            return f"Error: invalid poll interval '{spec}'. Use e.g. '5m', '1h', 'every 10 minutes'."
+        return await polls.start_poll(
+            project_dir, description=description, every=every, command=command,
+            mcp_tool=mcp_tool, mcp_args=mcp_args, key=key, prompt=prompt,
+            durable=durable, max_age_days=max_age_days,
         )
 
     if action == "stop":
         if not watch_id:
             return "Error: action='stop' requires watch_id."
-        return await stop_watch(watch_id)
+        return polls.stop_poll(watch_id) or await stop_watch(watch_id)
 
     if action == "list":
-        watches = list_watches()
-        if not watches:
-            return "No active watches."
-        return "\n".join(
-            f"{w['watch_id']} · {w['description']} · running {w['age']}s"
-            for w in watches
-        )
+        lines = [f"{w['watch_id']} · watch · {w['description']} · running {w['age']}s" for w in list_watches()]
+        for p in polls.list_polls():
+            line = (f"{p['watch_id']} · poll every {p['every'] // 60}m · {p['description']} · "
+                    f"next in {p['next_in']}s{' · durable' if p['durable'] else ''}")
+            if p["fails"]:
+                line += f" · {p['fails']} failed probe(s), last: {p['last_error']}"
+            lines.append(line)
+        return "\n".join(lines) or "No active watches or polls."
 
     if action == "schedule":
         if not spec or not prompt:
@@ -441,6 +505,7 @@ async def monitor_(
         task, err = sched.add_schedule(
             project_dir, spec, prompt, description or prompt[:60],
             recurring=eff_recurring, durable=durable,
+            max_age_days=sched.DEFAULT_MAX_AGE_DAYS if max_age_days is None else max_age_days,
         )
         if task is None:
             return f"Error: {err}"
@@ -454,8 +519,9 @@ async def monitor_(
             if task["kind"] == "interval" else sched.cron_to_human(task["spec"])
         )
         extra = ""
-        if task["recurring"]:
-            extra = " Recurring schedules auto-expire after 7 days unless you unschedule sooner."
+        if task["recurring"] and task["max_age_seconds"]:
+            extra = (f" Recurring schedules auto-expire after {task['max_age_seconds'] / 86400:g} days "
+                     "unless you unschedule sooner.")
         return (
             f"Scheduled {task['id']} — {label} ({kind}, {scope}).{extra} "
             f"It fires as its own turn when due. Cancel with "
@@ -477,5 +543,5 @@ async def monitor_(
 
     return (
         f"Error: unknown action '{action}'. Use "
-        "check|watch|stop|list|schedule|schedules|unschedule."
+        "check|watch|poll|stop|list|schedule|schedules|unschedule."
     )

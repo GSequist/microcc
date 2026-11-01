@@ -2,9 +2,7 @@ import asyncio
 import traceback
 import os
 import re
-import subprocess
 import sys
-import platform
 
 from rich.markup import escape as _markup_escape
 from micro_cc.utils import self_reload_
@@ -38,7 +36,7 @@ from micro_cc.utils.project_files_ import list_project_files, rank_file_matches
 from micro_cc.models import catalog as model_catalog
 from micro_cc.models.providers import active_provider, any_configured
 from micro_cc.models.client import prewarm as model_prewarm
-from micro_cc.utils import settings_store_, whats_new
+from micro_cc.utils import settings_store_, whats_new, keep_awake_
 from micro_cc.utils.tokenization_simple import load_token_stats
 from micro_cc.claude_loop_ import claude_loop
 from collections import deque
@@ -76,23 +74,6 @@ _builtins.print = _bg_print
 
 # --------------- sleep inhibitor ---------------
 # macOS only via caffeinate -i; no-op on Linux/Docker.
-
-
-def _inhibit_sleep():
-    """Start system idle sleep inhibitor."""
-    if platform.system() != "Darwin":
-        return None
-    return subprocess.Popen(
-        ["caffeinate", "-i"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
-
-
-def _allow_sleep(handle):
-    """Release the sleep inhibition."""
-    if handle is None:
-        return
-    handle.terminate()
-    handle.wait()
 
 
 
@@ -1232,7 +1213,7 @@ class MicroTui():
         if replaced:
             self._flash_status(_markup_escape(model_catalog.stale_model_notice(self._current_model)), seconds=10)
 
-        sleep_handle = _inhibit_sleep()
+        keep_awake_.hold("turn")
         try:
             async for event in claude_loop(
                 query=query,
@@ -1255,7 +1236,7 @@ class MicroTui():
             # action_cancel_query already did the UI cleanup; fall through to the idempotent finally.
             pass
         finally:
-            _allow_sleep(sleep_handle)
+            keep_awake_.hold("turn", False)
             self._pending_input = None
             self._finalize_streaming()
             self._set_busy(False)
@@ -1278,6 +1259,13 @@ class MicroTui():
             gui_session.push_incoming(content)
             return
         if self._input_mode == "query_active":
+            # Merge monitor events piling up behind a busy turn into one queued turn.
+            if content.startswith("[monitor:") and self._queue and self._queue[-1][0].startswith("[monitor:"):
+                prev, prev_row, prev_msg, _ = self._queue.pop()
+                self.message_list.remove(prev_row)
+                if prev_msg in self._msg_rows:
+                    self._msg_rows.remove(prev_msg)
+                content = f"{prev}\n\n{content}"
             msg = {"type": "user_queued", "content": content}
             row = await self._mount_row(msg)
             self._queue.append((content, row, msg, None))
@@ -1316,10 +1304,10 @@ class MicroTui():
     def _show_bgproc_detail(self) -> None:
         """ctrl+b: show background processes and watches in the prompt slot; leaves _input_mode alone."""
         from micro_cc.tools.bash_tool import list_background_processes
-        from micro_cc.tools.monitor_watch_ import list_watches
+        from micro_cc.tools.monitor_ import list_monitors
 
         procs = list_background_processes()
-        watches = list_watches()
+        watches = list_monitors()
         if not procs and not watches:
             self._flash_status("no background processes or watches", seconds=2.5)
             return
@@ -1334,10 +1322,10 @@ class MicroTui():
     def _kill_bgproc_item(self, item: PanelItem) -> None:
         """Enter in the ctrl+b view: kill the selected process group or stop the watch, keep the view open."""
         from micro_cc.tools.bash_tool import kill_background_process
-        from micro_cc.tools.monitor_watch_ import stop_watch
+        from micro_cc.tools.monitor_ import stop_monitor
 
         async def _stop(watch_id: str):
-            self._flash_status(_markup_escape(await stop_watch(watch_id)))
+            self._flash_status(_markup_escape(await stop_monitor(watch_id)))
             self._reopen_bgproc_detail()
 
         if item.value.startswith("watch:"):
@@ -1432,6 +1420,12 @@ class MicroTui():
         from micro_cc.tools import monitor_watch_ as _monitor_watch_
 
         _monitor_watch_.set_wake_callback(self._on_monitor_event)
+        from micro_cc.tools import monitor_poll_ as _monitor_poll_
+
+        _monitor_poll_.set_wake_callback(self._on_monitor_event)
+        # Resume watches and polls saved by a self-reload (or durable ones from a past session).
+        self._safe_task(_monitor_watch_.rearm(self._project_dir), "re-arm watches")
+        _monitor_poll_.rearm(self._project_dir)
 
         # Scheduled prompts push like watch lines; set_start_tick lets a late-added schedule start the tick.
         from micro_cc.tools import monitor_schedule_runtime as _schedule_rt
@@ -1546,6 +1540,10 @@ class MicroTui():
         from micro_cc.tools import monitor_watch_ as _monitor_watch_
 
         _monitor_watch_.kill_all()
+        from micro_cc.tools import monitor_poll_ as _monitor_poll_
+
+        _monitor_poll_.kill_all()
+        keep_awake_.release_all()
         if self._render_task is not None:
             self._render_task.cancel()
         if self._stdin_reader_registered:

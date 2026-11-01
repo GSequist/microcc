@@ -1,5 +1,6 @@
 """Streaming watches: a shell command whose stdout lines are pushed as new turns as they happen
-(monitor_ action="watch"). In-process only, no persistence. Refused when no session listens.
+(monitor_ action="watch"). Refused when no session listens. Persistent watches are saved in
+monitors.json and re-armed after a self-reload (durable ones also after a restart).
 """
 
 import asyncio
@@ -9,6 +10,7 @@ import time
 import uuid
 from pathlib import Path
 
+from micro_cc.tools import monitor_store_ as store
 from micro_cc.tools.bash_tool import _bash_env
 from micro_cc.utils.msg_store_ import _get_storage_dir
 
@@ -62,14 +64,22 @@ async def start_watch(
     project_dir: str,
     timeout_ms: int = 300_000,
     persistent: bool = False,
+    durable: bool = False,
+    max_age_days: float | None = None,
+    watch_id: str | None = None,
+    expires_at: float | None = None,
 ) -> str:
+    """durable implies persistent; a durable watch stops at expires_at (default 7 days, from max_age_days)."""
     if _wake_callback is None:
         return (
             "[monitor watch unavailable: no session is listening for pushed "
             "events right now. Use action='check' instead.]"
         )
 
-    watch_id = uuid.uuid4().hex[:8]
+    persistent = persistent or durable
+    if durable and expires_at is None:
+        expires_at = store.expires_at(max_age_days)
+    watch_id = watch_id or uuid.uuid4().hex[:8]
     out_path = _output_path(project_dir, watch_id)
     proc = await asyncio.create_subprocess_shell(
         command,
@@ -91,12 +101,21 @@ async def start_watch(
         "fire_times": [],
         "output_path": str(out_path),
         "persistent": persistent,
+        "durable": durable,
     }
+    if persistent:
+        store.put(project_dir, "watches", watch_id, {
+            "command": command, "description": description, "durable": durable,
+            "pid": os.getpid(), "created_at": time.time(), "expires_at": expires_at})
     _watches[watch_id]["reader_task"] = asyncio.ensure_future(_reader_loop(watch_id))
     _watches[watch_id]["stderr_task"] = asyncio.ensure_future(_stderr_to_file(watch_id))
     if not persistent:
         _watches[watch_id]["timeout_task"] = asyncio.ensure_future(
             _timeout_guard(watch_id, timeout_ms)
+        )
+    elif expires_at:
+        _watches[watch_id]["timeout_task"] = asyncio.ensure_future(
+            _timeout_guard(watch_id, max(0, expires_at - time.time()) * 1000, "reached its time limit; tell the user")
         )
 
     return (
@@ -106,13 +125,13 @@ async def start_watch(
     )
 
 
-async def _timeout_guard(watch_id: str, timeout_ms: int) -> None:
+async def _timeout_guard(watch_id: str, timeout_ms: float, reason: str | None = None) -> None:
     try:
         await asyncio.sleep(timeout_ms / 1000)
     except asyncio.CancelledError:
         return
     if _watches.get(watch_id, {}).get("status") == "running":
-        await stop_watch(watch_id, reason=f"timed out after {timeout_ms}ms")
+        await stop_watch(watch_id, reason=reason or f"timed out after {timeout_ms:.0f}ms")
 
 
 async def _reader_loop(watch_id: str) -> None:
@@ -188,6 +207,7 @@ def _finish(watch_id: str, reason: str) -> None:
     if entry is None:
         return
     entry["status"] = "stopped"
+    store.drop(entry["project_dir"], "watches", watch_id)
     timeout_task = entry.get("timeout_task")
     if timeout_task is not None and not timeout_task.done():
         timeout_task.cancel()  # a sleeping guard would otherwise hold a headless drain open
@@ -203,6 +223,7 @@ async def stop_watch(watch_id: str, *, reason: str = "stopped by request") -> st
         return f"Watch {watch_id} is already stopped."
     # Set before cancelling so _reader_loop's finally skips its own "stream ended" notice.
     entry["status"] = "stopped"
+    store.drop(entry["project_dir"], "watches", watch_id)
     for key in ("reader_task", "stderr_task", "timeout_task"):
         task = entry.get(key)
         if task is not None and not task.done():
@@ -216,10 +237,26 @@ async def stop_watch(watch_id: str, *, reason: str = "stopped by request") -> st
     return f"Watch {watch_id} stopped ({reason})."
 
 
+async def rearm(project_dir: str) -> int:
+    """Restart persisted watches (TUI start); returns how many."""
+    n = 0
+    for rec in store.rearmable(project_dir, "watches"):
+        if rec["id"] in _watches and _watches[rec["id"]]["status"] == "running":
+            continue
+        if rec.get("expires_at") and rec["expires_at"] <= time.time():
+            store.drop(project_dir, "watches", rec["id"])
+            continue
+        await start_watch(rec["command"], rec["description"], project_dir=project_dir, persistent=True,
+                          durable=rec.get("durable", False), watch_id=rec["id"], expires_at=rec.get("expires_at"))
+        n += 1
+    return n
+
+
 def kill_all() -> None:
-    """App-shutdown cleanup: kill still-running watch process groups."""
+    """App-shutdown cleanup: kill still-running watch process groups (records stay for re-arm)."""
     for entry in _watches.values():
         if entry["status"] == "running":
+            entry["status"] = "killed"  # the reader's finally must not drop the record
             try:
                 os.killpg(entry["proc"].pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):

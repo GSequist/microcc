@@ -102,10 +102,7 @@ read the result. You can still call monitor_(action="check", targets=[project_di
 any time you want an on-demand sweep of every subagent instead of waiting to be
 woken (e.g. right after spawning a batch). Calling it repeatedly, including on
 an already-finished subagent, is safe — it will not cause a duplicate wakeup
-or resurrect something already cleaned up. monitor_ is only in scope on a
-turn where there's actually a tracked subagent, a backgrounded bash process,
-or an active watch to check on — claude_loop_.py adds it conditionally, so
-you won't see it as a tool otherwise.
+or resurrect something already cleaned up.
 
 For anything you'd otherwise have to poll for repeatedly instead of just
 waiting for the built-in checkpoint wakeup above — e.g. watching a
@@ -118,16 +115,19 @@ matches, so you never have to remember to check back in. Stop it early with
 monitor_(action="stop", watch_id=...); it auto-stops itself if it ever fires
 too fast for a real filter to explain. Works in the live session and in a
 top-level headless run, which stays up after its final reply until its
-subagents checkpoint and its watches end (or --wait-timeout seconds pass
-with no wakeup; it resets on every wakeup). A subagent never waits: it ends
-at its final reply, so watches are refused there.
+subagents checkpoint and its timed watches end (persistent watches don't
+hold it open; --wait-timeout seconds with no wakeup also ends it, reset on
+every wakeup). A subagent never waits: it ends at its final reply, so
+watches are refused there. For something that can only be polled (an API,
+an MCP tool), monitor_(action="poll") wakes you only on new items — live
+session only; the keep-checking skill covers it.
 
 Mechanism: utils/subagent_tracker_.py (one record per subagent, one file per
 boss, fcntl-locked since a subagent is a separate OS process) and
 tools/monitor_.py's poll_checkpoints/checkpoint_turn (the 3s poll shared by
 the TUI's tui_native/pollers_.py and headless's _next_wake); monitor_'s own
-status-reading logic is in tools/monitor_.py, and the streaming watch
-mechanism is in tools/monitor_watch_.py.
+status-reading logic is in tools/monitor_.py, the streaming watch
+mechanism is in tools/monitor_watch_.py, polls in tools/monitor_poll_.py.
 
 Each tracked subagent is one record with its own `status` and a `notified`
 flag — not membership in a list. A DONE/FAILED subagent stops appearing on

@@ -2,7 +2,7 @@ name: install-test
 
 on:
   push:
-    paths: [install.sh, install.ps1, pyproject.toml, tests/smoke_browser.py, src/micro_cc/tools/browser_tool_.py, .github/workflows/install-test.yml]
+    paths: [install.sh, install.ps1, pyproject.toml, tests/smoke_browser.py, src/micro_cc/tools/browser_tool_.py, src/micro_cc/utils/keep_awake_.py, tests/test_keep_awake.py, .github/workflows/install-test.yml]
   schedule:
     - cron: "17 5 * * *"   # nightly: catches astral.sh / PyPI drift
   workflow_dispatch:
@@ -34,6 +34,11 @@ jobs:
           export PATH="$H/.local/bin:/usr/bin:/bin"
           command -v microcc
           "$(HOME=$H uv tool dir)/micro-cc/bin/python" -c "import micro_cc, sys; print(sys.version)"
+      # idle-sleep inhibitor (caffeinate) as pmset reports it; stdlib-only, so this commit's src/
+      - name: keep awake
+        env:
+          MICROCC_KEEP_AWAKE_REQUIRED: "1"
+        run: python3 tests/test_keep_awake.py
 
   linux:
     runs-on: ubuntu-latest
@@ -56,6 +61,16 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           command -v microcc
           "$(uv tool dir)/micro-cc/bin/python" -c "import micro_cc"
+
+  keep-awake-linux:
+    # needs a real VM: containers have no systemd-logind to inhibit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: keep awake (systemd-inhibit)
+        env:
+          MICROCC_KEEP_AWAKE_REQUIRED: "1"
+        run: python3 tests/test_keep_awake.py
 
   linux-browser:
     # browser tool on a fresh install: WSLg-like display (xvfb) and no display (Win10 WSL / ssh)
@@ -143,6 +158,13 @@ jobs:
           ./install.ps1
           $code = $LASTEXITCODE
           if ($code -ne 0) { throw "second install.ps1 run exited $code" }
+      # Windows-side sleep block from WSL (powershell.exe + SetThreadExecutionState), checked with powercfg
+      - name: keep awake inside WSL
+        shell: pwsh
+        run: |
+          wsl -d Ubuntu -e sh -c 'MICROCC_KEEP_AWAKE_REQUIRED=1 python3 tests/test_keep_awake.py'
+          if ($LASTEXITCODE -ne 0) { throw "keep-awake test failed in WSL" }
+          $global:LASTEXITCODE = 0
       # last: overlays the checkout and may leave Windows Chrome running
       - name: browser + computer inside WSL
         shell: pwsh

@@ -14,8 +14,9 @@ from micro_cc.utils.msg_store_ import load_memory_review_recap
 def poll_bgprocs_tick(app) -> None:
     """Re-render bg process and watch pills, skipping pids shown as tracked subagents."""
     from micro_cc.tools.bash_tool import list_background_processes
-    from micro_cc.tools.monitor_watch_ import list_watches
-    from micro_cc.utils import subagent_tracker_
+    from micro_cc.tools.monitor_ import list_monitors, CHECKPOINT_STATUSES
+    from micro_cc.tools import monitor_schedule_ as sched
+    from micro_cc.utils import subagent_tracker_, keep_awake_
 
     tracked = subagent_tracker_.read_tracked(app._project_dir)["subagents"]
     subagent_pids = {
@@ -24,7 +25,11 @@ def poll_bgprocs_tick(app) -> None:
     procs = [
         p for p in list_background_processes() if p["pid"] not in subagent_pids
     ]
-    watches = list_watches()
+    watches = list_monitors()
+    # Keep the machine awake while anything can still wake us; the turn holds its own.
+    keep_awake_.hold("background", bool(
+        watches or sched.load_schedules(app._project_dir)
+        or any(e.get("status") not in CHECKPOINT_STATUSES for e in tracked.values())))
     if app._bgproc_viewing:
         app._refresh_bgproc_detail(procs, watches)
 

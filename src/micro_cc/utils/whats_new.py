@@ -6,6 +6,10 @@ from micro_cc.utils import settings_store_
 
 # Key = the version publish.sh will ship (pyproject + 1); versions without an entry show nothing.
 NOTES = {
+    "0.2.129": [
+        "Ask \"keep checking my emails\" (or files, or any API): microcc checks quietly and only wakes on new items",
+        "Your computer stays awake while microcc has work running, on macOS, Linux and Windows (WSL)",
+    ],
     "0.2.112": [
         "Auto gate: a model check can allow gated calls it judges safe (turn on in /dangerous)",
         "Approval prompts now explain each call in plain language and show a risk badge",

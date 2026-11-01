@@ -7,6 +7,7 @@ Catalog opt-in: `"oauth": true` or `"oauth": {"client_id", "client_secret", "sco
 
 import asyncio
 import base64
+import contextvars
 import hashlib
 import json
 import os
@@ -32,6 +33,13 @@ CLIENT_NAME = "micro-cc"
 CLIENT_METADATA_URL = os.environ.get("MICROCC_OAUTH_CLIENT_METADATA_URL", "")
 
 _locks: dict[str, asyncio.Lock] = {}
+
+# True inside unattended callers (monitor polls): a dead refresh token raises AuthExpired instead of a browser login.
+UNATTENDED = contextvars.ContextVar("mcp_unattended", default=False)
+
+
+class AuthExpired(RuntimeError):
+    """Refresh failed and nobody is there to log in."""
 _listeners: set = set()
 
 
@@ -346,5 +354,8 @@ async def oauth_headers(server_url: str, cfg: dict | None = None, rejected: str 
         stale = rejected is not None and rejected == f"Bearer {token}"
         fresh = token and not stale and (not entry.get("expires_at") or entry["expires_at"] - time.time() > REFRESH_SKEW)
         if not fresh:
-            entry = await _refresh(server_url, entry) or await login(server_url, cfg)
+            refreshed = await _refresh(server_url, entry)
+            if refreshed is None and UNATTENDED.get():
+                raise AuthExpired(f"OAuth for {server_url} expired and could not refresh; call one of its tools in chat to log in again")
+            entry = refreshed or await login(server_url, cfg)
         return {"Authorization": f"Bearer {entry['access_token']}"}

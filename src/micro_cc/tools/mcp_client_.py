@@ -410,6 +410,9 @@ async def call_mcp_tool(server_url: str, tool_name: str, arguments: dict, header
             headers = await _auth_headers(entry, project_dir, rejected=(headers or {}).get("Authorization")) or None
             return await _guarded(_call(headers), timeout)
     except Exception as e:
+        from micro_cc.tools.mcp_oauth import AuthExpired
+        if isinstance(e, AuthExpired):
+            raise  # unattended caller decides (only raised when mcp_oauth.UNATTENDED is set)
         hint = ""
         if entry and _auth_failed(e):
             hint = (" — auth rejected (token likely expired). Tokens are re-read from .env / the OAuth store on every "
