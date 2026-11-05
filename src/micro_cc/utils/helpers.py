@@ -34,13 +34,20 @@ def apply_login(values: dict, provider: str):
 
 
 def apply_project_keys(project_dir: str, values: dict):
-    """Append secrets to project .env (sourced fresh per bash call)."""
+    """Upsert secrets into project .env (sourced fresh per bash call); re-entered names replace the old line."""
     values = {k: v for k, v in values.items() if v}
     if not values:
         return
 
     env_path = os.path.join(project_dir, ".env")
-    with open(env_path, "a") as f:
+    kept = []
+    if os.path.isfile(env_path):
+        for line in open(env_path).read().splitlines():
+            name = line.removeprefix("export ").split("=", 1)[0].strip()
+            if name not in values:
+                kept.append(line)
+    with open(env_path, "w") as f:
+        f.write("".join(f"{line}\n" for line in kept))
         for k, v in values.items():
             f.write(f"{k}={v}\n")
 

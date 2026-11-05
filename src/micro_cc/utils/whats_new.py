@@ -7,6 +7,7 @@ from micro_cc.utils import settings_store_
 # Key = the version the next publish ships: run `./publish.sh --next`. Versions without an entry show nothing.
 NOTES = {
     "0.2.132": [
+        "/keys now replaces a key you enter again (e.g. a fresh GRAPH_API_KEY) instead of appending a stale duplicate to .env",
         "Coming back from /gui on a long conversation no longer leaves a garbled status line: the screen fully redraws on return",
         "GUI server errors and warnings go to ~/.micro-cc/gui.log instead of spilling into the terminal",
         "Pressing esc to leave /gui no longer freezes the terminal while the server shuts down",
