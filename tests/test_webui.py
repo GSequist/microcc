@@ -360,11 +360,39 @@ class GuiTests(unittest.TestCase):
         async def reload():
             calls.append(("reload",))
 
-        fake = SimpleNamespace(_input_mode="idle", _reload_messages_from_disk=reload,
-                               _inject_incoming_turn=inject, _drain_next_queued=drain)
+        noop = lambda *a, **k: None
+        fake = SimpleNamespace(
+            _input_mode="gui", _gui_url="u", _gui_shutdown=lambda: calls.append(("shutdown",)),
+            prompt=SimpleNamespace(placeholder=""), set_focus=noop,
+            tui=SimpleNamespace(previous_screen=["stale"]),
+            _refresh_status=noop, _static_hint_text=noop, request_render=noop, _flash_status=noop,
+            _reload_messages_from_disk=reload, _inject_incoming_turn=inject, _drain_next_queued=drain,
+        )
         asyncio.run(MicroTui._resume_after_gui(fake))
-        self.assertEqual(calls, [("reload",), ("inject", "w1"), ("inject", "w2")])  # no drain over a live turn
+        self.assertEqual(calls, [("shutdown",), ("reload",), ("inject", "w1"), ("inject", "w2")])  # no drain over a live turn
         self.assertEqual(session.STATE["incoming"], [])
+        self.assertEqual(fake.tui.previous_screen, [])  # forces a full repaint
+        self.assertIsNone(fake._gui_shutdown)
+
+    def test_resume_after_gui_repaints_even_if_reload_fails(self):
+        import asyncio
+        from types import SimpleNamespace
+        from micro_cc.start_live_tui_ import MicroTui
+
+        async def reload():
+            raise RuntimeError("bad history")
+
+        noop = lambda *a, **k: None
+        fake = SimpleNamespace(
+            _input_mode="gui", _gui_url="u", _gui_shutdown=noop,
+            prompt=SimpleNamespace(placeholder=""), set_focus=noop,
+            tui=SimpleNamespace(previous_screen=["stale"]),
+            _refresh_status=noop, _static_hint_text=noop, request_render=noop, _flash_status=noop,
+            _reload_messages_from_disk=reload,
+        )
+        with self.assertRaises(RuntimeError):
+            asyncio.run(MicroTui._resume_after_gui(fake))
+        self.assertEqual((fake._input_mode, fake.tui.previous_screen), ("idle", []))
 
     def test_tui_routes_wakeups_to_gui_while_gui_owns_the_session(self):
         import asyncio

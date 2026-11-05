@@ -6,6 +6,11 @@ from micro_cc.utils import settings_store_
 
 # Key = the version the next publish ships: run `./publish.sh --next`. Versions without an entry show nothing.
 NOTES = {
+    "0.2.132": [
+        "Coming back from /gui on a long conversation no longer leaves a garbled status line: the screen fully redraws on return",
+        "GUI server errors and warnings go to ~/.micro-cc/gui.log instead of spilling into the terminal",
+        "Pressing esc to leave /gui no longer freezes the terminal while the server shuts down",
+    ],
     "0.2.131": [
         "Decks on your own template: drop in a .pptx/.potx and microcc fills its layouts with real titles, text and native charts",
         "The browser tool can drive your own running Chrome (with your logins) once remote debugging is on",

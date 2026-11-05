@@ -1,5 +1,6 @@
 """Native-renderer command handlers (same commands as screen_cmds_.py)."""
 
+import asyncio
 import os
 import signal
 import subprocess
@@ -430,17 +431,21 @@ async def cmd_gui(app):
     app.copy_to_clipboard(url)
 
 
-def stop_gui(app):
-    """Tear down GUI server; safe to call twice."""
+async def stop_gui(app) -> bool:
+    """Tear down GUI server off the event loop; safe to call twice."""
     shutdown = getattr(app, "_gui_shutdown", None)
     if shutdown is None:
         return False
-    shutdown()
+    # Cleared first so a second Esc during the join is a no-op.
     app._gui_shutdown = None
     app._gui_url = None
-    app._input_mode = "idle"
-    app.prompt.placeholder = ""
-    app.set_focus(app.prompt)
+    app.prompt.placeholder = "stopping GUI…"
+    try:
+        await asyncio.to_thread(shutdown)
+    finally:
+        app._input_mode = "idle"
+        app.prompt.placeholder = ""
+        app.set_focus(app.prompt)
     return True
 
 

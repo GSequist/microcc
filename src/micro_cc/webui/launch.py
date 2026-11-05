@@ -41,6 +41,33 @@ def _close_tabs(base: str) -> None:
             pass
 
 
+GUI_LOG = os.path.expanduser("~/.micro-cc/gui.log")
+
+
+def _redirect_stderr() -> int | None:
+    """Point fd 2 at GUI_LOG; returns the saved fd (None if redirect failed)."""
+    try:
+        os.makedirs(os.path.dirname(GUI_LOG), exist_ok=True)
+        sys.stderr.flush()
+        saved = os.dup(2)
+        with open(GUI_LOG, "w") as f:
+            os.dup2(f.fileno(), 2)
+        return saved
+    except OSError:
+        return None
+
+
+def _restore_stderr(saved: int | None) -> None:
+    if saved is None:
+        return
+    try:
+        sys.stderr.flush()
+        os.dup2(saved, 2)
+        os.close(saved)
+    except OSError:
+        pass
+
+
 def serve(project_dir, *, model=None, trim_budget=None,
           host=HOST, port=PORT, open_browser=True):
     """Boot the server. Returns (url, shutdown) — call shutdown() to stop it."""
@@ -75,11 +102,15 @@ def serve(project_dir, *, model=None, trim_budget=None,
     finally:
         probe.close()
 
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning", timeout_graceful_shutdown=3)
+    # log_config=None: uvicorn's default handlers write straight to the tty and corrupt the TUI's diff renderer.
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning", log_config=None, timeout_graceful_shutdown=3)
     server = uvicorn.Server(config)
 
     # uvicorn can't install signal handlers off the main thread; the TUI owns Ctrl-C.
     server.install_signal_handlers = lambda: None
+
+    # Anything else hitting fd 2 (thread excepthook, warnings, C libs) goes to a log, not the screen.
+    saved_stderr = _redirect_stderr()
 
     thread = threading.Thread(target=server.run, name="micro-cc-gui", daemon=True)
     thread.start()
@@ -102,9 +133,12 @@ def serve(project_dir, *, model=None, trim_budget=None,
         threading.Thread(target=_open, name="micro-cc-gui-open", daemon=True).start()
 
     def shutdown():
-        session.STATE["stop"].set()  # in-flight turn breaks at its next chunk and persists
-        server.should_exit = True
-        thread.join(timeout=5)
-        _close_tabs(base)
+        try:
+            session.STATE["stop"].set()  # in-flight turn breaks at its next chunk and persists
+            server.should_exit = True
+            thread.join(timeout=5)
+            _close_tabs(base)
+        finally:
+            _restore_stderr(saved_stderr)
 
     return url, shutdown

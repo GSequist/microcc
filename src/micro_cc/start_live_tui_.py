@@ -845,9 +845,21 @@ class MicroTui():
         self.request_render()
 
     async def _resume_after_gui(self) -> None:
-        """Reload from disk, then drain queued items (must be sequenced)."""
-        await self._reload_messages_from_disk()
+        """Stop the server, reload from disk, repaint, then drain queued items (must be sequenced)."""
+        from micro_cc.tui_native.screen_cmds_ import stop_gui
         from micro_cc.webui import session as gui_session
+
+        try:
+            if not await stop_gui(self):
+                return
+            await self._reload_messages_from_disk()
+        finally:
+            # Diff renderer trusts previous_screen; anything that reached the tty meanwhile is only cleared by a full repaint.
+            self.tui.previous_screen = []
+            self._refresh_status()
+            self._static_hint_text()
+            self.request_render()
+        self._flash_status("< GUI stopped — terminal is live again")
         for content in gui_session.drain_incoming():  # unclaimed wakeups go back to the terminal
             await self._inject_incoming_turn(content)
         if self._input_mode != "query_active":  # a drained wakeup already started a turn; its finally drains the rest
@@ -940,11 +952,8 @@ class MicroTui():
 
         # /gui handed the session to the browser; ESC takes it back.
         if self._input_mode == "gui":
-            from micro_cc.tui_native.screen_cmds_ import stop_gui
-
-            if stop_gui(self):
+            if self._gui_shutdown is not None:
                 self._safe_task(self._resume_after_gui(), "resume after gui")
-                self._flash_status("< GUI stopped — terminal is live again")
             return
 
         if self._input_mode == "login":
@@ -1052,7 +1061,7 @@ class MicroTui():
         # The browser owns the conversation during /gui; two writers would corrupt the jsonl.
         if self._input_mode == "gui":
             self.prompt.clear()
-            self._flash_status(f"> GUI has the session — {self._gui_url} · esc to stop")
+            self._flash_status(f"> GUI has the session — {self._gui_url} · esc to stop" if self._gui_url else "~ stopping GUI…")
             return
 
         if self._input_mode == "login":
