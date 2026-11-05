@@ -4,7 +4,7 @@ from importlib.metadata import version
 
 from micro_cc.utils import settings_store_
 
-# Key = the version publish.sh will ship (pyproject + 1); versions without an entry show nothing.
+# Key = the version the next publish ships: run `./publish.sh --next`. Versions without an entry show nothing.
 NOTES = {
     "0.2.131": [
         "Decks on your own template: drop in a .pptx/.potx and microcc fills its layouts with real titles, text and native charts",
