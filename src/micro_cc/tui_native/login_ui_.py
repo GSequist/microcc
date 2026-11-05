@@ -120,7 +120,7 @@ def handle_login_input(app, query: str) -> None:
         app._login_stage = sequence[next_index]
         app.prompt.placeholder = model_catalog.login_prompt(app._login_stage)
         # Confirm field registered before box goes blank for next stage.
-        app._flash_status(f"✓ {key_name} saved")
+        app._flash_status(f"+ {key_name} saved")
         return
 
     provider = app._login_provider

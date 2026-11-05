@@ -212,7 +212,7 @@ async def handle_cache_invalidate(app, event, container, tool_call_rows, approva
     tokens = f"{event.get('missed_tokens', 0):,}"
     label = f"cache miss ({reason})" if reason else "cache miss"
     # TextLine markup only supports [red] and [#rrggbb], so use theme's error token.
-    app._flash_status(f"[{theme_store_.get('error')}]⚠ {label}: {tokens} tokens re-billed[/{theme_store_.get('error')}]", seconds=5)
+    app._flash_status(f"[{theme_store_.get('error')}]! {label}: {tokens} tokens re-billed[/{theme_store_.get('error')}]", seconds=5)
 
 
 ETYPES = {

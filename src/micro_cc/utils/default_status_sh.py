@@ -23,11 +23,6 @@ try:
 except Exception:
     pass
 
-# Nerd Font icons where the terminal ships them (Ghostty/WezTerm/kitty), plain Unicode elsewhere.
-nerd = os.environ.get("MICRO_CC_NERD", "1" if os.environ.get("TERM_PROGRAM") in ("ghostty", "WezTerm")
-                      or os.environ.get("TERM") == "xterm-kitty" else "0") == "1"
-I = dict(model="\\U000f06a9", ctx="\\U000f061a", cut="\\U000f0190", warn="\\U000f0ecd") if nerd \\
-    else dict(model="\\u25c8", ctx="\\u25a4", cut="\\u2702", warn="\\u26a0")
 SEP = " [dim]\\u00b7[/dim] "
 
 
@@ -35,20 +30,20 @@ def k(n):
     return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k" if n >= 1e3 else str(n)
 
 
-parts = [f"{I['model']} {settings.get('model', '?')}"]
+parts = [f"model {settings.get('model', '?')}"]
 if t.get("input"):
     budget = t.get("budget") or settings.get("tokens_budget") or 0
     if budget:
         pct = min(t["input"] / budget, 1)
-        bar, rest = "\\u2501" * round(pct * 10), "\\u2500" * (10 - round(pct * 10))
-        parts.append(f"[dim]{I['ctx']}[/dim] {bar}[dim]{rest} {k(t['input'])}/{k(budget)} ({pct:.0%})[/dim]")
+        bar, rest = "=" * round(pct * 10), "-" * (10 - round(pct * 10))
+        parts.append(f"[dim]ctx[/dim] {bar}[dim]{rest} {k(t['input'])}/{k(budget)} ({pct:.0%})[/dim]")
     else:
-        parts.append(f"[dim]{I['ctx']} {k(t['input'])}[/dim]")
-    parts.append(f"[dim]\\u2191 {k(t.get('output', 0))}[/dim]")
+        parts.append(f"[dim]ctx {k(t['input'])}[/dim]")
+    parts.append(f"[dim]out {k(t.get('output', 0))}[/dim]")
     if t.get("trimmed"):
-        parts.append(f"[dim]{I['cut']} {k(t['trimmed'])}[/dim]")
+        parts.append(f"[dim]cut {k(t['trimmed'])}[/dim]")
 dangerous = settings.get("dangerous") or []
 if dangerous:
-    parts.append(f"[dim]{I['warn']} {len(dangerous)} gated[/dim]")
+    parts.append(f"[dim]! {len(dangerous)} gated[/dim]")
 print(SEP.join(parts))
 """

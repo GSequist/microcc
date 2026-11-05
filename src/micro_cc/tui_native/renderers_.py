@@ -156,7 +156,7 @@ def _tool_call(msg, r, ansi_result=False):
     first_line = plain_result.splitlines()[0] if plain_result else plain_result
     truncated = len(first_line) > 40 or "\n" in plain_result
     preview = first_line[:40] + ("…" if truncated else "")
-    return Text(f"{glyph('tool')} {name} → {preview} ({glyph('hint_expand')})", style="dim")
+    return Text(f"{glyph('tool')} {name} -> {preview} ({glyph('hint_expand')})", style="dim")
 
 
 def _tool_call_bash(msg, r):

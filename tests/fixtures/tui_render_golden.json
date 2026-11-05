@@ -1,20 +1,20 @@
 {
  "user": {
   "80": [
-   "\u001b[38;2;224;127;176m› \u001b[0m\u001b[38;2;208;208;208mhello there\u001b[0m",
+   "\u001b[38;2;224;127;176m> \u001b[0m\u001b[38;2;208;208;208mhello there\u001b[0m",
    "\u001b[38;2;208;208;208msecond line\u001b[0m"
   ],
   "40": [
-   "\u001b[38;2;224;127;176m› \u001b[0m\u001b[38;2;208;208;208mhello there\u001b[0m",
+   "\u001b[38;2;224;127;176m> \u001b[0m\u001b[38;2;208;208;208mhello there\u001b[0m",
    "\u001b[38;2;208;208;208msecond line\u001b[0m"
   ]
  },
  "user_queued": {
   "80": [
-   "\u001b[2;3;38;2;209;154;102m⋯queued queued msg\u001b[0m"
+   "\u001b[2;3;38;2;209;154;102m[queued] queued msg\u001b[0m"
   ],
   "40": [
-   "\u001b[2;3;38;2;209;154;102m⋯queued queued msg\u001b[0m"
+   "\u001b[2;3;38;2;209;154;102m[queued] queued msg\u001b[0m"
   ]
  },
  "text": {
@@ -43,43 +43,43 @@
  },
  "thinking": {
   "80": [
-   "\u001b[2;3m∴ Thinking\u001b[0m",
+   "\u001b[2;3mThinking\u001b[0m",
    "\u001b[2mpondering \u001b[0m\u001b[2;3mhard\u001b[0m                                                                  ",
    ""
   ],
   "40": [
-   "\u001b[2;3m∴ Thinking\u001b[0m",
+   "\u001b[2;3mThinking\u001b[0m",
    "\u001b[2mpondering \u001b[0m\u001b[2;3mhard\u001b[0m                          ",
    ""
   ]
  },
  "tool_pending": {
   "80": [
-   "\u001b[3;38;2;229;192;123m◇ read_ \u001b[0m"
+   "\u001b[3;38;2;229;192;123m* read_ \u001b[0m"
   ],
   "40": [
-   "\u001b[3;38;2;229;192;123m◇ read_ \u001b[0m"
+   "\u001b[3;38;2;229;192;123m* read_ \u001b[0m"
   ]
  },
  "tool_collapsed": {
   "80": [
-   "\u001b[2m⟐ read_ → first line… (click to expand)\u001b[0m"
+   "\u001b[2m* read_ -> first line… (click to expand)\u001b[0m"
   ],
   "40": [
-   "\u001b[2m⟐ read_ → first line… (click to expand)\u001b[0m"
+   "\u001b[2m* read_ -> first line… (click to expand)\u001b[0m"
   ]
  },
  "tool_collapsed_short": {
   "80": [
-   "\u001b[2m⟐ read_ → ok (click to expand)\u001b[0m"
+   "\u001b[2m* read_ -> ok (click to expand)\u001b[0m"
   ],
   "40": [
-   "\u001b[2m⟐ read_ → ok (click to expand)\u001b[0m"
+   "\u001b[2m* read_ -> ok (click to expand)\u001b[0m"
   ]
  },
  "tool_expanded": {
   "80": [
-   "\u001b[2m⟐ read_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* read_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2;3minput\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'file_path': '/a'}\u001b[0m",
    "\u001b[2;3mresult\u001b[0m",
@@ -89,7 +89,7 @@
    ""
   ],
   "40": [
-   "\u001b[2m⟐ read_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* read_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2;3minput\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'file_path': '/a'}\u001b[0m",
    "\u001b[2;3mresult\u001b[0m",
@@ -101,7 +101,7 @@
  },
  "tool_expanded_long": {
   "80": [
-   "\u001b[2m⟐ grep_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* grep_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2;3minput\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'pattern': 'x'}\u001b[0m",
    "\u001b[2;3mresult\u001b[0m",
@@ -150,7 +150,7 @@
    ""
   ],
   "40": [
-   "\u001b[2m⟐ grep_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* grep_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2;3minput\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'pattern': 'x'}\u001b[0m",
    "\u001b[2;3mresult\u001b[0m",
@@ -201,7 +201,7 @@
  },
  "tool_expanded_big": {
   "80": [
-   "\u001b[2m⟐ grep_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* grep_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2;3minput\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'pattern': 'x'}\u001b[0m",
    "\u001b[2;3mresult\u001b[0m",
@@ -260,7 +260,7 @@
    ""
   ],
   "40": [
-   "\u001b[2m⟐ grep_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* grep_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2;3minput\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'pattern': 'x'}\u001b[0m",
    "\u001b[2;3mresult\u001b[0m",
@@ -371,15 +371,15 @@
  },
  "bash_collapsed": {
   "80": [
-   "\u001b[2m⟐ bash_ → red out… (click to expand)\u001b[0m"
+   "\u001b[2m* bash_ -> red out… (click to expand)\u001b[0m"
   ],
   "40": [
-   "\u001b[2m⟐ bash_ → red out… (click to expand)\u001b[0m"
+   "\u001b[2m* bash_ -> red out… (click to expand)\u001b[0m"
   ]
  },
  "bash_expanded": {
   "80": [
-   "\u001b[2m⟐ bash_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* bash_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2;3minput\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'command': 'ls'}\u001b[0m",
    "\u001b[2;3mresult\u001b[0m",
@@ -389,7 +389,7 @@
    ""
   ],
   "40": [
-   "\u001b[2m⟐ bash_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* bash_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2;3minput\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'command': 'ls'}\u001b[0m",
    "\u001b[2;3mresult\u001b[0m",
@@ -401,15 +401,15 @@
  },
  "edit_collapsed": {
   "80": [
-   "\u001b[2m⟐ edit_ → done (click to expand)\u001b[0m"
+   "\u001b[2m* edit_ -> done (click to expand)\u001b[0m"
   ],
   "40": [
-   "\u001b[2m⟐ edit_ → done (click to expand)\u001b[0m"
+   "\u001b[2m* edit_ -> done (click to expand)\u001b[0m"
   ]
  },
  "edit_expanded": {
   "80": [
-   "\u001b[2m⟐ edit_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* edit_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[2;3m@@ -1,3 +1,4 @@\u001b[0m",
    "  \u001b[38;2;248;248;242;49ma\u001b[0m",
@@ -421,7 +421,7 @@
    ""
   ],
   "40": [
-   "\u001b[2m⟐ edit_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* edit_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[2;3m@@ -1,3 +1,4 @@\u001b[0m",
    "  \u001b[38;2;248;248;242;49ma\u001b[0m",
@@ -435,7 +435,7 @@
  },
  "edit_expanded_long": {
   "80": [
-   "\u001b[2m⟐ edit_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* edit_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[2;3m@@ -1,120 +1,120 @@\u001b[0m",
    "\u001b[38;2;224;108;117;48;2;58;20;20m- \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20mline\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;174;129;255;48;2;58;20;20m0\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20mof\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20ma\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20mlong\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20mresult\u001b[0m",
@@ -482,7 +482,7 @@
    ""
   ],
   "40": [
-   "\u001b[2m⟐ edit_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
+   "\u001b[2m* edit_\u001b[0m\u001b[2;3m   click to collapse\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[2;3m@@ -1,120 +1,120 @@\u001b[0m",
    "\u001b[38;2;224;108;117;48;2;58;20;20m- \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20mline\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;174;129;255;48;2;58;20;20m0\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20mof\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20ma\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20mlong\u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20m \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20mresult\u001b[0m",
@@ -531,21 +531,21 @@
  },
  "error": {
   "80": [
-   "\u001b[3;38;2;224;108;117m△ something broke\u001b[0m"
+   "\u001b[3;38;2;224;108;117m! something broke\u001b[0m"
   ],
   "40": [
-   "\u001b[3;38;2;224;108;117m△ something broke\u001b[0m"
+   "\u001b[3;38;2;224;108;117m! something broke\u001b[0m"
   ]
  },
  "approval_bash": {
   "80": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mbash_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to view full\u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mbash_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to view full\u001b[0m",
    "\u001b[2mrm -rf x…\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
    ""
   ],
   "40": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mbash_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mbash_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
    "\u001b[2mreject · click to view full\u001b[0m",
    "\u001b[2mrm -rf x…\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
@@ -554,14 +554,14 @@
  },
  "approval_bash_exp": {
   "80": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mbash_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to collapse\u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mbash_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to collapse\u001b[0m",
    "\u001b[38;2;248;248;242;49mrm\u001b[0m\u001b[38;2;248;248;242;49m \u001b[0m\u001b[38;2;248;248;242;49m-rf\u001b[0m\u001b[38;2;248;248;242;49m \u001b[0m\u001b[38;2;248;248;242;49mx\u001b[0m",
    "\u001b[38;2;248;248;242;49mls\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
    ""
   ],
   "40": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mbash_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mbash_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
    "\u001b[2mreject · click to collapse\u001b[0m",
    "\u001b[38;2;248;248;242;49mrm\u001b[0m\u001b[38;2;248;248;242;49m \u001b[0m\u001b[38;2;248;248;242;49m-rf\u001b[0m\u001b[38;2;248;248;242;49m \u001b[0m\u001b[38;2;248;248;242;49mx\u001b[0m",
    "\u001b[38;2;248;248;242;49mls\u001b[0m",
@@ -571,13 +571,13 @@
  },
  "approval_edit": {
   "80": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123medit_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to view full\u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123medit_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to view full\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
    ""
   ],
   "40": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123medit_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123medit_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
    "\u001b[2mreject · click to view full\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
@@ -586,7 +586,7 @@
  },
  "approval_edit_exp": {
   "80": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123medit_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to collapse\u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123medit_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to collapse\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[2;3m@@ -1 +1 @@\u001b[0m",
    "\u001b[38;2;224;108;117;48;2;58;20;20m- \u001b[0m\u001b[38;2;248;248;242;48;2;58;20;20ma\u001b[0m",
@@ -595,7 +595,7 @@
    ""
   ],
   "40": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123medit_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123medit_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
    "\u001b[2mreject · click to collapse\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[2;3m@@ -1 +1 @@\u001b[0m",
@@ -607,13 +607,13 @@
  },
  "approval_write": {
   "80": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mwrite_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to view full\u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mwrite_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to view full\u001b[0m",
    "\u001b[2m/f.py (2 chars)\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
    ""
   ],
   "40": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mwrite_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mwrite_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
    "\u001b[2mreject · click to view full\u001b[0m",
    "\u001b[2m/f.py (2 chars)\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
@@ -622,7 +622,7 @@
  },
  "approval_write_exp": {
   "80": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mwrite_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to collapse\u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mwrite_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to collapse\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[38;2;248;248;242;49myyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\u001b[0m",
    "\u001b[38;2;248;248;242;49myyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\u001b[0m",
@@ -635,7 +635,7 @@
    ""
   ],
   "40": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mwrite_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mwrite_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
    "\u001b[2mreject · click to collapse\u001b[0m",
    "\u001b[2m/f.py\u001b[0m",
    "\u001b[38;2;248;248;242;49myyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\u001b[0m",
@@ -657,13 +657,13 @@
  },
  "approval_other": {
   "80": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mweb_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to view full\u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mweb_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to view full\u001b[0m",
    "\u001b[2m{'url': 'http://x'}…\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
    ""
   ],
   "40": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mweb_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mweb_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
    "\u001b[2mreject · click to view full\u001b[0m",
    "\u001b[2m{'url': 'http://x'}…\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
@@ -672,13 +672,13 @@
  },
  "approval_other_exp": {
   "80": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mweb_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to collapse\u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mweb_\u001b[0m\u001b[2m   enter to approve · esc to reject · click to collapse\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'url': 'http://x'}\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
    ""
   ],
   "40": [
-   "\u001b[38;2;229;192;123m◆ \u001b[0m\u001b[38;2;229;192;123mweb_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
+   "\u001b[38;2;229;192;123m? \u001b[0m\u001b[38;2;229;192;123mweb_\u001b[0m\u001b[2m   enter to approve · esc to \u001b[0m",
    "\u001b[2mreject · click to collapse\u001b[0m",
    "\u001b[38;2;248;248;242;49m{'url': 'http://x'}\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
@@ -687,28 +687,28 @@
  },
  "notice": {
   "80": [
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;152;195;121m✓\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m\u001b[2;3m   (click to expand)\u001b[0m",
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;224;108;117m✗\u001b[0m\u001b[1m beta\u001b[0m\u001b[38;2;208;208;208m — no network\u001b[0m"
+   "\u001b[2m# \u001b[0m\u001b[38;2;152;195;121m+\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m\u001b[2;3m   (click to expand)\u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;224;108;117mx\u001b[0m\u001b[1m beta\u001b[0m\u001b[38;2;208;208;208m — no network\u001b[0m"
   ],
   "40": [
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;152;195;121m✓\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m\u001b[2;3m   (click to expand)\u001b[0m",
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;224;108;117m✗\u001b[0m\u001b[1m beta\u001b[0m\u001b[38;2;208;208;208m — no network\u001b[0m"
+   "\u001b[2m# \u001b[0m\u001b[38;2;152;195;121m+\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m\u001b[2;3m   (click to expand)\u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;224;108;117mx\u001b[0m\u001b[1m beta\u001b[0m\u001b[38;2;208;208;208m — no network\u001b[0m"
   ]
  },
  "notice_expanded": {
   "80": [
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;152;195;121m✓\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m\u001b[2;3m   (click to collapse)\u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;152;195;121m+\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m\u001b[2;3m   (click to collapse)\u001b[0m",
    "\u001b[38;2;208;208;208mBuilt \u001b[0m\u001b[38;2;201;160;220mx\u001b[0m\u001b[38;2;208;208;208m.\u001b[0m                                                                        ",
    "",
    "\u001b[38;2;140;200;212m • \u001b[0m\u001b[38;2;208;208;208mone\u001b[0m\u001b[38;2;208;208;208m                                                                          \u001b[0m",
    "\u001b[38;2;140;200;212m • \u001b[0m\u001b[38;2;208;208;208mtwo\u001b[0m\u001b[38;2;208;208;208m                                                                          \u001b[0m",
    "\u001b[2;3m1,200 tokens · 3 tool uses · 1m02s · /t/alpha.jsonl\u001b[0m",
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;224;108;117m✗\u001b[0m\u001b[1m beta\u001b[0m\u001b[38;2;208;208;208m — no network\u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;224;108;117mx\u001b[0m\u001b[1m beta\u001b[0m\u001b[38;2;208;208;208m — no network\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
    ""
   ],
   "40": [
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;152;195;121m✓\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m\u001b[2;3m   (click to \u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;152;195;121m+\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m\u001b[2;3m   (click to \u001b[0m",
    "\u001b[2;3mcollapse)\u001b[0m",
    "\u001b[38;2;208;208;208mBuilt \u001b[0m\u001b[38;2;201;160;220mx\u001b[0m\u001b[38;2;208;208;208m.\u001b[0m                                ",
    "",
@@ -716,29 +716,29 @@
    "\u001b[38;2;140;200;212m • \u001b[0m\u001b[38;2;208;208;208mtwo\u001b[0m\u001b[38;2;208;208;208m                                  \u001b[0m",
    "\u001b[2;3m1,200 tokens · 3 tool uses · 1m02s · \u001b[0m",
    "\u001b[2;3m/t/alpha.jsonl\u001b[0m",
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;224;108;117m✗\u001b[0m\u001b[1m beta\u001b[0m\u001b[38;2;208;208;208m — no network\u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;224;108;117mx\u001b[0m\u001b[1m beta\u001b[0m\u001b[38;2;208;208;208m — no network\u001b[0m",
    "\u001b[2m────────────────────────────────────────\u001b[0m",
    ""
   ]
  },
  "notice_queued": {
   "80": [
-   "\u001b[2;3;38;2;209;154;102m⋯queued\u001b[0m",
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;152;195;121m✓\u001b[0m\u001b[1m alpha\u001b[0m\u001b[2m — built it\u001b[0m\u001b[2;3m   (click to expand)\u001b[0m",
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;224;108;117m✗\u001b[0m\u001b[1m beta\u001b[0m\u001b[2m — no network\u001b[0m"
+   "\u001b[2;3;38;2;209;154;102m[queued]\u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;152;195;121m+\u001b[0m\u001b[1m alpha\u001b[0m\u001b[2m — built it\u001b[0m\u001b[2;3m   (click to expand)\u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;224;108;117mx\u001b[0m\u001b[1m beta\u001b[0m\u001b[2m — no network\u001b[0m"
   ],
   "40": [
-   "\u001b[2;3;38;2;209;154;102m⋯queued\u001b[0m",
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;152;195;121m✓\u001b[0m\u001b[1m alpha\u001b[0m\u001b[2m — built it\u001b[0m\u001b[2;3m   (click to expand)\u001b[0m",
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;224;108;117m✗\u001b[0m\u001b[1m beta\u001b[0m\u001b[2m — no network\u001b[0m"
+   "\u001b[2;3;38;2;209;154;102m[queued]\u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;152;195;121m+\u001b[0m\u001b[1m alpha\u001b[0m\u001b[2m — built it\u001b[0m\u001b[2;3m   (click to expand)\u001b[0m",
+   "\u001b[2m# \u001b[0m\u001b[38;2;224;108;117mx\u001b[0m\u001b[1m beta\u001b[0m\u001b[2m — no network\u001b[0m"
   ]
  },
  "notice_legacy": {
   "80": [
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;152;195;121m✓\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m"
+   "\u001b[2m# \u001b[0m\u001b[38;2;152;195;121m+\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m"
   ],
   "40": [
-   "\u001b[2m⚙ \u001b[0m\u001b[38;2;152;195;121m✓\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m"
+   "\u001b[2m# \u001b[0m\u001b[38;2;152;195;121m+\u001b[0m\u001b[1m alpha\u001b[0m\u001b[38;2;208;208;208m — built it\u001b[0m"
   ]
  },
  "unknown": {

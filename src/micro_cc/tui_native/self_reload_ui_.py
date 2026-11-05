@@ -36,7 +36,7 @@ def poll_self_change_tick(app) -> None:
         app._reload_changed = files
         app._reload_pending = True
         app._static_hint_text()  # show the pending hint (hintbar, not statusbar)
-        app._flash_status("↻ harness changed — the model will decide when to reload", seconds=5)
+        app._flash_status("~ harness changed — the model will decide when to reload", seconds=5)
 
     # Restart only once the model asked for it (reload_harness_); drain every tick so a blocked request self-heals.
     if self_reload_.reload_requested() and app._input_mode == "idle":
@@ -49,11 +49,11 @@ def self_reload_hint(app) -> str:
     n = len(app._reload_changed)
     tail = "reloading…" if self_reload_.reload_requested() or app._restarting else "model decides when to reload"
     if n == 0:
-        base = f"↻ {tail}"
+        base = f"~ {tail}"
     elif n == 1:
-        base = f"↻ {os.path.basename(next(iter(app._reload_changed)))} — {tail}"
+        base = f"~ {os.path.basename(next(iter(app._reload_changed)))} — {tail}"
     else:
-        base = f"↻ {n} files — {tail}"
+        base = f"~ {n} files — {tail}"
     # Name the blocker if any, so stalls report themselves.
     blocker = self_reload_blocker(app)
     if blocker:

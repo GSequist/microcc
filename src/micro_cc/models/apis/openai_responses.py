@@ -57,8 +57,9 @@ def _user(content: list) -> list:
             tr = block.get("content", "")
             if isinstance(tr, list):
                 # function_call_output takes a string; the image rides in the following user item.
+                text = "\n".join(i["text"] for i in tr if i.get("type") == "text")
                 out.append({"type": "function_call_output", "call_id": block["tool_use_id"],
-                            "output": "[image attached — see following message]"})
+                            "output": f"{text}\n[image attached — see following message]".lstrip()})
                 parts += [_image_part(i.get("source", {})) for i in tr if i.get("type") == "image"]
             else:
                 out.append({"type": "function_call_output", "call_id": block["tool_use_id"], "output": tr})
@@ -101,11 +102,16 @@ def to_responses(anthropic_msgs: list, replay_reasoning=False, explicit_cache=Fa
     return ("\n\n".join(instructions) if instructions else None), out
 
 
+# OpenAI matches against the latest 80 breakpoints in a request (writes only the latest 4).
+MAX_CACHE_BREAKPOINTS = 80
+
+
 def _taggable_field(msg: dict) -> str | None:
-    """The field that can carry content blocks (and so a breakpoint); bare function_call items have none."""
+    """Field whose input_* blocks can carry a breakpoint; None for assistant/function_call/reasoning."""
     if msg.get("type") == "function_call_output":
         return "output"
-    if "content" in msg:
+    # Assistant content is output_text, which does not accept prompt_cache_breakpoint.
+    if "content" in msg and msg.get("role") in ("user", "developer", "system"):
         return "content"
     return None
 
@@ -127,16 +133,17 @@ def _tag_cache_breakpoint(msg: dict) -> dict:
 
 
 def _add_cache_breakpoints(items: list) -> list:
-    """Tag every item the caller marked cache_control, plus a rolling breakpoint on the last stable
-    taggable item (ephemeral tails skipped). Internal markers are stripped from every item."""
+    """Tag caller-marked items plus the latest stable taggable items, so the previous call's tail is
+    re-sent as a lookup point (explicit mode has no lookback). Internal markers are stripped."""
     if not items:
         return items
     explicit = {i for i, m in enumerate(items) if m.get("cache_control")}
-    rolling = next((i for i in range(len(items) - 1, -1, -1)
-                    if not items[i].get("_ephemeral") and _taggable_field(items[i]) is not None), None)
+    stable = [i for i in range(len(items) - 1, -1, -1)
+              if i not in explicit and not items[i].get("_ephemeral") and _taggable_field(items[i]) is not None]
+    rolling = set(stable[:max(MAX_CACHE_BREAKPOINTS - len(explicit), 0)])
     out = []
     for i, m in enumerate(items):
-        m = _tag_cache_breakpoint(m) if (i in explicit or i == rolling) else dict(m)
+        m = _tag_cache_breakpoint(m) if (i in explicit or i in rolling) else dict(m)
         m.pop("cache_control", None)
         m.pop("_ephemeral", None)
         out.append(m)

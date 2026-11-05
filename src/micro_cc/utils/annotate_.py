@@ -116,5 +116,5 @@ def _format_index(elements: list[dict]) -> str:
         cx = int(el.get("click_x", el["x"] + el["width"] / 2))
         cy = int(el.get("click_y", el["y"] + el["height"] / 2))
         label_part = f' "{label}"' if label else ""
-        lines.append(f"[{idx}] {tag}{label_part} → click({cx}, {cy})")
+        lines.append(f"[{idx}] {tag}{label_part} -> click({cx}, {cy})")
     return "\n".join(lines)

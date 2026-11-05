@@ -283,8 +283,8 @@ def newline_hint_text() -> str | None:
     if _load_state().get("used_multiline"):
         return None
     if detect_terminal() in _NATIVE_TERMINALS:
-        return "shift+⏎ for a newline"
-    return "type \\ then ⏎ for a newline (or ctrl+j)"
+        return "shift+enter for a newline"
+    return "type \\ then enter for a newline (or ctrl+j)"
 
 
 def mark_multiline_used() -> None:

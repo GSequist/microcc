@@ -54,7 +54,7 @@ async def cmd_clear(app):
     sys.stdout.write(delete_all_kitty_images())
     sys.stdout.flush()
     erase_token_stats(app._project_dir)
-    app._flash_status("⇤ all messages erased")
+    app._flash_status("< all messages erased")
     app.prompt.clear()
 
 
@@ -89,8 +89,8 @@ async def cmd_copy(app):
         elif t == "thinking":
             lines.append(f"[thinking] {msg['content']}")
         elif t == "tool_call":
-            result = msg.get("result") or "⋯"
-            lines.append(f"{glyph('tool')} {msg['name']} → {result}")
+            result = msg.get("result") or "..."
+            lines.append(f"{glyph('tool')} {msg['name']} -> {result}")
         elif t == "error":
             lines.append(f"{glyph('error')} {msg['content']}")
     if app._streaming is not None:
@@ -145,7 +145,7 @@ async def cmd_subagents(app):
     current = settings_store_.max_subagents()
     default = settings_store_.DEFAULT_MAX_SUBAGENTS
     items = [
-        PanelItem(str(n), f"{n} at once" + (" (default)" if n == default else "") + ("  ← current" if n == current else ""))
+        PanelItem(str(n), f"{n} at once" + (" (default)" if n == default else "") + ("  <- current" if n == current else ""))
         for n in sorted(set(SUBAGENT_CAP_CHOICES) | {current})
     ]
     app._option_panel.open(items, on_select=app._on_subagents_picked, selected=str(current))
@@ -173,7 +173,7 @@ async def cmd_exit(app):
 async def cmd_update(app):
     app.prompt.clear()
     if not app._update_available:
-        app._flash_status("✓ already on the latest version")
+        app._flash_status("+ already on the latest version")
         return
     await _run_update(app)
 
@@ -221,7 +221,7 @@ async def _run_update(app):
     i = 0
     while True:
         frame = app._SPINNER[i % len(app._SPINNER)]
-        app.static_hintbar.update(f"[{_pink()}]{frame} updating micro-cc {current_version} → {latest}…[/{_pink()}]")
+        app.static_hintbar.update(f"[{_pink()}]{frame} updating micro-cc {current_version} -> {latest}…[/{_pink()}]")
         app.request_render()
         i += 1
         try:
@@ -255,7 +255,7 @@ async def _run_update(app):
         app._static_hint_text()
         return
 
-    app.static_hintbar.update(f"[{_pink()}]✓ updated {current_version} → {latest} — restarting…[/{_pink()}]")
+    app.static_hintbar.update(f"[{_pink()}]+ updated {current_version} -> {latest} — restarting…[/{_pink()}]")
     app.request_render()
     await asyncio.sleep(0.8)
 
@@ -271,12 +271,12 @@ async def cmd_reload(app):
     from micro_cc.tui_native import self_reload_ui_  # local: self_reload_ui_ imports this module
     app.prompt.clear()
     if app._input_mode != "idle":
-        app._flash_status("⏳ busy — esc first", seconds=3)
+        app._flash_status("~ busy — esc first", seconds=3)
         return
     # Use same blocker check as auto-reload to avoid restarting under live subagents or GUI.
     blocker = self_reload_ui_.self_reload_blocker(app)
     if blocker:
-        app._flash_status(f"↻ can't reload — {blocker} active", seconds=4)
+        app._flash_status(f"~ can't reload — {blocker} active", seconds=4)
         return
     await self_reload_ui_.restart_self(app)
 
@@ -310,43 +310,43 @@ async def _run_hidden_setup(app, prompt_body: str, extra: str, busy_msg: str):
 
 
 async def cmd_setup(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.SETUP, extra, "⏳ busy — try /setup again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.SETUP, extra, "~ busy — try /setup again once this finishes")
 
 
 async def cmd_new_skill(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.SKILL, extra, "⏳ busy — try /new-skill again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.SKILL, extra, "~ busy — try /new-skill again once this finishes")
 
 
 async def cmd_new_mcp(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.MCP, extra, "⏳ busy — try /new-mcp again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.MCP, extra, "~ busy — try /new-mcp again once this finishes")
 
 
 async def cmd_skills(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.SKILLS_INFO, extra, "⏳ busy — try /skills again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.SKILLS_INFO, extra, "~ busy — try /skills again once this finishes")
 
 
 async def cmd_mcp(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.MCP_INFO, extra, "⏳ busy — try /mcp again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.MCP_INFO, extra, "~ busy — try /mcp again once this finishes")
 
 
 async def cmd_headless_mode(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.HEADLESS, extra, "⏳ busy — try /headless again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.HEADLESS, extra, "~ busy — try /headless again once this finishes")
 
 
 async def cmd_graph(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.GRAPH, extra, "⏳ busy — try /graph again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.GRAPH, extra, "~ busy — try /graph again once this finishes")
 
 
 async def cmd_message_session(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.MESSAGE_SESSION, extra, "⏳ busy — try /message-session again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.MESSAGE_SESSION, extra, "~ busy — try /message-session again once this finishes")
 
 
 async def cmd_doctor(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.DOCTOR, extra, "⏳ busy — try /doctor again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.DOCTOR, extra, "~ busy — try /doctor again once this finishes")
 
 
 async def cmd_optimize(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.OPTIMIZE, extra, "⏳ busy — try /optimize again once this finishes")
+    await _run_hidden_setup(app, hidden_prompts.OPTIMIZE, extra, "~ busy — try /optimize again once this finishes")
 
 
 def _kill_port(port: int):
@@ -379,11 +379,11 @@ async def cmd_gui(app):
     app.prompt.clear()
 
     if getattr(app, "_gui_shutdown", None) is not None:
-        app._flash_status(f"▸ already running at {app._gui_url}")
+        app._flash_status(f"> already running at {app._gui_url}")
         return
 
     if app._input_mode == "query_active":
-        app._flash_status("⏳ busy — try /gui again once this finishes")
+        app._flash_status("~ busy — try /gui again once this finishes")
         return
 
     if not any_configured():
@@ -416,7 +416,7 @@ async def cmd_gui(app):
     await app._mount_row({
         "type": "text",
         "content": (
-            f"▸ **GUI running** — [{url}]({url})\n\n"
+            f"> **GUI running** — [{url}]({url})\n\n"
             "Copied to your clipboard — paste it into a browser if the link "
             "above isn't clickable (common when this terminal is attached "
             "through Docker/SSH, where OSC 8 hyperlinks and text selection "

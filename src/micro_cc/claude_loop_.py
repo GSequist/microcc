@@ -68,7 +68,10 @@ def _unanswered_results(blocks, calls, results, started):
         name = calls[tb.id][0]
         if tb.id in results:
             r = results[tb.id]
-            text = str(r.get("output", "")) if isinstance(r, dict) and r.get("type") != "image" else str(r or "")
+            if isinstance(r, dict):
+                text = str(r.get("text") or "[image]") if r.get("type") == "image" else str(r.get("output", ""))
+            else:
+                text = str(r or "")
             out.append({"type": "tool_result", "tool_use_id": tb.id, "content": text[:cap_for(name)]})
             continue
         why = (
@@ -795,7 +798,8 @@ whole conversation history, including compacted turns.
                     is_display_image_result = isinstance(result, dict) and result.get("display_image") is not None
 
                     if is_image_result:
-                        yield_output, yield_image_data = "[image attached]", result["data"]
+                        yield_output = str(result.get("text") or "[image attached]")[:500]
+                        yield_image_data = result["data"]
                     elif is_display_image_result:
                         yield_output, yield_image_data = str(result.get("output", ""))[:500], result["display_image"]
                     else:
@@ -814,7 +818,7 @@ whole conversation history, including compacted turns.
                             {
                                 "type": "tool_result",
                                 "tool_use_id": tool_block.id,
-                                "content": [
+                                "content": ([{"type": "text", "text": result["text"]}] if result.get("text") else []) + [
                                     {
                                         "type": "image",
                                         "source": {"type": "base64", "media_type": "image/jpeg", "data": result["data"]},

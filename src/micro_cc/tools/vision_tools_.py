@@ -4,12 +4,7 @@ import os
 
 
 async def vision(img_path: str, query: str, *, project_dir, model) -> str:
-    """Analyze an image and answer a specific question about it — an
-    isolated, context-free call. Used internally by computer_tool_/
-    browser_tool_ to analyze a screenshot they just took as one piece of a
-    larger composite text result; NOT registered as a model-facing tool
-    (the model reads image files natively via read_, see file_tools_.py —
-    Read is multimodal by extension, with no separate vision/image tool).
+    """Isolated, context-free question about an image; used by computer_tool_ on its screenshots, not model-facing.
 
     Args:
         img_path: Absolute or relative path to the image file

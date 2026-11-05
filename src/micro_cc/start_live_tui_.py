@@ -531,7 +531,7 @@ class MicroTui():
     def _on_subagents_picked(self, item: PanelItem) -> None:
         """Persist concurrent subagent cap to settings."""
         settings_store_.edit_setting("max_subagents", int(item.value))
-        self._flash_status(f"✓ up to {item.value} subagent(s) at once — applies to the next spawn", seconds=3)
+        self._flash_status(f"+ up to {item.value} subagent(s) at once — applies to the next spawn", seconds=3)
 
     def _apply_theme(self, _name: str = "") -> None:
         """Repaint UI when color set changes; re-emit terminal defaults and invalidate caches."""
@@ -747,9 +747,9 @@ class MicroTui():
         if not text:
             return
         if landed:
-            self._flash_status(f"✓ copied {len(text)} chars")
+            self._flash_status(f"+ copied {len(text)} chars")
         else:
-            self._flash_status(f"[{theme_store_.get('error')}]✗ pyperclip failed ({pyperclip_error}) — tried terminal clipboard, enable clipboard access if it didn't land[/{theme_store_.get('error')}]", seconds=5)
+            self._flash_status(f"[{theme_store_.get('error')}]x pyperclip failed ({pyperclip_error}) — tried terminal clipboard, enable clipboard access if it didn't land[/{theme_store_.get('error')}]", seconds=5)
 
     # ============================================= statusbar
 
@@ -944,7 +944,7 @@ class MicroTui():
 
             if stop_gui(self):
                 self._safe_task(self._resume_after_gui(), "resume after gui")
-                self._flash_status("⇤ GUI stopped — terminal is live again")
+                self._flash_status("< GUI stopped — terminal is live again")
             return
 
         if self._input_mode == "login":
@@ -1042,7 +1042,7 @@ class MicroTui():
         """Handle a submitted prompt: slash commands, login/keys input, image paths, or a new turn."""
         query = text.strip()
         query = re.sub(
-            r'⟪paste:(\d+)\|\d+ chars, \d+ lines⟫',
+            r'\[paste:(\d+)\|\d+ chars, \d+ lines\]',
             lambda m: self.prompt._paste_store.get(int(m.group(1)), m.group(0)),
             query,
         )
@@ -1052,7 +1052,7 @@ class MicroTui():
         # The browser owns the conversation during /gui; two writers would corrupt the jsonl.
         if self._input_mode == "gui":
             self.prompt.clear()
-            self._flash_status(f"▸ GUI has the session — {self._gui_url} · esc to stop")
+            self._flash_status(f"> GUI has the session — {self._gui_url} · esc to stop")
             return
 
         if self._input_mode == "login":
@@ -1092,7 +1092,7 @@ class MicroTui():
         # Mod commands only reach the api, whose send_prompt queues, so they run mid-stream.
         if (matched_prefix is not None or handler is not None) and self._input_mode == "query_active":
             self._flash_status(
-                "⏳ still streaming — esc to interrupt, then retry the command", seconds=4
+                "~ still streaming — esc to interrupt, then retry the command", seconds=4
             )
             return
 
@@ -1158,7 +1158,7 @@ class MicroTui():
             if not await asyncio.to_thread(ollama_daemon_up, base_url):
                 await self._mount_row({
                     "type": "text",
-                    "content": "∴ Ollama daemon not running — starting it...",
+                    "content": "* Ollama daemon not running — starting it...",
                 })
                 await asyncio.to_thread(start_ollama_daemon)
 
@@ -1296,7 +1296,7 @@ class MicroTui():
         for w in (watches or []):
             items.append(PanelItem(
                 f"watch:{w['watch_id']}",
-                f"◎ {w['watch_id']} · {w['age']}s",
+                f"@ {w['watch_id']} · {w['age']}s",
                 f"{w['description']} · {w['command']}",
             ))
         return items
@@ -1332,7 +1332,7 @@ class MicroTui():
             self._safe_task(_stop(item.value.removeprefix("watch:")), "stop watch")
             return
         if kill_background_process(int(item.value)):
-            self._flash_status(f"✓ killed PID {item.value}")
+            self._flash_status(f"+ killed PID {item.value}")
         else:
             self._flash_status(f"PID {item.value} already gone")
         self._reopen_bgproc_detail()
@@ -1388,9 +1388,9 @@ class MicroTui():
         row = next((s for s in self._subagent_snapshot if s["target"] == target), None)
         name = self._subagent_name(target)
         if row is not None and row["status"] == "RUNNING":
-            self._flash_status(f"✉ sent to {_markup_escape(name)} — folds in at its next checkpoint")
+            self._flash_status(f"@ sent to {_markup_escape(name)} — folds in at its next checkpoint")
         else:
-            self._flash_status(f"✉ {_markup_escape(name)} isn't running — queued for its next run", seconds=4)
+            self._flash_status(f"@ {_markup_escape(name)} isn't running — queued for its next run", seconds=4)
         self.request_render()
 
     def exit_subagent_view(self) -> None:
@@ -1473,7 +1473,7 @@ class MicroTui():
         if note:
             acc = theme_store_.get("accent")
             body = "\n".join(f"  [dim]·[/dim] {_markup_escape(l)}" for l in note["lines"])
-            self._whats_new_row = RichStatic(f"[bold {acc}]✦ micro-cc {note['version']} just landed ✦[/bold {acc}] [dim]what's new[/dim]\n{body}")
+            self._whats_new_row = RichStatic(f"[bold {acc}]* micro-cc {note['version']} just landed *[/bold {acc}] [dim]what's new[/dim]\n{body}")
             self.message_list.add(self._whats_new_row)
         self.messages_scroll.scroll_to_end()
 
@@ -1482,7 +1482,7 @@ class MicroTui():
             warn = theme_store_.get("warn")
             names = ", ".join(dict.fromkeys(cut))
             self._call_later(1.0, lambda: self._flash_status(
-                f"[{warn}]↻ last run was cut off during {names}: marked interrupted, Claude will check state[/{warn}]",
+                f"[{warn}]~ last run was cut off during {names}: marked interrupted, Claude will check state[/{warn}]",
                 seconds=8,
             ))
 

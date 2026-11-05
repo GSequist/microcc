@@ -20,8 +20,8 @@ Spawn each subagent with bash_: `microcc-headless <project_dir> "<prompt>"` —
 no trailing `&`. Spawned from your bash_, it registers the subagent, detaches
 it into the background itself, and returns within a second or two with one of:
 
-- `▶ STARTED — <name> running detached as pid N (log: …)` — it's running.
-- `✗ REFUSED — <why>` — it did NOT start. Usually the concurrent-subagent cap
+- `> STARTED — <name> running detached as pid N (log: …)` — it's running.
+- `x REFUSED — <why>` — it did NOT start. Usually the concurrent-subagent cap
   (the user's /subagents setting, default 4) is reached: wait for a checkpoint
   wakeup, or stop one, then spawn it again. Don't retry in a loop.
 
@@ -91,7 +91,7 @@ default, same as not passing it at all.
 The moment you run a bash_ command containing microcc-headless, that
 subagent self-registers into YOUR tracker — no separate registration step.
 You'll see an ambient status line under the input showing every tracked
-subagent as one glyph + short name (▶ running, ✓ done, ✗ failed, ⏸ paused,
+subagent as one glyph + short name (> running, + done, x failed, = paused,
 ? needs input), and you'll automatically get woken up with a new turn the
 instant one of them hits a checkpoint — so you genuinely don't need to sit
 and poll. That turn carries one `<subagent-notification>` block per finished
@@ -170,7 +170,7 @@ path) and utils/inbox_store_.py (durable fallback path).
 
 To stop a running subagent — including to kill and relaunch one that looks
 stuck — kill its OS pid; that is the entire mechanism. The pid is in the
-`▶ STARTED` line its spawn returned, and `monitor_(action="check")` shows it
+`> STARTED` line its spawn returned, and `monitor_(action="check")` shows it
 too, with an activity line: "running bash_ for 3m12s" vs "waiting on the
 model for 4m" vs "pid N NOT running". Use it to tell stuck from slow: a tool
 batch frozen for minutes is stuck; a long first model call on a big prompt

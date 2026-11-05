@@ -215,7 +215,7 @@ class PromptInput:
             pid = self._paste_id
             self._paste_store[pid] = text
             n_lines = text.count("\n") + 1
-            self.insert(f"⟪paste:{pid}|{len(text)} chars, {n_lines} lines⟫")
+            self.insert(f"[paste:{pid}|{len(text)} chars, {n_lines} lines]")
         else:
             self.insert(text)
 

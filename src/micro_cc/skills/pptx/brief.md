@@ -50,6 +50,9 @@ quote, chart-with-takeaway) and list the elements inside it as a bare structural
 list — position, role, rough size. No colors, no fonts, no exact coordinates —
 that's Stage 2's job.
 
+On the template path, `Layout:` names a template layout by its exact name (or
+`clone sample N`) and maps content onto placeholder `idx`s instead. See `template.md`.
+
 **Vary layouts across the deck.** A brief where every slide says "2-column" is a
 sign the thinking hasn't actually differentiated the slides — go back and ask
 what's structurally different about each claim.

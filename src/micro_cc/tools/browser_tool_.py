@@ -1,15 +1,18 @@
 import asyncio
+import base64
+import functools
 import os
 import platform
 import subprocess
 import sys
-import time
 
 _playwright = None
 _browser = None
 _page = None
+_mode = ""  # which browser we're driving, shown to the model
 _console_log: list[str] = []
 _CDP_PORT = 9222
+_SNAPSHOT_CAP = 40_000
 _WIN_CHROME = [
     "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
     "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe",
@@ -17,32 +20,82 @@ _WIN_CHROME = [
 
 
 def _on_console(msg):
-    level = msg.type  # log, warning, error, info, debug
-    text = msg.text
-    _console_log.append(f"[{level}] {text}")
+    _console_log.append(f"[{msg.type}] {msg.text}")
+
+
+def _adopt(page):
+    """Make `page` the active tab; popups it opens (target=_blank) become active in turn."""
+    global _page
+    _page = page
+    page.set_default_timeout(10_000)  # stale refs fail fast instead of hanging 30s
+    page.on("console", _on_console)
+    page.on("popup", _adopt)
 
 
 async def _ensure_browser():
-    global _playwright, _browser, _page
+    global _playwright, _browser, _page, _mode
     if _page is not None and (_page.is_closed() or not _browser.is_connected()):
         # Window closed out-of-band: Playwright objects stay truthy, so tear down and relaunch.
         await close_browser()
     if not _page:
         from playwright.async_api import async_playwright
         _playwright = await async_playwright().start()
-        _browser = await _attach_windows_chrome() if _is_wsl() else None
+        _browser = await _attach_live_chrome()
+        _mode = "the user's own Chrome (their logged-in profile)"
+        if not _browser and _is_wsl():
+            _browser = await _attach_windows_chrome()
+            _mode = "Windows Chrome (micro-cc profile; logins persist)"
         if _browser:
-            _page = await _browser.contexts[0].new_page()
-            await _page.set_viewport_size({"width": 1280, "height": 720})
+            _adopt(await _browser.contexts[0].new_page())
         else:
             _browser = await _launch_chromium()
-            _page = await _browser.new_page(viewport={"width": 1280, "height": 720})
-        _page.on("console", _on_console)
+            _mode = "Playwright Chromium (fresh profile, not logged in)"
+            _adopt(await _browser.new_page(viewport={"width": 1280, "height": 720}))
     return _page
 
 
 def _is_wsl() -> bool:
     return "microsoft" in platform.release().lower()
+
+
+@functools.cache
+def _win_localappdata() -> str:
+    """WSL: Windows %LOCALAPPDATA% (e.g. C:\\Users\\x\\AppData\\Local), '' if cmd.exe fails."""
+    try:
+        return subprocess.run(["cmd.exe", "/c", "echo %LOCALAPPDATA%"], capture_output=True,
+                              text=True, timeout=10, cwd="/mnt/c").stdout.strip()
+    except Exception:
+        return ""
+
+
+def _chrome_user_data_dir() -> str:
+    """Default Chrome profile root for this platform, as a local path."""
+    if platform.system() == "Darwin":
+        return os.path.expanduser("~/Library/Application Support/Google/Chrome")
+    if _is_wsl():
+        local = _win_localappdata()
+        if not local:
+            return ""
+        try:
+            return subprocess.run(["wslpath", "-u", f"{local}\\Google\\Chrome\\User Data"],
+                                  capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            return ""
+    return os.path.expanduser("~/.config/google-chrome")
+
+
+async def _attach_live_chrome():
+    """Attach to the user's running Chrome if they enabled remote debugging (chrome://inspect/#remote-debugging)."""
+    try:
+        with open(os.path.join(_chrome_user_data_dir(), "DevToolsActivePort")) as f:
+            port, path = [line.strip() for line in f.read().splitlines()[:2]]
+    except (OSError, ValueError):
+        return None
+    try:
+        # Generous timeout: Chrome may ask the user to allow the connection.
+        return await _playwright.chromium.connect_over_cdp(f"ws://127.0.0.1:{port}{path}", timeout=30_000)
+    except Exception:
+        return None  # stale file (Chrome closed), denied, or WSL NAT can't reach Windows localhost
 
 
 async def _attach_windows_chrome():
@@ -55,9 +108,10 @@ async def _attach_windows_chrome():
         return await _playwright.chromium.connect_over_cdp(url, timeout=1500)
     except Exception:
         pass  # not running yet
+    local = _win_localappdata()
+    if not local:
+        return None
     try:
-        local = subprocess.run(["cmd.exe", "/c", "echo %LOCALAPPDATA%"], capture_output=True,
-                               text=True, timeout=10, cwd="/mnt/c").stdout.strip()
         subprocess.Popen([exe, f"--remote-debugging-port={_CDP_PORT}", f"--user-data-dir={local}\\micro-cc-chrome",
                           "--no-first-run", "--no-default-browser-check", "about:blank"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -109,14 +163,18 @@ async def close_browser():
     _playwright = _browser = _page = None
 
 
-async def browser(code: str, description: str, *, project_dir: str, model: str) -> str:
-    """Run Playwright async Python code against a persistent single-page browser (created on first call).
+async def browser(code: str, description: str, *, project_dir: str, model: str, screenshot: bool = False) -> str | dict:
+    """Run Playwright async Python in a persistent browser tab, then return the page as an accessibility snapshot.
 
-    Every run auto-captures a screenshot and describes it via vision.
+    The snapshot lists elements like `- button "Save" [ref=e12]`. Act by ref with `ref("e12")`, a Playwright
+    Locator that auto-waits and scrolls: `await ref("e12").click()`, `await ref("e7").fill("text")`.
+    Refs are valid only from the latest snapshot. Use empty code to just look. Read exact data with
+    page.evaluate / inner_text. Never click by pixel coordinates.
 
     Args:
-        code: Playwright async Python code, `page` in scope; return a value to see it as output
+        code: Playwright async Python with `page` and `ref` in scope; return a value to see it as output
         description: What this does, in plain words for a non-technical user who may have to approve it (5-12 words, e.g. "Open the bank's login page")
+        screenshot: also attach a viewport image; only when layout, images or canvas matter
     """
     try:
         page = await _ensure_browser()
@@ -127,42 +185,33 @@ async def browser(code: str, description: str, *, project_dir: str, model: str) 
             hint = f"\nFix: sudo {sys.executable} -m playwright install-deps chromium"
         return f"[Browser unavailable: {type(e).__name__}: {str(e)[:800]}]{hint}"
 
-    ss_dir = os.path.join(project_dir, ".browser_screenshots")
-    os.makedirs(ss_dir, exist_ok=True)
-
     exec_output = ""
+    if code.strip():
+        try:
+            local_ns = {"page": page, "ref": lambda r: page.locator(f"aria-ref={r}")}
+            exec(
+                "async def __browser_exec__():\n"
+                + "".join(f"    {line}\n" for line in code.strip().splitlines()),
+                local_ns,
+            )
+            result = await local_ns["__browser_exec__"]()
+            if result is not None:
+                exec_output = str(result)
+        except Exception as e:
+            exec_output = f"Execution error: {type(e).__name__}: {e}"
+
+    page = _page  # a popup may have taken over
     try:
-        local_ns = {"page": page}
-        exec(
-            f"async def __browser_exec__():\n"
-            + "".join(f"    {line}\n" for line in code.strip().splitlines()),
-            local_ns,
-        )
-        result = await local_ns["__browser_exec__"]()
-        if result is not None:
-            exec_output = str(result)
-    except Exception as e:
-        exec_output = f"Execution error: {type(e).__name__}: {e}"
-
-    # Auto-screenshot after every execution
-    screenshot_path = os.path.join(ss_dir, f"{int(time.time() * 1000)}.png")
+        await page.wait_for_load_state("domcontentloaded", timeout=5000)
+    except Exception:
+        pass
     try:
-        await page.screenshot(path=screenshot_path)
+        snap = await page.aria_snapshot(mode="ai", timeout=10_000)
     except Exception as e:
-        return f"{exec_output}\n[Screenshot failed: {e}]".strip()
-
-    from micro_cc.utils.annotate_ import annotate_screenshot
-    elements = await _get_browser_elements(page, screenshot_path)
-    element_index = annotate_screenshot(screenshot_path, elements)
-
-    from micro_cc.tools.vision_tools_ import vision
-    prompt = "Describe this browser page. Numbered coloured boxes mark interactive elements."
-    description = await vision(
-        screenshot_path,
-        prompt,
-        project_dir=project_dir,
-        model=model,
-    )
+        snap = f"[Snapshot failed: {type(e).__name__}: {str(e)[:300]}]"
+    if len(snap) > _SNAPSHOT_CAP:
+        snap = (snap[:_SNAPSHOT_CAP] + "\n[... snapshot truncated: for one region, "
+                "`return await page.locator(selector).aria_snapshot(mode='ai')` (its refs replace these)]")
 
     console_lines = _console_log.copy()
     _console_log.clear()
@@ -172,72 +221,18 @@ async def browser(code: str, description: str, *, project_dir: str, model: str) 
         parts.append(f"Output: {exec_output}")
     if console_lines:
         parts.append(f"Console ({len(console_lines)} messages):\n" + "\n".join(console_lines[-50:]))
-    parts.append(f"Screenshot: {screenshot_path}")
-    if element_index:
-        parts.append(f"Interactive elements:\n{element_index}")
-        parts.append("IMPORTANT: To click any element, use ONLY the coordinates from the list above. "
-                      "Example: await page.mouse.click(cx, cy). NEVER estimate coordinates visually — "
-                      "vision cannot determine screen coordinates. The element list is authoritative.")
-    parts.append(f"Page: {description}")
-
-    return "\n".join(parts)
-
-
-# In-viewport, visible, unoccluded interactive elements; box clipped to viewport, click at its visible center.
-_ELEMENTS_JS = """() => {
-    const sels = 'a[href], button, input:not([type=hidden]), select, textarea, summary, '
-        + '[contenteditable=""], [contenteditable=true], [tabindex]:not([tabindex="-1"]), [onclick], '
-        + '[role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], '
-        + '[role=option], [role=combobox], [role=textbox], [role=searchbox], [role=slider], [role=treeitem]';
-    const vw = innerWidth, vh = innerHeight, out = [];
-    for (const el of document.querySelectorAll(sels)) {
-        const r = el.getBoundingClientRect();
-        const x0 = Math.max(r.left, 0), y0 = Math.max(r.top, 0);
-        const x1 = Math.min(r.right, vw), y1 = Math.min(r.bottom, vh);
-        if (x1 - x0 < 4 || y1 - y0 < 4) continue;
-        const st = getComputedStyle(el);
-        if (st.visibility !== 'visible' || +st.opacity === 0 || st.pointerEvents === 'none') continue;
-        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-        const hit = document.elementFromPoint(cx, cy);
-        if (!hit || !(hit === el || el.contains(hit) || hit.contains(el) || (el.labels && [...el.labels].includes(hit)))) continue;
-        const label = (el.getAttribute('aria-label') || el.innerText || el.labels?.[0]?.innerText || el.getAttribute('placeholder')
-            || el.getAttribute('title') || el.getAttribute('alt') || el.querySelector('img[alt]')?.alt
-            || (el.type === 'password' ? '' : el.value) || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
-        const role = el.getAttribute('role');
-        const tag = el.tagName.toLowerCase() + (el.type && el.tagName !== 'BUTTON' ? '[' + el.type + ']' : '') + (role ? '[role=' + role + ']' : '');
-        out.push({x: x0, y: y0, width: x1 - x0, height: y1 - y0, click_x: cx, click_y: cy, label, tag});
-    }
-    return out;
-}"""
-
-
-async def _get_browser_elements(page, screenshot_path: str) -> list[dict]:
-    """Extract interactive elements with bounding rects, scaled to screenshot pixels."""
     try:
-        from PIL import Image
-
-        # Screenshot pixels per viewport pixel (Retina).
-        img = Image.open(screenshot_path)
-        img_w, _ = img.size
-        viewport = page.viewport_size
-        scale = img_w / viewport["width"] if viewport else 1.0
-
-        raw = await page.evaluate(_ELEMENTS_JS)
-
-        # Viewport-coord click targets stay as-is (for page.mouse.click); boxes scale to screenshot pixels.
-        elements = []
-        for el in raw:
-            el["x"] = el["x"] * scale
-            el["y"] = el["y"] * scale
-            el["width"] = el["width"] * scale
-            el["height"] = el["height"] * scale
-            elements.append(el)
-            if len(elements) >= 50:
-                break
-
-        for i, el in enumerate(elements, 1):
-            el["index"] = i
-
-        return elements
+        title = await page.title()
     except Exception:
-        return []
+        title = ""
+    parts.append(f"Tab: {title} — {page.url}\nBrowser: {_mode}")
+    parts.append(f"Snapshot:\n{snap}")
+    text = "\n".join(parts)
+
+    if not screenshot:
+        return text
+    try:
+        img = await page.screenshot(type="jpeg", quality=70, scale="css")
+    except Exception as e:
+        return f"{text}\n[Screenshot failed: {e}]"
+    return {"type": "image", "data": base64.b64encode(img).decode(), "text": text}

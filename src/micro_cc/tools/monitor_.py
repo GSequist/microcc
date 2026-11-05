@@ -313,7 +313,7 @@ def format_status_glyph(name: str, status: str, pending: int = 0, tokens: dict |
     color = status_marker.color(status)
     if len(name) > _STATUS_GLYPH_NAME_MAXLEN:
         name = name[: _STATUS_GLYPH_NAME_MAXLEN - 1] + "…"
-    mail = "✉" if pending else ""
+    mail = "@" if pending else ""
     used = _tokens_used(tokens)
     tok_tag = f" {_fmt_tokens(used)}" if used else ""
     # name is model-chosen: an unescaped "[" raises MarkupError in the render loop.
@@ -324,9 +324,9 @@ def _format_bgproc_line(pid: int) -> str:
     procs = {p["pid"]: p for p in list_background_processes()}
     info = procs.get(pid)
     if info is None:
-        return f"✗ PID {pid} — not running (exited, or never existed)"
+        return f"x PID {pid} — not running (exited, or never existed)"
     stall_note = " [output stalled — may be waiting on an interactive prompt]" if info.get("stalled") else ""
-    line = f"▶ PID {pid} — running {info['age']}s: {info['command']}  (cwd={info['cwd']}){stall_note}"
+    line = f"> PID {pid} — running {info['age']}s: {info['command']}  (cwd={info['cwd']}){stall_note}"
     tail = get_output_tail(pid)
     line += f"\n  recent output:\n{tail}" if tail else "\n  (no output captured yet)"
     return line
@@ -345,7 +345,7 @@ def _format_watch_or_poll(target: str) -> str | None:
     """Status of a watch or poll id, with the watch's stderr tail; None if it is neither."""
     from micro_cc.tools.monitor_watch_ import get_watch_output_path
     if p := next((p for p in polls.list_polls() if p["watch_id"] == target), None):
-        line = f"◎ poll {target} — {p['description']}, every {p['every'] // 60}m, next in {p['next_in']}s"
+        line = f"@ poll {target} — {p['description']}, every {p['every'] // 60}m, next in {p['next_in']}s"
         return line + (f"\n  {p['fails']} failed probe(s), last: {p['last_error']}" if p["fails"] else "")
     path = get_watch_output_path(target)
     if path is None:
@@ -355,7 +355,7 @@ def _format_watch_or_poll(target: str) -> str | None:
         tail = open(path, errors="replace").read()[-2000:].strip()
     except OSError:
         tail = ""
-    return (f"◎ watch {target} — {'running' if running else 'stopped'}"
+    return (f"@ watch {target} — {'running' if running else 'stopped'}"
             + (f"\n  stderr:\n{tail}" if tail else "\n  (no stderr)"))
 
 

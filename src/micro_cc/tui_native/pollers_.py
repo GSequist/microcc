@@ -33,7 +33,7 @@ def poll_bgprocs_tick(app) -> None:
     err = keep_awake_.status()["error"] if background else None
     if err and not getattr(app, "_keep_awake_warned", False):
         app._keep_awake_warned = True  # once per session
-        app._flash_status(_markup_escape(f"⚠ can't keep this computer awake ({err}); "
+        app._flash_status(_markup_escape(f"! can't keep this computer awake ({err}); "
                                          "disable sleep in system settings while microcc works"), seconds=12)
     if app._bgproc_viewing:
         app._refresh_bgproc_detail(procs, watches)
@@ -62,7 +62,7 @@ def poll_memory_review_tick(app) -> None:
         return
     app._last_memory_review_ts = recap["ts"]
     # Escape: the model's recap is untrusted Rich markup; a stray "[" raises MarkupError in render.
-    app._flash_memory_review(f"[italic]✎ memory reviewed — {_markup_escape(recap['recap'])}[/italic]")
+    app._flash_memory_review(f"[italic]* memory reviewed — {_markup_escape(recap['recap'])}[/italic]")
 
 async def poll_subagents_tick(app, *, cold_start: bool = False) -> None:
     """Poll subagents every 3s, display status, fire wakeups on checkpoint."""
@@ -98,16 +98,16 @@ async def poll_subagents_tick(app, *, cold_start: bool = False) -> None:
                          "tokens": tokens, "pid": entry.get("pid"),
                          "viewing": target == app._subagent_viewing_target})
         # Leading glyph marks which target is currently swapped into the message area.
-        viewing_glyph = "●" if target == app._subagent_viewing_target else "○"
+        viewing_glyph = ">" if target == app._subagent_viewing_target else " "
         display_lines.append(f"{viewing_glyph} {format_status_glyph(name, status, pending, tokens)}")
 
     app._subagent_snapshot = snapshot
     mods_.bump()  # pane renders reading api.subagents() are cached per generation
     # Viewing decoration composed here; format_status_glyph stays UI-agnostic.
     if display_lines:
-        boss_glyph = "●" if app._subagent_viewing_target is None else "○"
+        boss_glyph = ">" if app._subagent_viewing_target is None else " "
         # Only on-screen hint for shift+tab.
-        all_lines = [f"⚙ {boss_glyph} boss  [dim]· shift+tab to view[/dim]"] + [f"⚙ {line}" for line in display_lines]
+        all_lines = [f"{glyph('subagent')} {boss_glyph} boss  [dim]· shift+tab to view[/dim]"] + [f"{glyph('subagent')} {line}" for line in display_lines]
         app.subagent_status.update("\n".join(app._cap_lines(all_lines)))
     else:
         app.subagent_status.update("")

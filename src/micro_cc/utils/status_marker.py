@@ -11,7 +11,7 @@ STATUS_INSTRUCTIONS = (
     "or STATUS: FAILED — <one-line reason you could not finish>"
 )
 _STATUS_RE = re.compile(r"STATUS:\s*(DONE|NEEDS_INPUT|FAILED|PAUSED)\s*[—-]\s*(.+)", re.IGNORECASE)
-SYMBOL = {"DONE": "✓", "FAILED": "✗", "NEEDS_INPUT": "?", "UNKNOWN": "?", "PAUSED": "⏸", "RUNNING": "▶"}  # RUNNING tracked for completeness
+SYMBOL = {"DONE": "+", "FAILED": "x", "NEEDS_INPUT": "?", "UNKNOWN": "?", "PAUSED": "=", "RUNNING": ">"}  # RUNNING tracked for completeness
 def color(status: str) -> str:
     """Map status to color from active theme."""
     from micro_cc.utils import theme_store_

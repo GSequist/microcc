@@ -75,7 +75,9 @@ def _user(content: list) -> list:
             tr = block.get("content", "")
             if isinstance(tr, list):
                 # `tool` messages don't take images everywhere; the image rides in the next user message.
-                results.append({"role": "tool", "tool_call_id": block["tool_use_id"], "content": IMAGE_PLACEHOLDER})
+                text = "\n".join(i["text"] for i in tr if i.get("type") == "text")
+                results.append({"role": "tool", "tool_call_id": block["tool_use_id"],
+                                "content": f"{text}\n{IMAGE_PLACEHOLDER}" if text else IMAGE_PLACEHOLDER})
                 parts += [_image_part(i.get("source", {})) for i in tr if i.get("type") == "image"]
             else:
                 results.append({"role": "tool", "tool_call_id": block["tool_use_id"], "content": tr})

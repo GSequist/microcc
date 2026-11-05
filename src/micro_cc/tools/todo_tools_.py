@@ -2,7 +2,7 @@ from typing import List, Dict, Optional
 from micro_cc.cache import state_store
 
 VALID_STATUS = {"pending", "in_progress", "completed", "failed"}
-_TODO_ICON = {"pending": "⏳", "in_progress": "🔄", "completed": "✅", "failed": "❌"}
+_TODO_ICON = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]", "failed": "[!]"}
 
 
 def _format_todo_list(store: Dict[str, Dict], preview: int = 200) -> str:

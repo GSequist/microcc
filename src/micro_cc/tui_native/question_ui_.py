@@ -21,8 +21,8 @@ def show_current(app) -> None:
         # Freeform stage: question above the real prompt, which is the answer box.
         app._option_panel.close()
         accent = theme_store_.get("accent")
-        app.ask_question_text.update(f"[bold {accent}]● Question for you — type your answer below[/]\n{escape(q['question'])}")
-        app.prompt.placeholder = "Type your answer and press ⏎ (esc to skip)"
+        app.ask_question_text.update(f"[bold {accent}]? Question for you — type your answer below[/]\n{escape(q['question'])}")
+        app.prompt.placeholder = "Type your answer and press enter (esc to skip)"
         return
     items = [PanelItem(o["label"], o["label"], o.get("description", "")) for o in q["options"]]
     panel = app._option_panel

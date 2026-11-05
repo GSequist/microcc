@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "micro-cc"
-version = "0.2.129"
+version = "0.2.130"
 description = "Harness that gives frontier models full system access — shell, filesystem, browser, MCP — running directly on the metal."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -35,7 +35,7 @@ dependencies = [
     "pathvalidate>=3.3",
     "pdfminer.six>=20260107",
     "pillow>=12.0",
-    "playwright>=1.58",
+    "playwright>=1.63",  # page.aria_snapshot(mode="ai") + aria-ref locators
     "prompt_toolkit>=3.0",
     "puremagic>=1.30",
     "PyAutoGUI>=0.9",

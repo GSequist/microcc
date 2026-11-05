@@ -6,6 +6,10 @@ from micro_cc.utils import settings_store_
 
 # Key = the version publish.sh will ship (pyproject + 1); versions without an entry show nothing.
 NOTES = {
+    "0.2.131": [
+        "Decks on your own template: drop in a .pptx/.potx and microcc fills its layouts with real titles, text and native charts",
+        "The browser tool can drive your own running Chrome (with your logins) once remote debugging is on",
+    ],
     "0.2.130": [
         "Say \"point 2 is wrong\" and microcc fixes its last answer in place instead of writing a new one",
         "Thinking now shows when you reopen or rewind a conversation, and is kept for the model on the same provider",

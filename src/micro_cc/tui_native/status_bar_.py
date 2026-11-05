@@ -26,9 +26,9 @@ def static_hint_text(app) -> None:
         from micro_cc.tui_native import self_reload_ui_  # local: it imports screen_cmds_
         text += f" [dim]·[/dim] [{theme_store_.get('accent')}]{self_reload_ui_.self_reload_hint(app)}[/{theme_store_.get('accent')}]"
     elif app._update_available:
-        text += f" [dim]·[/dim] [{theme_store_.get('accent')}]⚠ micro-cc {app._update_available} available — run /update[/{theme_store_.get('accent')}]"
+        text += f" [dim]·[/dim] [{theme_store_.get('accent')}]! micro-cc {app._update_available} available — run /update[/{theme_store_.get('accent')}]"
     elif settings_store_.was_reset_for_corruption():
-        text += f" [dim]·[/dim] [{theme_store_.get('error')}]⚠ ~/.micro-cc/settings.json was corrupt — reset to defaults[/{theme_store_.get('error')}]"
+        text += f" [dim]·[/dim] [{theme_store_.get('error')}]! ~/.micro-cc/settings.json was corrupt — reset to defaults[/{theme_store_.get('error')}]"
     else:
         # newline_hint_text() returns None once user learns newlines; fall back to rotation.
         hint = newline_hint_text() or get_random_hint(app)
@@ -82,7 +82,7 @@ async def update_status_bar(app):
         app._last_checkpoint_index = checkpoint["as_of_index"]
         # Return to avoid overwriting flash before it renders; timer will restore normal text.
         app._flash_status(
-            f"[{theme_store_.get('warn')}]✂ compacted past conversation just now[/{theme_store_.get('warn')}]",
+            f"[{theme_store_.get('warn')}]- compacted past conversation just now[/{theme_store_.get('warn')}]",
             seconds=8,
         )
         return

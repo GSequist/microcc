@@ -25,7 +25,7 @@ def _summary(inp) -> str:
 def _badge(risk: str, reason: str) -> str:
     color, label = _RISK[risk]
     text = f"{label} · {reason}" if reason else label
-    return f"{_sgr(theme_store_.get(color))}● {text}\x1b[39m"  # 39 = default fg, keeps bold
+    return f"{_sgr(theme_store_.get(color))}> {text}\x1b[39m"  # 39 = default fg, keeps bold
 
 
 def show(app, name: str, inp) -> None:

@@ -4,6 +4,7 @@ import os
 
 from micro_cc import mods_
 from micro_cc.utils.default_status_sh import _DEFAULT_STATUS_SCRIPT
+from micro_cc.utils.legacy_status_sh import _LEGACY_STATUS_SCRIPT
 
 
 def user_script() -> str:
@@ -15,11 +16,11 @@ def default_script() -> str:
 
 
 def migrate() -> bool:
-    """Delete user statusline.sh if identical to current default."""
+    """Delete user statusline.sh if it is an unedited copy of the current or the previous (Unicode/Nerd) default."""
     path = user_script()
     try:
         with open(path) as f:
-            same = f.read() == _DEFAULT_STATUS_SCRIPT
+            same = f.read() in (_DEFAULT_STATUS_SCRIPT, _LEGACY_STATUS_SCRIPT)
         if same:
             os.remove(path)
         return same

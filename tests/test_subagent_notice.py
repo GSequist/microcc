@@ -192,7 +192,7 @@ class TuiCardTests(unittest.TestCase):
         msg = {"type": "user", "content": "\n" + _notice_turn() + "\n"}  # as history_mount_/claude_loop store it
         row = MessageRow(msg)
         lines = plain(row.render(80))
-        self.assertEqual(lines, ["⚙ ✓ alpha — built it   (click to expand)", "⚙ ✗ beta — no network"])
+        self.assertEqual(lines, ["# + alpha — built it   (click to expand)", "# x beta — no network"])
         self.assertTrue(row.toggle_expanded())
         out = "\n".join(plain(row.render(80)))
         self.assertIn("Built x.", out)
@@ -200,18 +200,18 @@ class TuiCardTests(unittest.TestCase):
 
     def test_legacy_turn_renders_as_card_not_bubble(self):
         row = MessageRow({"type": "user", "content": LEGACY})
-        self.assertEqual(plain(row.render(80)), ["⚙ ✓ alpha — built it", "⚙ ✗ beta — no network"])
+        self.assertEqual(plain(row.render(80)), ["# + alpha — built it", "# x beta — no network"])
         self.assertFalse(row.toggle_expanded())  # nothing to expand
 
     def test_pasted_block_stays_a_normal_user_row(self):
         out = "\n".join(plain(MessageRow({"type": "user", "content": PASTED}).render(200)))
-        self.assertTrue(out.startswith("› why did this fail?"))
+        self.assertTrue(out.startswith("> why did this fail?"))
         self.assertIn("please explain", out)
 
     def test_wake_turn_with_mail_shows_card_and_mail(self):
         lines = plain(MessageRow({"type": "user", "content": WITH_MAIL}).render(80))
-        self.assertEqual(lines[:2], ["⚙ ✓ alpha — built it   (click to expand)", "⚙ ✗ beta — no network"])
-        self.assertEqual(lines[2:], ["› [incoming from /w/alpha #abc]", "also check the logs"])
+        self.assertEqual(lines[:2], ["# + alpha — built it   (click to expand)", "# x beta — no network"])
+        self.assertEqual(lines[2:], ["> [incoming from /w/alpha #abc]", "also check the logs"])
 
 
 class WebuiTests(unittest.TestCase):

@@ -319,11 +319,11 @@ async def run_headless(
                     print(event["message"], file=sys.stderr, flush=True)
 
                 if verbose and etype == "tool_call":
-                    print(f"⟐ {event['name']} {json.dumps(event['input'])[:200]}", file=sys.stderr, flush=True)
+                    print(f"* {event['name']} {json.dumps(event['input'])[:200]}", file=sys.stderr, flush=True)
                 elif verbose and etype == "tool_result":
-                    print(f"  → {event['output'][:200]}", file=sys.stderr, flush=True)
+                    print(f"  -> {event['output'][:200]}", file=sys.stderr, flush=True)
                 elif verbose and etype == "turn_reset":
-                    print(f"⟐ {event['message']}", file=sys.stderr, flush=True)
+                    print(f"* {event['message']}", file=sys.stderr, flush=True)
 
                 if etype in ("tool_call", "tool_result", "final_text", "done", "error"):
                     store_msgs(project_dir, msgs)
@@ -353,7 +353,7 @@ async def run_headless(
             if query is None:
                 break
             if verbose:
-                print(f"⟐ woken: {query.splitlines()[0][:200]}", file=sys.stderr, flush=True)
+                print(f"* woken: {query.splitlines()[0][:200]}", file=sys.stderr, flush=True)
             final_content = None
     except asyncio.CancelledError:
         if not (kill_state and kill_state.get("signal")):
@@ -480,7 +480,7 @@ def _spawn_detached(args, raw_prompt: str, project_dir: str, model: str) -> int:
     log_path = None
     refusal = _nested_refusal(project_dir)
     if refusal:  # refused before any project or storage dir exists, so nothing is left behind
-        _emit("REFUSED", f"✗ REFUSED — {name}: {refusal}")
+        _emit("REFUSED", f"x REFUSED — {name}: {refusal}")
         return 2
     os.makedirs(project_dir, exist_ok=True)
     log_path = _headless_log_path(project_dir)
@@ -523,13 +523,13 @@ def _spawn_detached(args, raw_prompt: str, project_dir: str, model: str) -> int:
         pid = int(verdict.split()[1])
         _emit(
             "STARTED",
-            f"▶ STARTED — {name} running detached as pid {pid} (log: {log_path}). You'll be "
+            f"> STARTED — {name} running detached as pid {pid} (log: {log_path}). You'll be "
             f"woken at its checkpoint (DONE/FAILED/PAUSED/NEEDS_INPUT); stop it with `kill {pid}`.",
             pid=pid,
         )
         return 0
     if verdict and verdict.startswith("REFUSED "):
-        _emit("REFUSED", f"✗ REFUSED — {name}: {verdict[len('REFUSED '):]}")
+        _emit("REFUSED", f"x REFUSED — {name}: {verdict[len('REFUSED '):]}")
         return 2
     if proc.poll() is None:
         _emit(
@@ -540,7 +540,7 @@ def _spawn_detached(args, raw_prompt: str, project_dir: str, model: str) -> int:
             pid=proc.pid,
         )
         return 3
-    _emit("FAILED", f"✗ FAILED — {name} exited before starting (code {proc.returncode}). Log tail:\n{_log_tail(log_path)}")
+    _emit("FAILED", f"x FAILED — {name} exited before starting (code {proc.returncode}). Log tail:\n{_log_tail(log_path)}")
     return 1
 
 
@@ -647,7 +647,7 @@ def start_headless_():
         refusal = _register(caller_project_dir, project_dir) if is_subagent else None
         _send_verdict(int(verdict_fd), f"REFUSED {refusal}" if refusal else f"OK {os.getpid()}")
         if refusal:
-            print(f"✗ REFUSED — {refusal}")
+            print(f"x REFUSED — {refusal}")
             sys.exit(2)
         registered = True
         print(f"[headless] pid {os.getpid()} running {project_dir} (model {model})", flush=True)

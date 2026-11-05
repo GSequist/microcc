@@ -150,7 +150,7 @@ def list_skill_files(skill_name: str, project_dir: str = "") -> list[str]:
     files = []
 
     for item in skill_path.rglob('*'):
-        if item.is_file():
+        if item.is_file() and '__pycache__' not in item.parts:
             files.append(str(item.relative_to(skill_path)))
 
     return files

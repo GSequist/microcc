@@ -250,11 +250,11 @@ class OptionPanel:
             item_lines = self._render_item(self.items[i], i == self.selected_index, width, primary_width, theme)
             self._hit_rows.append((len(lines), len(lines) + len(item_lines) - 1, i))
             lines.extend(item_lines)
-        hints = ["↑↓ move", "⏎ select", "esc cancel"]
+        hints = ["up/down move", "enter select", "esc cancel"]
         if self.multi:
             hints.insert(1, "space toggle")
         if any(it.choices for it in self.items):
-            hints.insert(1, "←→ change")
+            hints.insert(1, "left/right change")
         if start > 0 or end < len(self.items):
             hints.append(f"{self.selected_index + 1}/{len(self.items)}")
         lines.append(theme.scroll_info(_truncate("  " + " · ".join(hints), width)))

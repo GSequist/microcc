@@ -40,7 +40,7 @@ def _compaction_flash(project_dir):
     return sse({
         "type": "data-status",
         "id": "status",
-        "data": {"text": "✂ compacted past conversation just now", "at": checkpoint["as_of_index"]},
+        "data": {"text": "- compacted past conversation just now", "at": checkpoint["as_of_index"]},
     })
 
 

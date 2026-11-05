@@ -60,8 +60,9 @@ the user ungroups the slide. Compute each line's `y` yourself: first baseline +
 n × line-height (≈1.2 × font-size). Same for anything else positioned relatively —
 horizontal runs of mixed styling get their own absolute `x`.
 
-Rough sizing budget (Arial, regular weight, in SVG units where 1 unit ≈ 1px at
-96dpi): a line's pixel width is roughly `0.55 * font-size * character-count`.
+Rough sizing budget (Arial, in SVG units where 1 unit ≈ 1px at 96dpi): a line's
+pixel width is roughly `0.55 * font-size * character-count` for regular weight,
+`0.62` for bold, and `0.68` for ALL CAPS or digit-heavy text.
 Before finalizing a line, check it against the box width; if it's close, break
 earlier rather than trust it'll fit. For anything data-driven or user-supplied
 (headlines, source quotes), compute the estimate rather than eyeballing it.
@@ -155,14 +156,20 @@ drop shadow on a card, `feDropShadow` is fine in small doses:
 </filter>
 ```
 
-Avoid gradients, complex filter chains, and animations — they either don't
-survive the PPTX embed cleanly or don't match once opened in PowerPoint.
+Filters (shadows included) are dropped by "Convert to Shape", so anything that
+depends on a shadow to separate it from the background looks flat once the user
+ungroups the slide. Use a hairline stroke as the real edge and treat the shadow as
+garnish. Avoid gradients, complex filter chains and animations.
 
 ## Check each slide before moving on
 
 ```bash
 python scripts/render_svg.py slides/01-title.svg
 ```
+
+cairosvg substitutes any font that isn't installed locally (e.g. no Arial on a bare
+Linux box), so the preview's line widths can differ from what PowerPoint shows. Trust
+the width budget above over a preview that looks roomy.
 
 Read the resulting PNG. Look for: text overflowing its column, overlapping
 elements, a line that's clearly too tight against its neighbor, low contrast,
