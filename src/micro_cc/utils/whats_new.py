@@ -6,6 +6,9 @@ from micro_cc.utils import settings_store_
 
 # Key = the version the next publish ships: run `./publish.sh --next`. Versions without an entry show nothing.
 NOTES = {
+    "0.2.133": [
+        "Memory review after compaction now checks facts against your full conversation history before saving, and notes where each one came from",
+    ],
     "0.2.132": [
         "/keys now replaces a key you enter again (e.g. a fresh GRAPH_API_KEY) instead of appending a stale duplicate to .env",
         "Coming back from /gui on a long conversation no longer leaves a garbled status line: the screen fully redraws on return",
@@ -17,7 +20,6 @@ NOTES = {
         "The browser tool can drive your own running Chrome (with your logins) once remote debugging is on",
     ],
     "0.2.130": [
-        "Say \"point 2 is wrong\" and microcc fixes its last answer in place instead of writing a new one",
         "Thinking now shows when you reopen or rewind a conversation, and is kept for the model on the same provider",
         "LiteLLM: thinking is now sent back to the model correctly, for both Claude and GPT",
     ],

@@ -87,29 +87,7 @@ def _user_queued(msg, r):
 
 
 def _text(msg, r):
-    if not msg.get("amended"):
-        return render_md(msg["content"])
-    return Group(render_md(msg["content"]), Text(f"{glyph('amended')} edited", style="dim italic"))
-
-
-def _folded(msg, r):
-    """A correction turn: the user's note as a normal prompt line, tagged; the ack shows on click."""
-    line = _user_line(msg["note"])
-    line.append(f"   {glyph('amended')} revised above", style="dim italic")
-    if msg.get("expanded") and msg.get("ack"):
-        return Group(line, render_md(msg["ack"], dim=True))
-    return line
-
-
-def _tool_call_amend(msg, r):
-    if msg.get("result") is None or not msg.get("expanded"):
-        return _tool_call(msg, r)
-    inp = msg.get("input", {})
-    return Group(
-        Text.assemble((f"{glyph('tool')} {msg['name']}", "dim"), (f"   {glyph('hint_collapse')}", "dim italic")),
-        Group(*cap_diff_lines(build_diff_lines(inp.get("old_str", ""), inp.get("new_str", "")))),
-        Text(glyph("rule") * 40, style="dim"),
-    )
+    return render_md(msg["content"])
 
 
 def _thinking(msg, r):
@@ -254,8 +232,6 @@ BUILTIN = {
     "tool_call": _tool_call,
     "tool_call:bash_": _tool_call_bash,
     "tool_call:edit_": _tool_call_edit,
-    "tool_call:amend_last_reply_": _tool_call_amend,
-    "folded": _folded,
     "error": _error,
     "mcp_auth": _mcp_auth,
     "approval": _approval,

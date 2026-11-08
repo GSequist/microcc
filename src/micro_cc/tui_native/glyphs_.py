@@ -23,7 +23,6 @@ DEFAULTS = {
     "project": "dir",
     "hint": "tip:",
     "model": "model",
-    "amended": "~",
 }
 
 _resolved: dict | None = None

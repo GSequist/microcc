@@ -5,12 +5,11 @@ import time
 
 from micro_cc.utils.system_prompt_ import HEAD_KEY, PATCH_KEY
 from micro_cc.utils.tool_safety_ import is_read_only
-from micro_cc.utils.amend_ import AMENDED_KEY, ACK_KEY
 
 REPLY_THINKING_KEY = "_thinking"  # a final reply's thinking blocks; client.drop_foreign_thinking turns them back into content
 
-# Row metadata kept through store/load (wires read only role and content): system prompt versioning, amend markers.
-_SYSTEM_KEYS = (HEAD_KEY, PATCH_KEY, AMENDED_KEY, ACK_KEY, REPLY_THINKING_KEY)
+# Row metadata kept through store/load (wires read only role and content): system prompt versioning, reply thinking.
+_SYSTEM_KEYS = (HEAD_KEY, PATCH_KEY, REPLY_THINKING_KEY)
 
 
 def log_dropped_message(source: str, project_dir: str, count: int) -> None:

@@ -15,13 +15,11 @@ from pathlib import Path
 from rich.text import Text
 
 from micro_cc.tui_native.keys_ import matches_key, parse_key, parse_key_id
+from micro_cc.utils.loop_events_ import AGENT_TYPES
 
 API_VERSION = 2
 EVENTS = ("render", "glyphs", "command", "key", "pane", "pane_key", "pane_click", "agent")
 PANE_EVENTS = ("pane", "pane_key", "pane_click")
-# Coarse loop events only; per-token deltas excluded to keep streaming cheap.
-AGENT_TYPES = ("tool_call", "tool_result", "final_text", "done", "error", "turn_boundary",
-               "approval_request", "question_asked", "cache_invalidate")
 LEGACY = ("commands", "renderers", "panels", "keys.json", "glyphs.json", "banner.txt")
 SLOW_S = 0.1  # sync handler self-time that disables its mod after it returns
 HANG_S = 0.5  # sync handler self-time at which the watchdog interrupts it

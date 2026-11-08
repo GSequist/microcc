@@ -10,7 +10,6 @@ from micro_cc.utils.helpers import project_hash
 from micro_cc.models.catalog import compaction_trigger_for, effective_trim_budget, summary_cap_for
 from micro_cc.utils.tokenization_simple import CHARS_PER_TOKEN, _approx_tokens, _msg_tokens, total_tokens, _drop_orphaned_tool_blocks, token_stats, save_token_stats
 from micro_cc.utils.msg_normalize_ import normalize_message, reconstruct_message, repair_dangling_tool_use, is_valid_message, log_dropped_message
-from micro_cc.utils.amend_ import same_content
 from micro_cc.postgres_store import pg_store_
 
 
@@ -204,38 +203,6 @@ def _rewind_msgs_local(project_dir: str, cut_idx: int) -> list:
         _persisted_len[project_dir] = len(kept)
 
     return [reconstruct_message(m) for m in kept]
-
-
-_AMEND_SCAN = 200  # rows scanned back from the tail for the reply to amend
-
-
-def amend_msg(project_dir: str, old: dict, new: dict, msgs: list | None = None) -> bool:
-    """Replace the newest stored assistant row whose content equals old's with new; False if none matches. msgs (post-amend) goes to the sink."""
-    if _use_postgres():
-        return pg_store_.amend_msg(project_dir, old, new)
-
-    jsonl_path = _get_storage_dir(project_dir) / "messages.jsonl"
-    want = normalize_message(old)["content"]
-    with _get_lock(project_dir):
-        if not jsonl_path.exists():
-            return False
-        lines = jsonl_path.read_text().splitlines(keepends=True)
-        for i in range(len(lines) - 1, max(len(lines) - _AMEND_SCAN, 0) - 1, -1):
-            try:
-                row = json.loads(lines[i])
-            except json.JSONDecodeError:
-                continue
-            if isinstance(row, dict) and row.get("role") == "assistant" and same_content(row.get("content"), want):
-                lines[i] = json.dumps(normalize_message(new)) + "\n"
-                tmp = jsonl_path.with_suffix(".jsonl.tmp")
-                tmp.write_text("".join(lines))
-                os.replace(tmp, jsonl_path)  # row count unchanged, so _persisted_len stays valid
-                break
-        else:
-            return False
-    if msgs is not None:
-        _notify_sink(project_dir, msgs)
-    return True
 
 
 def erase_msgs(project_dir: str) -> None:
@@ -487,7 +454,7 @@ def erase_checkpoint(project_dir: str) -> None:
     erase_summary(project_dir)
 
 
-_MEMORY_REVIEW_MAX_ROUNDS = 8
+_MEMORY_REVIEW_MAX_ROUNDS = 12
 
 
 def _store_memory_review_recap(project_dir: str, recap: str) -> None:
@@ -518,6 +485,7 @@ async def _review_memory(new_summary: str, model: str, project_dir: str) -> None
     _reviewing.add(project_dir)
     try:
         from micro_cc.models.schema import function_to_schema
+        from micro_cc.tools.search_history_tool_ import search_history_
         from micro_cc.tools.memory_tool_ import memory_
         from micro_cc.utils import memory_store_
 
@@ -547,19 +515,25 @@ async def _review_memory(new_summary: str, model: str, project_dir: str) -> None
             "codebase. Call memory_(action='get', ...) first if you need an "
             "existing entry's full content before editing it — you can call "
             "memory_ several times in the same turn (e.g. get two different "
-            "keys at once) rather than one call per turn. When you're done "
-            "(including doing nothing), reply with a short confirmation and no "
-            "further tool calls.\n\n"
+            "keys at once) rather than one call per turn. "
+            "The summary is a paraphrase — before adding or editing an entry, verify "
+            "the fact with search_history_ (exact words, not paraphrase) and fix or "
+            "delete entries the history contradicts. End each entry's content with "
+            "'evidence: #<msg index>' from the search hit. "
+            "When you're done (including doing nothing), reply with a short "
+            "confirmation and no further tool calls.\n\n"
             f"<memory-manifest>\n{manifest}\n</memory-manifest>\n\n"
             f"<newly-folded-summary>\n{new_summary}\n</newly-folded-summary>"
         )
 
         input_msgs = [{"role": "user", "content": instructions}]
-        tools = [function_to_schema(memory_)]
+        tools = [function_to_schema(memory_), function_to_schema(search_history_)]
+
+        TOOLS = {"memory_": memory_, "search_history_": search_history_}
 
         # '+ key' / '~ key' / '- key' per applied add/edit/delete, kept across rounds.
         change_log: list[str] = []
-        _APPLIED_PREFIX = {
+        APPLIED_PREFIX = {
             "add": ("+", "Added memory entry"),
             "edit": ("~", "Updated memory entry"),
             "delete": ("-", "Deleted memory entry"),
@@ -587,15 +561,19 @@ async def _review_memory(new_summary: str, model: str, project_dir: str) -> None
 
             tool_result_blocks = []
             for b in tool_blocks:
-                if b.name != "memory_":
+                fn = TOOLS.get(b.name)
+                if fn is None:
                     result = f"Error: unexpected tool '{b.name}' in memory review."
                 else:
-                    result = await memory_(**b.input, project_dir=project_dir)
-                    marker = _APPLIED_PREFIX.get(b.input.get("action"))
-                    key = (b.input.get("key") or "").strip()
-                    if marker and key and result.startswith(marker[1]):
-                        trimmed = key if len(key) <= 50 else key[:49] + "…"
-                        change_log.append(f"{marker[0]} {trimmed}")
+                    result = await fn(**b.input, project_dir=project_dir)
+
+                    # TUI recap: applied memory_ writes only
+                    if b.name == "memory_":
+                        marker = APPLIED_PREFIX.get(b.input.get("action"))
+                        key = (b.input.get("key") or "").strip()
+                        if marker and key and result.startswith(marker[1]):
+                            trimmed = key if len(key) <= 50 else key[:49] + "…"
+                            change_log.append(f"{marker[0]} {trimmed}")
                 tool_result_blocks.append({
                     "type": "tool_result", "tool_use_id": b.id, "content": str(result),
                 })

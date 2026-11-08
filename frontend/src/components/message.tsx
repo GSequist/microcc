@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo } from 'react';
 import type { UIMessage } from 'ai';
 import { Markdown } from './markdown';
 import { MessageActions } from './message-actions';
@@ -89,9 +89,6 @@ const PurePreviewMessage = ({
                       <div className={cn(isLoading && 'streaming-fade')}>
                         <Markdown>{part.text}</Markdown>
                       </div>
-                      {(message.metadata as any)?.amended && (
-                        <span className="text-xs italic text-muted-foreground">↻ edited</span>
-                      )}
                       {message.role === 'assistant' && (
                         <div className="flex justify-end mt-2">
                           <MessageActions
@@ -159,10 +156,6 @@ const PurePreviewMessage = ({
               return null;
             }
 
-            if (part.type === 'data-folded') {
-              return <FoldedCorrection key={key} {...((part as any).data as { note: string; ack: string })} />;
-            }
-
             // ── Dynamic tool ──
             if (part.type === 'dynamic-tool') {
               const { toolName, toolCallId, state, input } = part;
@@ -198,30 +191,6 @@ const PurePreviewMessage = ({
           })}
         </div>
       </div>
-    </div>
-  );
-};
-
-// A correction turn: the user's note as a normal bubble, tagged; click the tag to show the ack.
-const FoldedCorrection = ({ note, ack }: { note: string; ack: string }) => {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="flex flex-col items-end gap-1 min-w-0">
-      <div className="rounded-xl max-w-2xl bg-muted px-3 py-2">
-        <Markdown>{note}</Markdown>
-      </div>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="text-xs italic text-muted-foreground hover:text-foreground transition-colors"
-      >
-        ↻ revised above
-      </button>
-      {open && ack && (
-        <div className="text-sm text-muted-foreground opacity-80 self-start">
-          <Markdown>{ack}</Markdown>
-        </div>
-      )}
     </div>
   );
 };

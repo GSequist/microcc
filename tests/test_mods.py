@@ -363,5 +363,15 @@ class TestStatusline(ModsCase):
         self.assertEqual(statusline_.resolve(), str(mine))
 
 
+class AgentTypesSync(unittest.TestCase):
+    def test_agent_types_are_yielded_and_handled(self):
+        from micro_cc.tui_native.etype_handler_ import ETYPES
+        from micro_cc.utils.loop_events_ import AGENT_TYPES
+        src = (Path(__file__).resolve().parent.parent / "src/micro_cc/claude_loop_.py").read_text()
+        for t in AGENT_TYPES:
+            self.assertIn(f'"type": "{t}"', src, f"claude_loop_ no longer yields {t}")
+            self.assertIn(t, ETYPES, f"TUI has no handler for {t}")
+
+
 if __name__ == "__main__":
     unittest.main()

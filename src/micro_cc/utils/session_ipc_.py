@@ -7,7 +7,7 @@ import os
 import time
 from pathlib import Path
 
-from micro_cc.utils.msg_store_ import _get_storage_dir
+from micro_cc.utils.helpers import project_hash
 
 _SEND_TIMEOUT = 3.0
 
@@ -45,7 +45,10 @@ def list_peers(exclude_project_dir: str | None = None) -> list[dict]:
 
 
 def socket_path(project_dir: str) -> Path:
-    return _get_storage_dir(project_dir) / "session.sock"
+    """Short fixed-length path: AF_UNIX caps at ~104 bytes, so no project name in it."""
+    d = Path.home() / ".micro-cc" / "s"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{project_hash(project_dir)}.sock"
 
 
 async def start_listener(project_dir: str, on_message):
@@ -75,11 +78,15 @@ async def start_listener(project_dir: str, on_message):
         finally:
             writer.close()
 
-    return await asyncio.start_unix_server(handle, path=str(path))
+    try:
+        return await asyncio.start_unix_server(handle, path=str(path))
+    except OSError:
+        return None  # messaging is optional; never block startup
 
 
 def stop_listener(project_dir: str, server) -> None:
-    server.close()
+    if server is not None:
+        server.close()
     (_registry_dir() / f"{os.getpid()}.json").unlink(missing_ok=True)
     path = socket_path(project_dir)
     if path.exists():
