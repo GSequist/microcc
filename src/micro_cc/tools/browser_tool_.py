@@ -182,7 +182,7 @@ async def browser(code: str, description: str, *, project_dir: str, model: str, 
         await close_browser()
         hint = ""
         if "missing dependencies" in str(e).lower():
-            hint = f"\nFix: sudo {sys.executable} -m playwright install-deps chromium"
+            hint = f"\nFix: sudo {sys.executable} -m playwright install-deps chromium (if node fails on libatomic.so.1: apt install libatomic1 first)"
         return f"[Browser unavailable: {type(e).__name__}: {str(e)[:800]}]{hint}"
 
     exec_output = ""

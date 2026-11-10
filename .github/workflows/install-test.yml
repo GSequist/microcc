@@ -83,8 +83,9 @@ jobs:
     container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
-      - name: curl + ca-certs + xvfb
-        run: apt-get update && apt-get install -y curl ca-certificates xvfb xauth
+      # libatomic1: playwright's bundled node needs it before install-deps can even run
+      - name: curl + ca-certs + xvfb + libatomic1
+        run: apt-get update && apt-get install -y curl ca-certificates xvfb xauth libatomic1
       - name: install via real URL
         run: curl -fsSL $RAW/install.sh | sh
       # test this commit's code, not whatever PyPI currently serves
