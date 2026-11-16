@@ -2,8 +2,6 @@
 
 import asyncio
 import os
-import signal
-import subprocess
 import time
 
 from micro_cc.cache import state_store
@@ -350,20 +348,6 @@ async def cmd_optimize(app, extra: str = ""):
     await _run_hidden_setup(app, hidden_prompts.OPTIMIZE, extra, "~ busy — try /optimize again once this finishes")
 
 
-def _kill_port(port: int):
-    try:
-        out = subprocess.run(
-            ["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True, timeout=2,
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return
-    for pid in out.split():
-        try:
-            os.kill(int(pid), signal.SIGTERM)
-        except (ValueError, ProcessLookupError, PermissionError):
-            pass
-
-
 _SUBAGENT_TERMINAL_STATUSES = {"DONE", "FAILED", "PAUSED"}
 
 
@@ -391,28 +375,19 @@ async def cmd_gui(app):
         await app._mount_row({"type": "error", "content": "No API endpoint configured — run /login"})
         return
 
-    from micro_cc.webui.launch import serve, PORT
+    from micro_cc.webui.launch import serve
+    from micro_cc.tui_native import pollers_
 
-    def _serve():
-        return serve(
-            app._project_dir,
-            model=app._current_model,
-            trim_budget=app._trim_budget,
-        )
-
+    # Port is per folder; a busy one is another live session's, so no kill-and-retry.
     try:
-        url, shutdown = _serve()
-    except OSError:
-        _kill_port(PORT)
-        time.sleep(0.3)
-        try:
-            url, shutdown = _serve()
-        except OSError as e:
-            await app._mount_row({"type": "error", "content": str(e)})
-            return
+        url, shutdown = serve(app._project_dir, model=app._current_model, trim_budget=app._trim_budget)
+    except OSError as e:
+        await app._mount_row({"type": "error", "content": str(e)})
+        return
     app._gui_url = url
     app._gui_shutdown = shutdown
     app._input_mode = "gui"
+    app._safe_task(pollers_.gui_watchdog_loop(app), "gui watchdog")
 
     await app._mount_row({
         "type": "text",
@@ -458,6 +433,63 @@ async def cmd_keys(app):
     app.prompt.placeholder = "Env var name to store (e.g. AZURE_CLIENT_SECRET) — blank to finish"
     app.set_focus(app.prompt)
 
+def _mcp_notice(app, text: str) -> None:
+    """Login prompt/outcome from the background login: inline row when idle, status flash mid-turn."""
+    if app._input_mode == "query_active":
+        app._flash_status(f"~ {text}", seconds=8)
+    else:
+        asyncio.get_running_loop().create_task(app._mount_row({"type": "mcp_auth", "content": text}))
+
+
+async def _mcp_login(app, name: str) -> None:
+    from micro_cc.tools import mcp_login_
+    msg = await mcp_login_.start_login(app._project_dir, name, lambda t: _mcp_notice(app, t))
+    await app._mount_row({"type": "mcp_auth", "content": msg})
+
+
+async def _mcp_pick(app, title: str, only_logged_in: bool, act) -> None:
+    """No name given: option panel of OAuth servers with their login status."""
+    from micro_cc.tools import mcp_login_
+    app._flash_status("~ checking MCP servers…")
+    rows = [r for r in await mcp_login_.oauth_servers(app._project_dir) if r["has_token"] or not only_logged_in]
+    if not rows:
+        await app._mount_row({"type": "mcp_auth", "content": mcp_login_.format_list(rows)})
+        return
+    app._option_panel.open(
+        [PanelItem(r["name"], r["name"], f"{r['status']} · {r['url']}") for r in rows],
+        on_select=lambda it: asyncio.get_running_loop().create_task(act(app, it.value)),
+        title=title,
+    )
+
+
+async def cmd_mcp_login(app, arg: str = ""):
+    app.prompt.clear()
+    if arg:
+        await _mcp_login(app, arg)
+    else:
+        await _mcp_pick(app, "Log in to which MCP server?", False, _mcp_login)
+
+
+async def _mcp_logout(app, name: str) -> None:
+    from micro_cc.tools import mcp_login_
+    await app._mount_row({"type": "mcp_auth", "content": await mcp_login_.logout(app._project_dir, name)})
+
+
+async def cmd_mcp_logout(app, arg: str = ""):
+    app.prompt.clear()
+    if arg:
+        await _mcp_logout(app, arg)
+    else:
+        await _mcp_pick(app, "Forget the login for which MCP server?", True, _mcp_logout)
+
+
+# Builtins taking an argument ("/mcp-login notion"); bare form also listed in SLASH_COMMANDS.
+ARG_COMMANDS = {
+    "/mcp-login": cmd_mcp_login,
+    "/mcp-logout": cmd_mcp_logout,
+}
+
+
 PREFIX_COMMANDS = {
     "/setup": cmd_setup,
     "/new-skill": cmd_new_skill,
@@ -488,6 +520,7 @@ SLASH_COMMANDS = {
     "/reload": cmd_reload,
     "/author": cmd_author,
     "/gui": cmd_gui,
+    **ARG_COMMANDS,
 }
 
 _registry_prompt_names = {c["name"] for c in command_registry.COMMANDS if c["kind"] == "prompt"}

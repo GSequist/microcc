@@ -6,6 +6,10 @@ from micro_cc.utils import settings_store_
 
 # Key = the version the next publish ships: run `./publish.sh --next`. Versions without an entry show nothing.
 NOTES = {
+    "0.2.135": [
+        "OAuth MCP servers now re-login reliably when a token is rejected, even one that looked unexpired",
+        "/mcp-login lists your OAuth MCP servers with their login status and logs you in; /mcp-logout forgets a login",
+    ],
     "0.2.133": [
         "Memory review after compaction now checks facts against your full conversation history before saving, and notes where each one came from",
     ],

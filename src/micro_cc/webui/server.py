@@ -1,18 +1,22 @@
 """FastAPI surface for the GUI: one project, one browser tab (cookie + tab id), the process is the session."""
 
+import asyncio
+import contextlib
 import hmac
+import json
 import os
+import time
 import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from micro_cc.claude_loop_ import claude_loop, GATEABLE_TOOLS
 from micro_cc.models import catalog as model_catalog
 from micro_cc.models.providers import active_provider
-from micro_cc.utils import command_registry, hidden_prompts, hints, settings_store_, whats_new
+from micro_cc.utils import command_registry, hidden_prompts, hints, keep_awake_, settings_store_, whats_new
 from micro_cc.utils.msg_store_ import (
     store_msgs,
     erase_msgs,
@@ -42,6 +46,10 @@ _GUI_ALLOWED_PROMPT_COMMANDS = {c["name"] for c in COMMANDS if c.get("kind") == 
 
 REWIND_LIMIT = 40
 
+# > hidden-tab timer throttling (Chrome pings at most once a minute), so a backgrounded owner keeps its tab.
+OWNER_LEASE_S = 75
+COOKIE_MAX_AGE_S = 30 * 24 * 3600  # survives a browser restart; a new /gui server mints a new one anyway
+
 app = FastAPI(title="micro-cc")
 
 
@@ -56,20 +64,31 @@ def _authed(request: Request) -> bool:
 
 @app.middleware("http")
 async def _gate(request: Request, call_next):
-    """/api needs the session cookie; the first tab id seen owns the session."""
+    """/api needs the session cookie; one tab owns the session, on a lease a silent tab loses."""
     if request.url.path.startswith("/api/") and session.STATE["cookie"] is not None:
         if not _authed(request):
             return JSONResponse({"error": "unauthorized"}, status_code=403)
+        now = time.monotonic()
         tab = request.headers.get("x-tab")
         if tab:
-            owner = session.STATE["owner"] = session.STATE["owner"] or tab
-            if tab != owner:
+            st = session.STATE
+            if st["owner"] not in (None, tab) and now - st["owner_seen"] < OWNER_LEASE_S:
                 return JSONResponse({"error": "session is open in another tab"}, status_code=409)
+            st["owner"], st["owner_seen"] = tab, now
+        session.STATE["last_seen"] = now
     return await call_next(request)
 
 
 @app.get("/api/ping")
 async def ping():
+    return {"ok": True}
+
+
+@app.post("/api/release")
+async def release(tab: str = ""):
+    """sendBeacon on pagehide: a closed or reloading tab frees the session at once instead of after the lease."""
+    if tab and session.STATE["owner"] == tab:
+        session.STATE["owner"] = None
     return {"ok": True}
 
 
@@ -126,9 +145,12 @@ async def _empty_stream():
     yield bridge.SSE_DONE
 
 
-async def _refusal_stream(text: str):
-    """Same shape as _empty_stream, with a visible reason for a command this surface can't run."""
+async def _refusal_stream(text: str, resync: bool = False):
+    """Same shape as _empty_stream, with a visible reason for a command this surface can't run.
+    resync: the tab's view is stale (e.g. typed over a parked approval); it reloads history after."""
     yield bridge.sse({"type": "start", "messageId": f"msg-{uuid.uuid4().hex[:12]}"})
+    if resync:
+        yield bridge.sse({"type": "data-resync", "data": {}, "transient": True})
     yield bridge.sse({"type": "error", "errorText": text})
     yield bridge.sse({"type": "finish", "finishReason": "stop"})
     yield bridge.SSE_DONE
@@ -181,7 +203,7 @@ async def get_subagents():
 async def get_incoming(claim: bool = False):
     """Peek at the head of server-initiated turns; /api/chat consumes it, so a dropped send stays queued."""
     queue = session.STATE["incoming"]
-    if claim and queue and session.STATE["pending"] is None and not session.STATE["lock"].locked():
+    if claim and queue and not session.busy():
         return {"id": queue[0]["id"], "content": queue[0]["content"], "queued": len(queue)}
     return {"id": None, "content": None, "queued": len(queue)}
 
@@ -204,7 +226,11 @@ async def post_settings(request: Request):
 
 @app.get("/api/messages")
 async def get_messages():
-    return {"messages": history.to_ui_messages(load_msgs(_project_dir()))}
+    """Disk history; mid-turn, history up to the turn's user message, and `live` tells the tab to replay the rest."""
+    turn = session.STATE["turn"]
+    if turn is not None and not turn["done"]:
+        return {"messages": turn["ui_base"], "live": True}
+    return {"messages": history.to_ui_messages(load_msgs(_project_dir())), "live": False}
 
 
 @app.get("/api/rewind")
@@ -222,6 +248,8 @@ async def get_rewind():
 
 @app.post("/api/rewind")
 async def post_rewind(request: Request):
+    if session.busy():
+        return JSONResponse({"error": "a turn is running or waiting on you — finish or stop it first"}, status_code=423)
     data = await request.json()
     project_dir = _project_dir()
     msgs = load_msgs(project_dir)
@@ -276,6 +304,9 @@ async def post_command(request: Request):
     name = data.get("name")
     project_dir = _project_dir()
 
+    if name in ("/clear", "/compact") and session.busy():  # would rewrite history under a live or parked loop
+        return {"message": f"{name} — a turn is running or waiting on you; finish or stop it first"}
+
     if name == "/clear":
         erase_msgs(project_dir)
         erase_summary(project_dir)
@@ -288,7 +319,35 @@ async def post_command(request: Request):
     if name == "/author":
         return {"message": "George Juraj Salapa — https://gsequist.github.io/"}
 
+    if name in ("/mcp-login", "/mcp-logout"):
+        return {"message": await _mcp_command(name, (data.get("args") or "").strip(), project_dir)}
+
     return {"message": f"{name} is not available here"}
+
+
+async def _mcp_command(name: str, arg: str, project_dir: str) -> str:
+    """No name: list OAuth servers. Login runs in the background on this loop; the reply carries the
+    auth URL notice (first ~20s), and the outcome shows on the next bare /mcp-login."""
+    from micro_cc.tools import mcp_login_
+    if not arg:
+        rows = await mcp_login_.oauth_servers(project_dir)
+        return mcp_login_.format_list(rows) + (f"\n\nRun {name} <name>." if rows else "")
+    if name == "/mcp-logout":
+        return await mcp_login_.logout(project_dir, arg)
+    notes: list[str] = []
+    noticed = asyncio.Event()
+
+    def notify(text: str) -> None:
+        notes.append(text)
+        noticed.set()
+
+    started = await mcp_login_.start_login(project_dir, arg, notify)
+    if started.startswith("starting"):
+        try:
+            await asyncio.wait_for(noticed.wait(), 20)
+        except TimeoutError:
+            pass
+    return "\n".join([started, *notes])
 
 
 # ── chat ───────────────────────────────────────────────────────────
@@ -322,56 +381,155 @@ async def post_chat(request: Request):
         query = f"Files attached to this message (relative to the project directory):\n{listed}\n\n{query}"
 
     async def run():
-        # Everything touching session state happens under the lock: one turn at a time.
-        async with session.STATE["lock"]:
-            # Pending approval: claude_loop is parked on a yield; this POST resumes it, no new turn.
-            resuming = session.STATE["pending"] is not None
-            if not resuming and (
-                not _ends_with_user_turn(messages)
-                or (incoming_id is not None and session.take_incoming(incoming_id) is None)  # another tab took it
-            ):
-                async for chunk in _empty_stream():
+        # One turn at a time: a second POST waits for the running one (no await between check and claim below).
+        while (t := session.STATE["turn"]) is not None and t["running"]:
+            await t["wake"].wait()
+
+        st = session.STATE
+        notice = None
+        if st["pending"] is not None:
+            # Parked claude_loop resumes only on this tab's explicit answer to *that* call — a plain new
+            # message (e.g. typed after a reload) must never count as an approval.
+            tool_id = (st["pending_tool"] or {}).get("id")
+            approved = _approval_response(messages, tool_id)
+            turn = st["turn"]
+            if approved is None or turn is None:
+                async for chunk in _refusal_stream("Approve or deny the pending action above first.", resync=True):
                     yield chunk
                 return
+            # Approvals resume with a bool (False if /deny stashed one); questions with the answers dict.
+            approved = approved and not st["denied"]
+            session.resolve_pending((st["answers"] if approved else None) if st["pending_kind"] == "question" else approved)
+            session.clear_pending()
+            gen = st["gen"]
+        elif not _ends_with_user_turn(messages) or (
+            incoming_id is not None and session.take_incoming(incoming_id) is None  # another tab took it
+        ):
+            async for chunk in _empty_stream():
+                yield chunk
+            return
+        else:
+            msgs = st["msgs"] = load_msgs(project_dir)
+            saved = settings_store_.get_setting("model") or model_catalog.DEFAULT_MODEL
+            model, replaced = model_catalog.usable_model(saved, active_provider())
+            notice = model_catalog.stale_model_notice(saved) if replaced else None
+            turn = st["turn"] = {
+                "msg_id": f"msg-{uuid.uuid4().hex[:12]}",  # one id across approval segments: the tab extends one message
+                "ui_base": history.to_ui_messages(msgs) + messages[-1:],
+                "segments": [],
+                "running": False,
+                "done": False,
+                "wake": asyncio.Event(),
+            }
+            gen = st["gen"] = claude_loop(
+                query=query,
+                msgs=msgs,
+                project_dir=project_dir,
+                model=model,
+                max_tokens=st["trim_budget"],
+                surface="gui",
+            )
 
-            session.STATE["stop"].clear()
-            session.STATE["partial"] = []
-            notice = None
-            if resuming:
-                # Approvals resume with a bool (False if /deny stashed one); questions with the answers dict.
-                kind = session.STATE["pending_kind"]
-                session.resolve_pending(session.STATE["answers"] if kind == "question" else not session.STATE["denied"])
-                session.clear_pending()
-                gen = session.STATE["gen"]
-            else:
-                msgs = session.STATE["msgs"] = load_msgs(project_dir)
-                saved = settings_store_.get_setting("model") or model_catalog.DEFAULT_MODEL
-                model, replaced = model_catalog.usable_model(saved, active_provider())
-                notice = model_catalog.stale_model_notice(saved) if replaced else None
-                gen = session.STATE["gen"] = claude_loop(
-                    query=query,
-                    msgs=msgs,
-                    project_dir=project_dir,
-                    model=model,
-                    max_tokens=session.STATE["trim_budget"],
-                    surface="gui",
-                )
+        st["stop"].clear()
+        st["partial"] = []
+        turn["segments"].append([])
+        turn["running"] = True
+        # The turn is a task, not this response: a dropped tab (reload, sleep, discard) no longer kills it.
+        turn["task"] = asyncio.create_task(_drive(turn, gen, notice, project_dir))
+        async for chunk in _follow(turn, replay=False):
+            yield chunk
 
+    return _sse_response(run())
+
+
+def _approval_response(messages: list, tool_id: str | None) -> bool | None:
+    """The tab's approve/deny for `tool_id` (SDK state approval-responded), or None if it sent none."""
+    for msg in reversed(messages):
+        for part in msg.get("parts") or []:
+            if tool_id and part.get("toolCallId") == tool_id and part.get("state") == "approval-responded":
+                return bool((part.get("approval") or {}).get("approved"))
+    return None
+
+
+# Completed (pre-approval) segments replay as plain history: no re-armed approval, no re-asked question.
+_REPLAY_SKIP = {"finish", "done", "tool-approval-request", "data-question"}
+
+
+def _wake(turn: dict) -> None:
+    ev, turn["wake"] = turn["wake"], asyncio.Event()
+    ev.set()
+
+
+def _emit(turn: dict, chunk: str) -> None:
+    kind = "done" if chunk == bridge.SSE_DONE else json.loads(chunk[6:]).get("type")
+    turn["segments"][-1].append((kind, chunk))
+    _wake(turn)
+
+
+async def _drive(turn: dict, gen, notice: str | None, project_dir: str) -> None:
+    """Run one segment of the turn into its buffer; ends on finish, a park, /api/chat/stop or shutdown."""
+    st = session.STATE
+    keep_awake_.hold("gui-turn")  # the TUI holds "turn" for its own turns; a GUI turn must not sleep either
+    stream = bridge.stream(gen, turn["msg_id"], project_dir, notice)
+    try:
+        async with st["lock"]:
             try:
-                async for chunk in bridge.stream(gen, f"msg-{uuid.uuid4().hex[:12]}", project_dir, notice):
-                    yield chunk
-                    if session.STATE["stop"].is_set():
-                        break
+                async with contextlib.aclosing(stream):
+                    async for chunk in stream:
+                        _emit(turn, chunk)
+                        if st["stop"].is_set():
+                            break
+            except Exception as e:
+                _emit(turn, bridge.sse({"type": "error", "errorText": f"{type(e).__name__}: {e}"}))
             finally:
-                if session.STATE["pending"] is None:  # keep the generator alive while parked on an approval
+                if st["pending"] is None:  # keep the generator alive while parked on an approval
                     _persist_partial(project_dir)  # sync: durable even if the awaits below are cancelled
-                    session.STATE["gen"] = None
+                    st["gen"] = None
                     try:
                         await gen.aclose()
                     finally:
-                        store_msgs(project_dir, session.STATE["msgs"])
+                        store_msgs(project_dir, st["msgs"])
+    finally:
+        keep_awake_.hold("gui-turn", False)
+        seg = turn["segments"][-1]
+        if not seg or seg[-1][0] != "done":  # stopped/failed mid-stream: still close it for followers
+            _emit(turn, bridge.sse({"type": "finish", "finishReason": "stop"}))
+            _emit(turn, bridge.SSE_DONE)
+        turn["done"] = st["pending"] is None
+        turn["running"] = False
+        _wake(turn)
 
-    return _sse_response(run())
+
+async def _follow(turn: dict, replay: bool):
+    """Yield the turn's SSE: the current segment live, or (replay) everything since the turn began."""
+    segs = turn["segments"]
+    last = len(segs) - 1
+    if replay:
+        for si in range(last):
+            for kind, chunk in segs[si]:
+                if kind not in _REPLAY_SKIP and not (kind == "start" and si > 0):
+                    yield chunk
+    seg, i = segs[last], 0
+    while True:
+        while i < len(seg):
+            kind, chunk = seg[i]
+            i += 1
+            if not (replay and kind == "start" and last > 0):
+                yield chunk
+            if kind == "done":
+                return
+        if not turn["running"]:
+            return
+        await turn["wake"].wait()
+
+
+@app.get("/api/chat/{chat_id}/stream")
+async def resume_stream(chat_id: str):
+    """AI SDK resumeStream(): replay the live turn into a reconnected tab; 204 when there is none."""
+    turn = session.STATE["turn"]
+    if turn is None or turn["done"]:
+        return Response(status_code=204)
+    return _sse_response(_follow(turn, replay=True))
 
 
 @app.post("/api/chat/answer")
@@ -415,7 +573,8 @@ async def index(request: Request, t: str = ""):
     if token and hmac.compare_digest(t, token):
         session.STATE["token"] = None
         resp = RedirectResponse("/", status_code=303)
-        resp.set_cookie(_cookie_name(request), session.STATE["cookie"], httponly=True, samesite="strict")
+        resp.set_cookie(_cookie_name(request), session.STATE["cookie"], httponly=True, samesite="strict",
+                        max_age=COOKIE_MAX_AGE_S)
         return resp
     if not _authed(request):
         return HTMLResponse("This link has expired. Run /gui in the terminal for a new one.", status_code=403)

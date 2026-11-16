@@ -30,6 +30,8 @@ def _defaults() -> dict:
         "pane": {},
         # Last version whose release note was dismissed (utils/whats_new.py).
         "seen_version": None,
+        # Particle layer over the banner: "auto" (by month), "off", winter/spring/summer/autumn.
+        "banner_season": "auto",
     }
 
 

@@ -64,7 +64,7 @@ function Toast(props: ToastProps) {
         >
           {iconsByType[type]}
         </div>
-        <div ref={descriptionRef} className="text-zinc-950 text-sm">
+        <div ref={descriptionRef} className="text-zinc-950 text-sm whitespace-pre-line [overflow-wrap:anywhere]">
           {description}
         </div>
       </div>

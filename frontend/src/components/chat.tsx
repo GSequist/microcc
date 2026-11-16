@@ -21,6 +21,8 @@ export function Chat() {
   const [modal, setModal] = useState<ModalKind>(null);
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
   const historyLoaded = useRef(false);
+  // Set when this tab lost the stream (sleep, network, lease handover); the next good ping resyncs.
+  const needsResync = useRef(false);
 
   const {
     messages,
@@ -29,6 +31,7 @@ export function Chat() {
     setMessages,
     status,
     addToolApprovalResponse,
+    resumeStream,
   } = useChat({
     transport: new DefaultChatTransport({
       api: '/api/chat',
@@ -49,25 +52,63 @@ export function Chat() {
       if (part.type === 'data-question') {
         setQuestion((part as any).data as PendingQuestion);
       }
+      if (part.type === 'data-resync') needsResync.current = true; // applied once the stream settles
     },
 
     onError: (error) => {
+      // The turn runs server-side regardless; a dropped fetch just means we re-attach.
+      if (error instanceof TypeError) {
+        needsResync.current = true;
+        toast.warning('connection lost — reconnecting…');
+        return;
+      }
       console.error('Chat error:', error);
       toast.error(error.message || 'Something went wrong');
     },
   });
 
-  // History comes off local disk in one shot — no pagination, no cursors.
+  // History comes off local disk in one shot. Mid-turn the server returns history up to the turn's
+  // user message plus live=true, and resumeStream() replays the turn so far, then follows it.
+  type HistoryResponse = { messages: UIMessage[]; live: boolean };
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const resync = useCallback(async () => {
+    if (statusRef.current === 'streaming' || statusRef.current === 'submitted') return;
+    try {
+      const data: HistoryResponse = await (await fetch('/api/messages')).json();
+      needsResync.current = false;
+      setQuestion(null); // a parked question comes back through the replay's data-question
+      setMessages(data.messages ?? []);
+      if (data.live) resumeStream();
+    } catch {
+      needsResync.current = true; // next good ping retries
+    }
+  }, [setMessages, resumeStream]);
+
+  useEffect(() => {
+    if ((status === 'ready' || status === 'error') && needsResync.current) resync();
+  }, [status, resync]);
+
   useEffect(() => {
     if (historyLoaded.current) return;
     historyLoaded.current = true;
-    fetch('/api/messages')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.messages?.length) setMessages(data.messages);
-      })
-      .catch(() => {});
-  }, [setMessages]);
+    resync();
+  }, [resync]);
+
+  useEffect(() => {
+    const onGate = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === 'foreign') needsResync.current = true;
+    };
+    const onOnline = () => {
+      if (needsResync.current) resync();
+    };
+    window.addEventListener('gui-gate', onGate);
+    window.addEventListener('gui-online', onOnline);
+    return () => {
+      window.removeEventListener('gui-gate', onGate);
+      window.removeEventListener('gui-online', onOnline);
+    };
+  }, [resync]);
 
   useIncoming(
     status === 'ready' && !question,

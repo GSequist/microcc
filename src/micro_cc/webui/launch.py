@@ -1,5 +1,6 @@
 """Start the GUI server in a background thread, sharing claude_loop's process, and open a browser."""
 
+import hashlib
 import os
 import secrets
 import socket
@@ -15,6 +16,42 @@ from micro_cc.webui import session
 # 0.0.0.0: containers publish 8765; 127.0.0.1 is the container's own loopback.
 HOST = "0.0.0.0"
 PORT = 8765
+PORT_SPAN = 200  # per-project ports live in [PORT, PORT + PORT_SPAN)
+PORT_TRIES = 20
+
+
+def port_candidates(project_dir: str) -> list[int]:
+    """Stable port per folder (then its neighbours), so two projects' GUIs and their port-keyed cookies
+    never collide. MICROCC_GUI_PORT pins one; inside a container it stays PORT, the published one."""
+    pinned = os.environ.get("MICROCC_GUI_PORT")
+    if pinned:
+        return [int(pinned)]
+    if os.path.exists("/.dockerenv"):
+        return [PORT]
+    offset = int(hashlib.sha1(os.path.realpath(project_dir).encode()).hexdigest()[:8], 16)
+    return [PORT + (offset + i) % PORT_SPAN for i in range(PORT_TRIES)]
+
+
+def _bindable(host: str, port: int) -> bool:
+    probe = socket.socket()
+    # SO_REUSEADDR: ignore TIME_WAIT leftovers; a live listener still fails to bind.
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        probe.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def _pick_port(project_dir: str, host: str) -> int:
+    """First free candidate; a busy one belongs to another live session — never kill it."""
+    ports = port_candidates(project_dir)
+    for port in ports:
+        if _bindable(host, port):
+            return port
+    raise OSError(f"no free GUI port in {ports[0]}..{ports[-1]} — set MICROCC_GUI_PORT to pick one")
 
 
 def _has_gui_browser() -> bool:
@@ -69,7 +106,7 @@ def _restore_stderr(saved: int | None) -> None:
 
 
 def serve(project_dir, *, model=None, trim_budget=None,
-          host=HOST, port=PORT, open_browser=True):
+          host=HOST, port=None, open_browser=True):
     """Boot the server. Returns (url, shutdown) — call shutdown() to stop it."""
     from micro_cc.models.catalog import DEFAULT_MODEL, DEFAULT_TRIM_BUDGET
     from micro_cc.webui.server import app  # deferred: pulls in fastapi
@@ -83,24 +120,16 @@ def serve(project_dir, *, model=None, trim_budget=None,
         token=secrets.token_urlsafe(16),
     )
 
+    # Fail loudly on an explicit port: the browser would otherwise attach to whoever holds it.
+    if port is None:
+        port = _pick_port(project_dir, host)
+    elif not _bindable(host, port):
+        raise OSError(f"port {port} is already in use — another micro-cc GUI is probably running.")
+
     # 0.0.0.0 is a bind address, not a browsable one.
     display_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
     base = f"http://{display_host}:{port}"
     url = f"{base}/?t={session.STATE['token']}"  # one-time link; binds the first tab that opens it
-
-    # Fail loudly: a second instance would otherwise attach the browser to the first one's port.
-    probe = socket.socket()
-    # SO_REUSEADDR: ignore TIME_WAIT leftovers; a live listener still fails to bind.
-    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        probe.bind((host, port))
-    except OSError as e:
-        raise OSError(
-            f"port {port} is already in use — another micro-cc GUI is probably "
-            f"running. Stop it (esc in its terminal) and try again."
-        ) from e
-    finally:
-        probe.close()
 
     # log_config=None: uvicorn's default handlers write straight to the tty and corrupt the TUI's diff renderer.
     config = uvicorn.Config(app, host=host, port=port, log_level="warning", log_config=None, timeout_graceful_shutdown=3)

@@ -6,6 +6,7 @@ fallback (SSE first for `"type": "sse"`). Local: stdio, one long-lived process p
 
 import asyncio
 from contextlib import asynccontextmanager
+import contextvars
 import json
 import os
 import re
@@ -137,32 +138,61 @@ LIST_TIMEOUT = 30    # connect + tools/list (stdio servers get STDIO_LIST_TIMEOU
 STDIO_LIST_TIMEOUT = 90
 
 
+# Statuses 401/403 seen on the wire inside the current _guarded() call (survives a timeout/cancel).
+_wire_auth: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("mcp_wire_auth", default=None)
+
+
 async def _guarded(coro, timeout: float):
     """Await with a timeout; a CancelledError leaked by an inner anyio scope (dead server) becomes
-    a RuntimeError, while a real outer cancel still propagates."""
+    a RuntimeError, while a real outer cancel still propagates. A hang after a 401/403 is AuthRejected."""
+    seen: list[int] = []
+    token = _wire_auth.set(seen)
     try:
         return await asyncio.wait_for(coro, timeout)
     except TimeoutError:
+        if seen:
+            raise AuthRejected(seen[0], "server") from None
         raise RuntimeError(f"timed out after {timeout:g}s (server unreachable or unresponsive)") from None
     except asyncio.CancelledError:
         task = asyncio.current_task()
         if task and task.cancelling():
             raise
+        if seen:
+            raise AuthRejected(seen[0], "server") from None
         raise RuntimeError("connection cancelled (server unreachable)") from None
+    finally:
+        _wire_auth.reset(token)
 
 
-def _auth_failed(e: BaseException, _seen: set = None, strict: bool = False) -> bool:
-    """True if e, its cause chain or any grouped sub-exception looks like an auth rejection
-    (`strict`: only 401-style, not 403/expired)."""
+class AuthRejected(RuntimeError):
+    """The server answered 401/403 at the HTTP layer (seen by our response hook, whatever the SDK raised)."""
+    def __init__(self, status: int, url: str):
+        super().__init__(f"HTTP {status} from {url} (auth rejected)")
+        self.status = status
+
+
+def _chain(e: BaseException | None, _seen: set | None = None):
+    """e, its causes/contexts and grouped sub-exceptions, each once."""
     _seen = _seen if _seen is not None else set()
     if e is None or id(e) in _seen:
-        return False
+        return
     _seen.add(id(e))
+    yield e
+    for x in (e.__cause__, e.__context__, *getattr(e, "exceptions", ())):
+        yield from _chain(x, _seen)
+
+
+def _auth_failed(e: BaseException, strict: bool = False) -> bool:
+    """Auth rejection anywhere in the chain: HTTP status first (AuthRejected, httpx HTTPStatusError),
+    text only as a fallback. `strict`: 401 only, not 403/expired."""
+    errs = list(_chain(e))
+    codes = {401} if strict else {401, 403}
+    for x in errs:
+        status = getattr(x, "status", None) or getattr(getattr(x, "response", None), "status_code", None)
+        if isinstance(status, int) and status in codes:
+            return True
     words = ("401", "unauthor", "invalid_token") if strict else ("401", "403", "unauthor", "expired", "forbidden", "invalid_token")
-    if any(w in str(e).lower() for w in words):
-        return True
-    subs = [e.__cause__, e.__context__, *getattr(e, "exceptions", ())]
-    return any(_auth_failed(x, _seen, strict) for x in subs)
+    return any(w in str(x).lower() for x in errs for w in words)
 
 
 def _leaf(e: BaseException) -> BaseException:
@@ -177,15 +207,33 @@ def _leaf(e: BaseException) -> BaseException:
     return e
 
 
+def _hooked_factory(on_response):
+    """SDK http-client factory with our response hook attached (sees real status codes)."""
+    from mcp.shared._httpx_utils import create_mcp_http_client
+
+    def factory(*args, **kwargs):
+        client = create_mcp_http_client(*args, **kwargs)
+        client.event_hooks["response"].append(on_response)
+        return client
+    return factory
+
+
+def _factory_kw(fn, on_response) -> dict:
+    """{"httpx_client_factory": ...} if this SDK version's transport accepts one."""
+    import inspect
+    ok = "httpx_client_factory" in inspect.signature(fn).parameters
+    return {"httpx_client_factory": _hooked_factory(on_response)} if ok else {}
+
+
 @asynccontextmanager
-async def _streamable_streams(server_url: str, headers: dict):
+async def _streamable_streams(server_url: str, headers: dict, on_response):
     """Streamable-HTTP transport; supports mcp 1.x and 2.x (2.x renamed the client, dropped the
     headers kwarg, and changed the yielded tuple)."""
     import mcp.client.streamable_http as sh
 
     new = getattr(sh, "streamable_http_client", None)
     if new is not None:
-        client = sh.create_mcp_http_client(headers=headers or None)
+        client = _hooked_factory(on_response)(headers=headers or None)
         try:
             async with new(server_url, http_client=client) as (read, write):
                 yield read, write
@@ -199,32 +247,40 @@ async def _streamable_streams(server_url: str, headers: dict):
             "installed `mcp` exposes neither streamable_http_client nor "
             "streamablehttp_client — no streamable-HTTP transport available"
         )
-    async with old(server_url, headers=headers or None) as (read, write, _):
+    async with old(server_url, headers=headers or None, **_factory_kw(old, on_response)) as (read, write, _):
         yield read, write
 
 
 @asynccontextmanager
-async def _sse_streams(server_url: str, headers: dict):
+async def _sse_streams(server_url: str, headers: dict, on_response):
     """SSE transport, the older protocol; same signature in mcp 1.x and 2.x."""
     from mcp.client.sse import sse_client
-    async with sse_client(server_url, headers=headers or None) as (read, write):
+    async with sse_client(server_url, headers=headers or None, **_factory_kw(sse_client, on_response)) as (read, write):
         yield read, write
 
 
 @asynccontextmanager
 async def _connect(server_url: str, headers: dict = None, sse_first: bool = False):
     """Connect via streamable HTTP, falling back to SSE (reversed with `sse_first`). Only setup is
-    guarded; errors raised in the consumer body propagate."""
+    guarded; errors raised in the consumer body propagate. A 401/403 seen on the wire becomes
+    AuthRejected, since the SDK masks it (e.g. as a generic JSON-RPC INTERNAL_ERROR)."""
     from mcp import ClientSession
 
     headers = dict(headers or {})
     errors = []
+    rejected: list[int] = []
+
+    async def on_response(r):
+        if r.status_code in (401, 403):
+            rejected.append(r.status_code)
+            if (outer := _wire_auth.get()) is not None:
+                outer.append(r.status_code)
 
     openers = (_sse_streams, _streamable_streams) if sse_first else (_streamable_streams, _sse_streams)
     for opener in openers:
         opened = []
         try:
-            transport = opener(server_url, headers)
+            transport = opener(server_url, headers, on_response)
             read, write = await transport.__aenter__()
             opened.append(transport)
             session_cm = ClientSession(read, write)
@@ -241,9 +297,15 @@ async def _connect(server_url: str, headers: dict = None, sse_first: bool = Fals
             task = asyncio.current_task()
             if isinstance(e, asyncio.CancelledError) and task and task.cancelling():
                 raise   # a real outer cancel, not the transport's own
+            if rejected:   # same token on the fallback transport would fail too
+                raise AuthRejected(rejected[0], server_url) from e
             continue
         try:
             yield session
+        except Exception as e:
+            if rejected:
+                raise AuthRejected(rejected[0], server_url) from e
+            raise
         finally:
             for cm in reversed(opened):
                 try:

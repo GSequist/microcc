@@ -6,6 +6,7 @@ claude_loop suspends on approval/question, so the suspended generator is the pen
 import asyncio
 import itertools
 import secrets
+import time
 
 from micro_cc.utils.msg_store_ import load_checkpoint
 
@@ -22,6 +23,8 @@ from micro_cc.utils.msg_store_ import load_checkpoint
 #   lock          serialises streams (one writer per msgs list)
 #   last_checkpoint_index  compaction index already flashed; seeded in init() so an old compaction doesn't re-flash
 #   incoming      server-initiated turns waiting to be claimed (see /api/incoming)
+#   turn          the in-flight turn, decoupled from any HTTP request (see server._drive), or None
+#   last_seen     monotonic time of the last authed /api request (watchdog: is a browser still there?)
 STATE = {
     "project_dir": None,
     "msgs": [],
@@ -41,6 +44,9 @@ STATE = {
     "token": None,   # one-time bootstrap secret in the /gui link
     "cookie": None,  # session secret; None disables auth (tests)
     "owner": None,   # id of the one tab bound to this session
+    "owner_seen": 0.0,
+    "turn": None,
+    "last_seen": 0.0,
 }
 
 
@@ -64,10 +70,23 @@ def init(project_dir, msgs, model, trim_budget, token=None):
         token=token,
         cookie=secrets.token_urlsafe(24) if token else None,
         owner=None,
+        owner_seen=0.0,
+        turn=None,
+        last_seen=time.monotonic(),
         last_checkpoint_index=(
             existing_checkpoint["as_of_index"] if existing_checkpoint is not None else 0
         ),
     )
+
+
+def busy() -> bool:
+    """A turn is streaming or parked on an approval/question."""
+    turn = STATE["turn"]
+    return STATE["pending"] is not None or (turn is not None and turn["running"])
+
+
+def browser_away(after_s: float) -> bool:
+    return time.monotonic() - STATE["last_seen"] > after_s
 
 
 def set_pending(kind, mutable, tool):

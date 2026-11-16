@@ -129,6 +129,13 @@ class GuiTests(unittest.TestCase):
         _Model.script = list(script)
         return self.client.post("/api/chat", json=_user(text))
 
+    def respond(self, approved):
+        """The SDK's resume POST after the tab answers the parked call."""
+        tool_id = session.STATE["pending_tool"]["id"]
+        part = {"type": "dynamic-tool", "toolCallId": tool_id, "state": "approval-responded",
+                "approval": {"id": f"approval-{tool_id}", "approved": approved}}
+        return self.client.post("/api/chat", json={"messages": [{"role": "assistant", "parts": [part]}]})
+
     # ── session / settings ─────────────────────────────────────────
 
     def test_session_payload_and_command_palette(self):
@@ -263,7 +270,7 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(any(e["type"] == "tool-approval-request" for e in ev))
         self.assertEqual(session.STATE["pending_kind"], "approval")
         self.assertFalse(any(e["type"] == "tool-output-available" for e in ev))
-        ev2 = _events(self.client.post("/api/chat", json={"messages": [{"role": "assistant", "parts": []}]}))
+        ev2 = _events(self.respond(True))
         out = [e for e in ev2 if e["type"] == "tool-output-available"]
         self.assertTrue(out and "gated" in json.dumps(out[0]["output"]))
         self.assertIsNone(session.STATE["pending"])
@@ -273,7 +280,7 @@ class GuiTests(unittest.TestCase):
         marker = Path(self.proj) / "ran.txt"
         self.chat("go", [{"tool": "bash_", "args": {"command": f"touch {marker}", "description": "test"}}, {"text": "what instead?"}])
         self.assertEqual(self.client.post("/api/chat/deny").json(), {"ok": True})
-        ev = _events(self.client.post("/api/chat", json={"messages": [{"role": "assistant", "parts": []}]}))
+        ev = _events(self.respond(False))
         out = [e for e in ev if e["type"] == "tool-output-available"]
         self.assertIn("declined", json.dumps(out[0]["output"]))
         self.assertTrue(any(e["type"] == "text-delta" for e in ev))  # the turn continued
@@ -288,7 +295,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(dq[0]["data"]["questions"][0]["header"], "Pick")
         self.assertEqual(session.STATE["pending_kind"], "question")
         self.assertTrue(self.client.post("/api/chat/answer", json={"answers": {"Pick": "B"}}).json()["ok"])
-        ev2 = _events(self.client.post("/api/chat", json={"messages": [{"role": "assistant", "parts": []}]}))
+        ev2 = _events(self.respond(True))
         out = [e for e in ev2 if e["type"] == "tool-output-available"]
         self.assertIn("B", json.dumps(out[0]["output"]))
 
@@ -335,6 +342,59 @@ class GuiTests(unittest.TestCase):
         self.assertEqual([e["type"] for e in _events(self.client.post("/api/chat", json=body))], ["start", "finish"])
         self.assertEqual(len(_Model.script), 1)
         self.assertEqual(self.client.get("/api/incoming", params={"claim": True}).json()["content"], "[subagent checkpoint] b")
+
+    def test_new_message_while_parked_never_approves(self):
+        self._gate(["bash_"])
+        marker = Path(self.proj) / "ran.txt"
+        self.chat("go", [{"tool": "bash_", "args": {"command": f"touch {marker}", "description": "test"}}, {"text": "x"}])
+        ev = _events(self.client.post("/api/chat", json=_user("something else")))  # typed after a reload
+        self.assertTrue(any(e["type"] == "error" and "pending" in e["errorText"] for e in ev))
+        self.assertTrue(any(e["type"] == "data-resync" for e in ev))  # tab drops the stray message, approval is last again
+        self.assertFalse(marker.exists())
+        self.assertEqual(session.STATE["pending_kind"], "approval")
+        self.assertIn("finish or stop", self.client.post("/api/command", json={"name": "/clear"}).json()["message"])
+        self.assertTrue(load_msgs(self.proj))  # /clear refused while parked
+        self.assertEqual(self.client.post("/api/rewind", json={"index": 0}).status_code, 423)
+
+    def test_reload_while_parked_replays_the_approval(self):
+        self._gate(["bash_"])
+        self.chat("go", [{"tool": "bash_", "args": {"command": "echo gated", "description": "test"}}, {"text": "finished"}])
+        hist = self.client.get("/api/messages").json()
+        self.assertTrue(hist["live"])
+        self.assertEqual(hist["messages"][-1]["role"], "user")  # the rest comes from the replay
+        ev = _events(self.client.get("/api/chat/any/stream"))
+        self.assertTrue(any(e["type"] == "tool-approval-request" for e in ev))
+        self.assertEqual(ev[-1]["type"], "finish")
+        ev2 = _events(self.respond(True))
+        self.assertTrue(any("gated" in json.dumps(e.get("output", "")) for e in ev2 if e["type"] == "tool-output-available"))
+        self.assertEqual({e["messageId"] for e in ev + ev2 if e["type"] == "start"}, {ev[0]["messageId"]})  # one message
+        self.assertFalse(self.client.get("/api/messages").json()["live"])
+        self.assertEqual(self.client.get("/api/chat/any/stream").status_code, 204)
+
+    def test_replay_after_resume_shows_history_not_a_second_approval(self):
+        self._gate(["bash_"])
+        self.chat("go", [{"tool": "bash_", "args": {"command": "echo one", "description": "t"}},
+                         {"tool": "bash_", "args": {"command": "echo two", "description": "t"}}, {"text": "done"}])
+        first = session.STATE["pending_tool"]["id"]
+        self.respond(True)  # parks again on the second call
+        ev = _events(self.client.get("/api/chat/any/stream"))
+        asks = [e["toolCallId"] for e in ev if e["type"] == "tool-approval-request"]
+        self.assertEqual(asks, [session.STATE["pending_tool"]["id"]])
+        self.assertNotIn(first, asks)
+        self.assertEqual([e["type"] for e in ev].count("start"), 1)
+        self.assertEqual([e["type"] for e in ev].count("finish"), 1)
+
+    def test_owner_lease_and_release(self):
+        session.init(self.proj, msgs=[], model="fake", trim_budget=100_000, token="tok")
+        c = TestClient(server.app, follow_redirects=False)
+        c.get("/", params={"t": "tok"})
+        self.assertEqual(c.get("/api/ping", headers={"X-Tab": "A"}).status_code, 200)
+        self.assertEqual(c.get("/api/ping", headers={"X-Tab": "B"}).status_code, 409)
+        c.post("/api/release", params={"tab": "A"})  # tab closed / reloading
+        self.assertEqual(c.get("/api/ping", headers={"X-Tab": "B"}).status_code, 200)
+        self.assertEqual(c.get("/api/ping", headers={"X-Tab": "A"}).status_code, 409)
+        session.STATE["owner_seen"] -= server.OWNER_LEASE_S + 1  # B went silent (closed without a beacon)
+        self.assertEqual(c.get("/api/ping", headers={"X-Tab": "A"}).status_code, 200)
 
     def test_deny_waits_for_the_turn_lock(self):
         self._gate(["bash_"])
@@ -464,12 +524,36 @@ class GuiTests(unittest.TestCase):
                 break
         return ctx, time
 
-    def test_client_abort_mid_stream_persists_user_turn_and_partial_reply(self):
+    def _wait_idle(self, timeout=10):
+        import time
+        end = time.time() + timeout
+        while session.busy() and time.time() < end:
+            time.sleep(0.05)
+
+    def test_dropped_tab_does_not_kill_the_turn_and_reconnect_replays_it(self):
         client, base, shutdown = self._live()
         try:
-            ctx, time = self._stream_some(client, base)
-            ctx.__exit__(None, None, None)  # browser stop() aborts the fetch
-            time.sleep(1.5)
+            ctx, _ = self._stream_some(client, base)
+            ctx.__exit__(None, None, None)  # tab reload / sleep / discard drops the fetch
+            hist = client.get(base + "/api/messages").json()
+            replay = _events(client.get(base + "/api/chat/x/stream")) if hist["live"] else []
+            self._wait_idle()
+            msgs = load_msgs(self.proj)
+        finally:
+            shutdown()
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
+        self.assertEqual(msgs[1]["content"].strip(), ("word " * 120).strip())  # ran to the end
+        self.assertTrue(hist["live"])
+        self.assertEqual(hist["messages"][-1]["role"], "user")
+        self.assertEqual("".join(e["delta"] for e in replay if e["type"] == "text-delta").strip(), ("word " * 120).strip())
+
+    def test_stop_mid_stream_persists_user_turn_and_partial_reply(self):
+        client, base, shutdown = self._live()
+        try:
+            ctx, _ = self._stream_some(client, base)
+            client.post(base + "/api/chat/stop")
+            ctx.__exit__(None, None, None)
+            self._wait_idle()
             msgs = load_msgs(self.proj)
         finally:
             shutdown()
@@ -495,6 +579,52 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(len(parts), 1)  # unchanged snapshots are not re-sent
         row = parts[0]["data"]["subagents"][0]
         self.assertEqual((row["name"], row["status"]), (os.path.basename(sub), "NEEDS_INPUT"))
+
+    def test_gui_ports_are_per_folder_and_pinnable(self):
+        from micro_cc.webui import launch
+        a, b = launch.port_candidates("/tmp/proj-a"), launch.port_candidates("/tmp/proj-b")
+        self.assertEqual(a, launch.port_candidates("/tmp/proj-a"))  # stable across restarts
+        self.assertNotEqual(a[0], b[0])
+        self.assertTrue(all(launch.PORT <= p < launch.PORT + launch.PORT_SPAN for p in a + b))
+        os.environ["MICROCC_GUI_PORT"] = "9999"
+        try:
+            self.assertEqual(launch.port_candidates("/tmp/proj-a"), [9999])
+        finally:
+            del os.environ["MICROCC_GUI_PORT"]
+
+    def test_watchdog_hands_back_only_when_tab_gone_and_idle(self):
+        import asyncio
+        from types import SimpleNamespace
+        from micro_cc.tui_native import pollers_
+        saved = (pollers_.GUI_TICK_S, pollers_.GUI_HANDBACK_S)
+        pollers_.GUI_TICK_S, pollers_.GUI_HANDBACK_S = 0.01, 0.03
+        calls = []
+
+        def fake():
+            app = SimpleNamespace(_input_mode="gui", _gui_shutdown=lambda: None, _flash_status=lambda *a, **k: None)
+
+            async def resume():
+                calls.append("resume")
+                app._input_mode, app._gui_shutdown = "idle", None
+            app._resume_after_gui = resume
+            return app
+
+        async def bounded(app):
+            try:
+                await asyncio.wait_for(pollers_.gui_watchdog_loop(app), 0.2)
+            except TimeoutError:
+                pass
+
+        try:
+            session.STATE["last_seen"] = 0.0  # browser long gone
+            session.set_pending("approval", {"approved": None}, {"id": "x", "name": "bash_", "input": {}})
+            asyncio.run(bounded(fake()))
+            self.assertEqual(calls, [])  # parked approval: keep the GUI
+            session.clear_pending()
+            asyncio.run(bounded(fake()))
+            self.assertEqual(calls, ["resume"])
+        finally:
+            pollers_.GUI_TICK_S, pollers_.GUI_HANDBACK_S = saved
 
     def test_stop_endpoint_sets_flag(self):
         self.assertEqual(self.client.post("/api/chat/stop").json(), {"status": "stopping"})

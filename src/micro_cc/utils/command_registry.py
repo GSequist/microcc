@@ -13,6 +13,8 @@ COMMANDS = [
     {"name": "/new-mcp", "hint": "register a new MCP server", "kind": "prompt", "takes_args": True},
     {"name": "/skills", "hint": "list skills you have + how to add more", "kind": "prompt", "takes_args": True},
     {"name": "/mcp", "hint": "list MCP servers you have + how to add more", "kind": "prompt", "takes_args": True},
+    {"name": "/mcp-login", "hint": "log in to an OAuth MCP server (no name = list them)", "kind": "action", "takes_args": True},
+    {"name": "/mcp-logout", "hint": "forget an OAuth MCP server's stored login", "kind": "action", "takes_args": True},
     {
         "name": "/headless",
         "hint": "run a single prompt headlessly (microcc-headless, the -p mode) — cron-friendly, no manifest",

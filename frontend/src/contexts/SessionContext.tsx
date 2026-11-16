@@ -62,6 +62,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!res.ok) return;
     const data = await res.json();
     setSession(data.session);
+    // One GUI per folder: name the tab after it so several projects stay tellable apart.
+    document.title = `${data.session.project_dir.split('/').filter(Boolean).pop() ?? '/'} · micro-cc`;
     setCommands(data.commands);
     setHints(data.hints ?? []);
     setWhatsNew(data.whats_new ?? null);

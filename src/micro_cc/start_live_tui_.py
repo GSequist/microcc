@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import traceback
 import os
 import re
@@ -24,10 +25,12 @@ from micro_cc.tui_native.theme_ import shimmer
 from micro_cc.tui_native.glyphs_ import glyph
 
 # Theme tokens read live via theme_store_.get() to allow /theme switch.
-from micro_cc.tui_native.screen_cmds_ import SLASH_COMMANDS, PREFIX_COMMANDS
+from micro_cc.tui_native.screen_cmds_ import SLASH_COMMANDS, PREFIX_COMMANDS, ARG_COMMANDS
 from micro_cc import mods_
 from micro_cc.utils import command_registry, statusline_
 from micro_cc.tui_native.ui_api_ import make_ui
+from micro_cc.tui_native import banner_fx_
+from micro_cc.tui_native.banner_fx_ import AnimatedBanner
 from micro_cc.tui_native import glyphs_, login_ui_, pollers_, self_reload_ui_, status_bar_, question_ui_, panel_layout_
 from micro_cc.tui_native.self_update_ import check_and_update
 from micro_cc.tui_native.self_terminal_setup_ import _background_terminal_setup_check
@@ -210,7 +213,7 @@ class MicroTui():
         # Keep the hue so the hint bar can match the wordmark.
         _banner_markup, self._banner_hue = banner_.banner()
         # name= makes a component a mod render target; header/above_input are empty anchors for mods.
-        self.banner = RichStatic(_banner_markup, name="banner")
+        self.banner = AnimatedBanner(_banner_markup, self._banner_hue)
         self.header_panels = RichStatic("", max_lines=12, name="header")
         self.above_input_panels = RichStatic("", max_lines=12, name="above_input")
 
@@ -543,8 +546,7 @@ class MicroTui():
         # Rebuild banner from theme-derived string, not just invalidate.
         banner_markup, hue = banner_.banner()
         self._banner_hue = hue
-        self.banner.update(banner_markup)
-        self.banner.invalidate()
+        self.banner.update(banner_markup, hue)
         for entry in self.message_list.entries:
             entry.component.invalidate()
         for entry in self.subagent_message_list.entries:
@@ -788,6 +790,12 @@ class MicroTui():
             self._pending_tool = None
             self.working.update("")
             self.request_render()
+
+    async def _banner_fx_loop(self) -> None:
+        while True:
+            await asyncio.sleep(banner_fx_.FRAME_S)
+            if self.banner.step():
+                self.request_render()
 
     async def _working_timer_loop(self) -> None:
         while True:
@@ -1096,6 +1104,9 @@ class MicroTui():
             None,
         )
         handler = None if literal or mod_cmd or matched_prefix is not None else SLASH_COMMANDS.get(lower_q)
+        head, _, cmd_arg = query.partition(" ")
+        if handler is None and not (literal or mod_cmd or matched_prefix) and head.lower() in ARG_COMMANDS:
+            handler = functools.partial(ARG_COMMANDS[head.lower()], arg=cmd_arg.strip())
 
         # Gate builtins mid-stream: they mutate message_list/_loop_msgs that the in-flight turn writes to.
         # Mod commands only reach the api, whose send_prompt queues, so they run mid-stream.
@@ -1524,6 +1535,7 @@ class MicroTui():
 
         self._running = True
         self._render_task = asyncio.create_task(self._render_loop())
+        self._banner_task = self._safe_task(self._banner_fx_loop(), "banner fx")
         self.request_render()
 
         # After first paint: SDK import + TLS handshake happen while the user types, not on Enter.

@@ -331,6 +331,29 @@ async def login(server_url: str, cfg: dict | None = None) -> dict:
                              token_endpoint_auth_methods_supported=meta.get("token_endpoint_auth_methods_supported"))
 
 
+async def requires_auth(server_url: str, timeout: float = 5) -> bool:
+    """True if an unauthenticated probe gets 401 / WWW-Authenticate (False when unreachable)."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as http:
+            if await _challenge(http, server_url):
+                return True
+            r = await http.post(server_url, json={}, headers={"Accept": "application/json, text/event-stream"})
+            return r.status_code == 401
+    except Exception:
+        return False
+
+
+def stored_tokens() -> dict:
+    """{server_url: {"access_token", "expires_at", "refresh_token", ...}} from the store."""
+    return _load()
+
+
+async def force_login(server_url: str, cfg: dict | None = None) -> dict:
+    """Interactive login regardless of stored tokens; shares the per-server lock with oauth_headers."""
+    async with _locks.setdefault(server_url, asyncio.Lock()):
+        return await login(server_url, cfg)
+
+
 async def _refresh(server_url: str, entry: dict) -> dict | None:
     """Refresh grant; None when it fails so the caller can fall back to login."""
     if not (entry.get("refresh_token") and entry.get("token_endpoint")):

@@ -164,3 +164,25 @@ def poll_schedule_tick(app) -> None:
         _schedule_rt.tick(app._project_dir)
     except Exception as e:
         app._show_error_row(f"schedule tick crashed: {type(e).__name__}: {e}")
+
+
+# --- /gui watchdog -------------------------------------------------------
+GUI_TICK_S = 5.0
+GUI_AWAY_S = 90.0        # > Chrome's once-a-minute timer cap for hidden tabs, so a backgrounded tab still counts
+GUI_HANDBACK_S = 600.0   # this long with no tab and nothing in flight: the terminal takes the session back
+
+
+async def gui_watchdog_loop(app) -> None:
+    """Hand the session back to the TUI when the browser is gone (tab closed, Esc forgotten).
+    Counts its own ticks, so time asleep never counts — waking the laptop can't trigger it."""
+    from micro_cc.webui import session as gui_session
+
+    away = 0.0
+    while app._input_mode == "gui" and app._gui_shutdown is not None:
+        await asyncio.sleep(GUI_TICK_S)
+        idle = gui_session.browser_away(GUI_AWAY_S) and not gui_session.busy()
+        away = away + GUI_TICK_S if idle else 0.0
+        if away >= GUI_HANDBACK_S and app._input_mode == "gui" and app._gui_shutdown is not None:
+            await app._resume_after_gui()  # flashes its own line; ours replaces it with the reason
+            app._flash_status("< no browser for 10 min — GUI stopped, terminal is live again", seconds=10)
+            return
