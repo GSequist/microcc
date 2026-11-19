@@ -191,11 +191,6 @@ class GuiTests(unittest.TestCase):
         self.assertIn("Salapa", self.client.post("/api/command", json={"name": "/author"}).json()["message"])
         self.assertIn("not available", self.client.post("/api/command", json={"name": "/nope"}).json()["message"])
 
-    def test_tui_only_prompt_command_is_refused_without_a_model_call(self):
-        ev = _events(self.chat("/graph build x", [{"text": "SHOULD NOT RUN"}]))
-        self.assertTrue(any(e["type"] == "error" and "TUI-only" in e["errorText"] for e in ev))
-        self.assertEqual(len(_Model.script), 1)
-
     def test_non_user_tail_streams_empty_turn(self):
         r = self.client.post("/api/chat", json={"messages": [{"role": "assistant", "parts": []}]})
         self.assertEqual([e["type"] for e in _events(r)], ["start", "finish"])

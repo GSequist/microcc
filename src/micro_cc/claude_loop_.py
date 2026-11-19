@@ -278,9 +278,8 @@ async def claude_loop(
 
     orchestration_line = (
         "- Multi-subagent orchestration: read_skill('graph-orchestration') to "
-        "self-initiate a /graph-style orchestration any time you judge a task "
-        "benefits from parallel or sequenced headless subagents — the user "
-        "doesn't have to type /graph first."
+        "orchestrate headless subagents any time you judge a task benefits "
+        "from parallel or sequenced work."
     ) if surface == "tui" else ""
 
     def _build_memory_manifest() -> str | None:

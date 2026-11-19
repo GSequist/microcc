@@ -16,6 +16,7 @@ from micro_cc.utils.helpers import (
     ollama_daemon_up,
     start_ollama_daemon,
     extract_image_paths,
+    read_clipboard_image,
     sanitize_and_encode_image_,
 )
 from micro_cc.cache import state_store
@@ -135,6 +136,7 @@ class MicroTui():
         ## ask user
         self._ask_questions = None
         self._ask_stage = None
+        self._ask_picked = None
         self._ask_answers = {}
         ## Esc-Esc-to-clear (only while idle — see action_cancel_query)
         self._esc_clear_armed = False
@@ -437,6 +439,9 @@ class MicroTui():
             if mods_.handle_key(data):
                 self.request_render()
                 return
+        if key_id == "ctrl+v" and self.get_focus() is self.prompt and self._paste_clipboard_image():
+            self.request_render()
+            return
         if key_id == "escape":
             # App-level so it fires regardless of focus; action_cancel_query also closes pickers.
             self.action_cancel_query()
@@ -672,7 +677,16 @@ class MicroTui():
         # Always route paste to prompt, stealing focus if needed.
         if self.get_focus() is not self.prompt:
             self.set_focus(self.prompt)
+        if not text.strip() and self._paste_clipboard_image():  # Cmd+V on an image sends an empty paste
+            return
         self.prompt._handle_paste(text)
+
+    def _paste_clipboard_image(self) -> bool:
+        path = read_clipboard_image()
+        if path is None:
+            return False
+        self.prompt.paste_image(path)
+        return True
 
     # ============================================= clipboard + paste monkey patching + double paste unravel full paste # TODO
 
@@ -1065,6 +1079,17 @@ class MicroTui():
         )
         self.prompt._paste_store.clear()
         self.prompt._paste_id = 0
+        pasted_images: list[str] = []
+
+        def _take_image(m):
+            path = self.prompt._image_store.get(int(m.group(1)))
+            if path is None:
+                return m.group(0)
+            pasted_images.append(path)
+            return ""
+
+        query = re.sub(r'\[image:(\d+)\]', _take_image, query).strip()
+        self.prompt._image_store.clear()
 
         # The browser owns the conversation during /gui; two writers would corrupt the jsonl.
         if self._input_mode == "gui":
@@ -1150,6 +1175,7 @@ class MicroTui():
 
         # Encode image paths now so they ride this turn as content blocks.
         query, image_paths = extract_image_paths(query)
+        image_paths = pasted_images + image_paths
         encoded_image = [e for e in (sanitize_and_encode_image_(p) for p in image_paths) if e] or None
         if image_paths and not query:
             names = ", ".join(os.path.basename(p) for p in image_paths)

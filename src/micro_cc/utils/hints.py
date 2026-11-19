@@ -10,6 +10,7 @@ HINTS = [
     {"text": "Ask for a poster or art, the design skill makes .png and .pdf", "where": BOTH},
     {"text": "Ask it to research a public GitHub repo, no auth needed", "where": BOTH},
     {"text": "Drop in images, the model can see them", "where": BOTH},
+    {"text": "Ask for a chart: line, bar, histogram, heatmap… drawn right in the terminal", "where": (TUI,)},
     {"text": "@ points the model at a file", "where": BOTH},
     {"text": "Ask it to remember something, memory carries across projects", "where": BOTH},
     # background work
@@ -19,8 +20,6 @@ HINTS = [
     {"text": "Subagents and background processes show in the line above the input", "where": (GUI,)},
     {"text": "ctrl+b lists background processes and watches", "where": (TUI,)},
     {"text": "shift+tab views a subagent's conversation", "where": (TUI,)},
-    {"text": "/graph orchestrates a team of subagents toward a goal", "where": (TUI,)},
-    {"text": "/optimize runs a measure-change-keep-or-revert loop against a metric", "where": (TUI,)},
     {"text": "/headless runs one prompt unattended, cron-friendly", "where": BOTH},
     {"text": "/message-session talks to another running micro-cc session", "where": BOTH},
     # skills

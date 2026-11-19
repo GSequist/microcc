@@ -10,7 +10,7 @@ from micro_cc.tui_native.diff_viewer_ import build_diff_lines
 from micro_cc.tui_native.glyphs_ import glyph
 from micro_cc.tui_native.md_render_ import render_md
 from micro_cc import mods_
-from micro_cc.utils import status_marker, subagent_notice_, theme_store_
+from micro_cc.utils import chart_, status_marker, subagent_notice_, theme_store_
 
 _MAX_EXPANDED_LINES = 40
 
@@ -137,6 +137,25 @@ def _tool_call(msg, r, ansi_result=False):
     return Text(f"{glyph('tool')} {name} -> {preview} ({glyph('hint_expand')})", style="dim")
 
 
+class _Chart:
+    """Re-draws at whatever width the row is rendered with."""
+
+    def __init__(self, spec: dict):
+        self.spec = spec
+
+    def __rich_console__(self, console, options):
+        c = theme_store_.get
+        palette = [c(t) for t in ("accent", "info", "ok", "warn", "paused", "running")]
+        yield from chart_.draw(self.spec, options.max_width - 2, palette, c("bg"))
+
+
+def _tool_call_chart(msg, r):
+    result = msg.get("result")
+    if result is None or str(result).startswith("Error"):
+        return _tool_call(msg, r)
+    return Group(Text(""), _Chart(msg["input"]), Text(""))
+
+
 def _tool_call_bash(msg, r):
     return _tool_call(msg, r, ansi_result=True)
 
@@ -232,6 +251,7 @@ BUILTIN = {
     "tool_call": _tool_call,
     "tool_call:bash_": _tool_call_bash,
     "tool_call:edit_": _tool_call_edit,
+    "tool_call:chart_": _tool_call_chart,
     "error": _error,
     "mcp_auth": _mcp_auth,
     "approval": _approval,

@@ -332,20 +332,12 @@ async def cmd_headless_mode(app, extra: str = ""):
     await _run_hidden_setup(app, hidden_prompts.HEADLESS, extra, "~ busy — try /headless again once this finishes")
 
 
-async def cmd_graph(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.GRAPH, extra, "~ busy — try /graph again once this finishes")
-
-
 async def cmd_message_session(app, extra: str = ""):
     await _run_hidden_setup(app, hidden_prompts.MESSAGE_SESSION, extra, "~ busy — try /message-session again once this finishes")
 
 
 async def cmd_doctor(app, extra: str = ""):
     await _run_hidden_setup(app, hidden_prompts.DOCTOR, extra, "~ busy — try /doctor again once this finishes")
-
-
-async def cmd_optimize(app, extra: str = ""):
-    await _run_hidden_setup(app, hidden_prompts.OPTIMIZE, extra, "~ busy — try /optimize again once this finishes")
 
 
 _SUBAGENT_TERMINAL_STATUSES = {"DONE", "FAILED", "PAUSED"}
@@ -497,10 +489,8 @@ PREFIX_COMMANDS = {
     "/skills": cmd_skills,
     "/mcp": cmd_mcp,
     "/headless": cmd_headless_mode,
-    "/graph": cmd_graph,
     "/message-session": cmd_message_session,
     "/doctor": cmd_doctor,
-    "/optimize": cmd_optimize,
 }
 
 

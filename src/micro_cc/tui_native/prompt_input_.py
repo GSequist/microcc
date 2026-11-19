@@ -34,6 +34,7 @@ class PromptInput:
 
         self._paste_store: dict[int, str] = {}
         self._paste_id = 0
+        self._image_store: dict[int, str] = {}
 
         self._cached_width: int | None = None
         self._cached_lines: list[str] | None = None
@@ -218,6 +219,12 @@ class PromptInput:
             self.insert(f"[paste:{pid}|{len(text)} chars, {n_lines} lines]")
         else:
             self.insert(text)
+
+    def paste_image(self, path: str) -> None:
+        """Insert an [image:N] marker; the file path is resolved at submit."""
+        pid = len(self._image_store) + 1
+        self._image_store[pid] = path
+        self.insert(f"[image:{pid}]")
 
     # --- slash-command suggestion ------------------------------------------
     def update_suggestion(self) -> None:

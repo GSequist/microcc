@@ -6,6 +6,12 @@ from micro_cc.utils import settings_store_
 
 # Key = the version the next publish ships: run `./publish.sh --next`. Versions without an entry show nothing.
 NOTES = {
+    "0.2.136": [
+        "Ask for a chart: line, area, scatter, bar, histogram, heatmap and more, drawn right in the terminal",
+        "Paste an image into the input with ctrl+v or Cmd+V (TUI)",
+        "Questions from the model now always offer an Other option so you can type your own answer",
+        "Removed the unused /graph and /optimize commands; subagent orchestration works without them",
+    ],
     "0.2.135": [
         "OAuth MCP servers now re-login reliably when a token is rejected, even one that looked unexpired",
         "/mcp-login lists your OAuth MCP servers with their login status and logs you in; /mcp-logout forgets a login",

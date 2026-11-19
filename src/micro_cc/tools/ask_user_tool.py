@@ -51,6 +51,8 @@ async def ask_user_question_tool_(
       - single-choice: options set, multiSelect=false — user picks exactly one
       - multi-choice: options set, multiSelect=true — user toggles any number
         of options, then confirms
+    An "Other" option for typing a custom answer is always added to option
+    lists automatically — never add your own.
 
     Args:
         questions: Each question shown to the user in order. Leave `options`

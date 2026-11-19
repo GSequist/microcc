@@ -53,6 +53,8 @@ export function QuestionPanel({
   const [text, setText] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [cursor, setCursor] = useState(0);
+  const [typing, setTyping] = useState(false);            // "Other" chosen → type a custom answer
+  const [picked, setPicked] = useState<string[] | null>(null); // multi-select picks kept alongside the typed text
   const textRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const optionsRef = useRef<HTMLDivElement>(null);
@@ -65,6 +67,8 @@ export function QuestionPanel({
     setText('');
     setSelected([]);
     setCursor(0);
+    setTyping(false);
+    setPicked(null);
     // Keystrokes have to land here, not in the composer that just went away.
     if (questions[stage]?.options?.length) panelRef.current?.focus();
     else textRef.current?.focus();
@@ -72,13 +76,20 @@ export function QuestionPanel({
     setScrollable(!!optionsRef.current && optionsRef.current.scrollHeight > optionsRef.current.clientHeight);
   }, [stage]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (typing) textRef.current?.focus();
+  }, [typing]);
+
   if (!q) return null;
 
-  const isMulti = !!q.options?.length && !!q.multiSelect;
-  const isSingle = !!q.options?.length && !q.multiSelect;
-  const isFreeform = !q.options?.length;
-  const hasPreview = (isSingle || isMulti) && q.options.some((o) => o.preview);
-  const previewContent = hasPreview ? q.options[cursor]?.preview : undefined;
+  // "Other" is always offered after the model's options.
+  const OTHER = 'Other';
+  const opts: AskOption[] = q.options?.length ? [...q.options, { label: OTHER, description: 'type your own answer' }] : [];
+  const isMulti = !!opts.length && !typing && !!q.multiSelect;
+  const isSingle = !!opts.length && !typing && !q.multiSelect;
+  const isFreeform = !opts.length || typing;
+  const hasPreview = (isSingle || isMulti) && opts.some((o) => o.preview);
+  const previewContent = hasPreview ? opts[cursor]?.preview : undefined;
 
   const advance = (answer: string | string[]) => {
     const next = { ...answers, [q.header]: answer };
@@ -87,29 +98,37 @@ export function QuestionPanel({
     else setStage(stage + 1);
   };
 
+  const confirmMulti = () => {
+    if (!selected.length) return;
+    if (!selected.includes(OTHER)) return advance(selected);
+    setPicked(selected.filter((l) => l !== OTHER));
+    setTyping(true);
+  };
+
+  const pickSingle = (label: string) => (label === OTHER ? setTyping(true) : advance(label));
+
+  const advanceTyped = (v: string) => advance(picked ? [...picked, v] : v);
+
   const toggle = (label: string) =>
     setSelected((s) => (s.includes(label) ? s.filter((x) => x !== label) : [...s, label]));
 
   // Same keys as the TUI's OptionList/SelectionList: arrows move, space
   // toggles in multi-select, enter accepts, escape backs out.
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!q.options?.length) return;
+    if (!isSingle && !isMulti) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setCursor((c) => Math.min(c + 1, q.options.length - 1));
+      setCursor((c) => Math.min(c + 1, opts.length - 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setCursor((c) => Math.max(c - 1, 0));
     } else if (e.key === ' ' && isMulti) {
       e.preventDefault();
-      toggle(q.options[cursor].label);
+      toggle(opts[cursor].label);
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (isMulti) {
-        if (selected.length) advance(selected);
-      } else {
-        advance(q.options[cursor].label);
-      }
+      if (isMulti) confirmMulti();
+      else pickSingle(opts[cursor].label);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       onCancel();
@@ -159,13 +178,13 @@ export function QuestionPanel({
               hasPreview ? 'w-[40%] shrink-0 max-h-[280px]' : 'w-full max-h-[220px]'
             )}
           >
-            {q.options.map((opt, i) => {
+            {opts.map((opt, i) => {
               const on = selected.includes(opt.label);
               return (
                 <button
                   key={opt.label}
                   onMouseEnter={() => setCursor(i)}
-                  onClick={() => (isMulti ? toggle(opt.label) : advance(opt.label))}
+                  onClick={() => (isMulti ? toggle(opt.label) : pickSingle(opt.label))}
                   className={cn(
                     'w-full text-left px-4 py-2 transition-colors flex gap-2.5',
                     i === cursor && 'bg-accent'
@@ -216,7 +235,7 @@ export function QuestionPanel({
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (text.trim()) advance(text.trim());
+                if (text.trim()) advanceTyped(text.trim());
               } else if (e.key === 'Escape') {
                 e.preventDefault();
                 onCancel();
@@ -246,7 +265,7 @@ export function QuestionPanel({
           </button>
           {(isMulti || isFreeform) && (
             <button
-              onClick={() => (isMulti ? selected.length && advance(selected) : text.trim() && advance(text.trim()))}
+              onClick={() => (isMulti ? confirmMulti() : text.trim() && advanceTyped(text.trim()))}
               disabled={isMulti ? selected.length === 0 : !text.trim()}
               className="px-3 py-1 text-xs rounded-lg bg-foreground text-background hover:opacity-90 transition-opacity disabled:opacity-40"
             >

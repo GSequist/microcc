@@ -123,6 +123,44 @@ def extract_image_paths(text: str):
     return (remaining if paths else text), paths
 
 
+def read_clipboard_image() -> str | None:
+    """Save the clipboard image as a PNG under ~/.micro-cc/cache/pastes; return its path, or None."""
+    import subprocess, sys, time
+    dest_dir = os.path.expanduser("~/.micro-cc/cache/pastes")
+    os.makedirs(dest_dir, exist_ok=True)
+    for old in sorted(os.listdir(dest_dir))[:-50]:  # keep the 50 newest
+        os.remove(os.path.join(dest_dir, old))
+    path = os.path.join(dest_dir, f"clip-{int(time.time() * 1000)}.png")
+    if sys.platform == "darwin":
+        script = [
+            "set d to (the clipboard as «class PNGf»)",
+            f'set f to open for access POSIX file "{path}" with write permission',
+            "set eof f to 0", "write d to f", "close access f",
+        ]
+        cmds = [["osascript", *[x for line in script for x in ("-e", line)]]]
+    elif sys.platform == "win32":
+        ps = f"$i=Get-Clipboard -Format Image; if($i){{$i.Save('{path}')}}"
+        cmds = [["powershell", "-NoProfile", "-Command", ps]]
+    else:
+        cmds = [["wl-paste", "-t", "image/png"], ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"]]
+    for cmd in cmds:
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if sys.platform in ("darwin", "win32"):
+            ok = r.returncode == 0 and os.path.isfile(path) and os.path.getsize(path) > 0
+        else:
+            ok = r.returncode == 0 and r.stdout[:8] == b"\x89PNG\r\n\x1a\n"
+            if ok:
+                open(path, "wb").write(r.stdout)
+        if ok:
+            return path
+    if os.path.isfile(path):
+        os.remove(path)
+    return None
+
+
 _HISTORY_IMAGE_MAX_DIMENSION = 2000   # reasonable default for max image dimension in history
 _HISTORY_IMAGE_MAX_BASE64_BYTES = int(4.5 * 1024 * 1024)   # headroom under Anthropic's 5MB inline-image limit
 

@@ -22,24 +22,10 @@ COMMANDS = [
         "takes_args": True,
     },
     {
-        "name": "/graph",
-        "hint": "orchestrate multiple headless subagents toward a goal — diagram first, then spawn/monitor/adjust",
-        "kind": "prompt",
-        "takes_args": True,
-        "gui": False,  # TUI-only: the orchestration flow is terminal-driven.
-    },
-    {
         "name": "/message-session",
         "hint": "message another micro-cc session (live or headless) by project_dir",
         "kind": "prompt",
         "takes_args": True,
-    },
-    {
-        "name": "/optimize",
-        "hint": "start/resume an autonomous measure-change-keep-or-revert loop against a metric",
-        "kind": "prompt",
-        "takes_args": True,
-        "gui": False,  # TUI-only: .auto/log.jsonl progress only in TUI poller.
     },
     {
         "name": "/doctor",

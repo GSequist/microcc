@@ -1,18 +1,22 @@
 ---
 name: graph-orchestration
-description: Reference for the /graph subagent-orchestration mechanism — how spawning headless subagents (bash_ + microcc-headless), the ambient tracked-subagent status line, checkpoint wakeups (DONE/FAILED/PAUSED/NEEDS_INPUT), and message_session_ coordination between subagents actually work. /graph itself is only ever invoked once, by the user, at the start of an orchestration — re-read THIS skill any time afterward (especially right after a checkpoint wakeup) to reload the full mechanism instead of relying on that one-time turn still being in context.
+description: Reference for subagent orchestration — how spawning headless subagents (bash_ + microcc-headless), the ambient tracked-subagent status line, checkpoint wakeups (DONE/FAILED/PAUSED/NEEDS_INPUT), and message_session_ coordination between subagents actually work. re-read THIS skill any time during an orchestration (especially right after a checkpoint wakeup) to reload the full mechanism.
 ---
 
-/graph was run once by the user to start orchestrating multiple headless
-subagents (microcc-headless) toward a larger goal. There is no manifest file
-or JSON graph format — the orchestration is designed turn-by-turn, in your
-own reasoning, and adjusted as results come in. This file is the durable
-copy of that mechanism: the /graph turn that kicked things off can scroll
-out of a long conversation or get compressed away by auto-summarization, but
-this skill and GRAPH_PLAN.md (in the project directory — your own specific
-plan, not this generic mechanism) always survive that. If you need exact
-ground truth instead of this paraphrase (debugging something unexpected),
-read_ the file named next to each mechanism below.
+Orchestrate multiple headless subagents (microcc-headless) toward a larger
+goal. There is no manifest or JSON graph format — design it turn-by-turn and
+adjust as results come in. If the goal isn't clear, ask the user first.
+
+Before spawning anything:
+1. Draw a plain ASCII diagram (subagents, jobs, dependencies, parallel vs
+   blocking) and show it to the user — cheap to redraw, expensive to redo.
+2. write_ the plan to GRAPH_PLAN.md in the project directory: a one-line
+   mechanism reminder (bash_ + microcc-headless to spawn, monitor_ to check,
+   message_session_ to coordinate, checkpoint wakeups) plus each subagent's
+   project_dir, job, dependencies and stage. Keep it current after every
+   decision — it survives context compression, this turn does not.
+
+For exact ground truth, read_ the file named next to each mechanism below.
 
 ## Spawning
 
@@ -38,8 +42,7 @@ must end its reply with STATUS: DONE/NEEDS_INPUT/FAILED); that's where the
 DONE/FAILED/PAUSED/NEEDS_INPUT checkpoints below come from — you don't add
 that instruction yourself (start_headless_.py has the exact mechanism). Give
 each subagent its own project_dir — a fresh path is a clean isolated
-conversation scope, decided by you turn-by-turn (versus /batch's fixed list
-of named tasks predeclared upfront in one manifest file).
+conversation scope, decided by you turn-by-turn.
 
 You can pick a different --model per subagent if the task calls for it (e.g.
 a cheaper/faster model for a simple fan-out step, a stronger one for the

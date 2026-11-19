@@ -42,7 +42,6 @@ COMMANDS = [
 ]
 
 # Typed-in prompts bypass the palette filter, so enforce gui=False in /api/chat too.
-_GUI_ALLOWED_PROMPT_COMMANDS = {c["name"] for c in COMMANDS if c.get("kind") == "prompt"}
 
 REWIND_LIMIT = 40
 
@@ -371,8 +370,6 @@ async def post_chat(request: Request):
     query = _latest_user_text(messages)
     head, _, rest = query.strip().partition(" ")
     if head in hidden_prompts.PROMPT_BODIES:
-        if head not in _GUI_ALLOWED_PROMPT_COMMANDS:
-            return _sse_response(_refusal_stream(f"{head} is TUI-only — run it from the terminal instead."))
         query = hidden_prompts.build(head, rest.strip())  # same hidden turns the TUI pushes
 
     files = data.get("files") or []  # attachments are on disk; name them so the model looks

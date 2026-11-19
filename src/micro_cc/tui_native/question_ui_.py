@@ -12,12 +12,15 @@ def start(app, questions: list) -> None:
     show_current(app)
 
 
-def show_current(app) -> None:
+OTHER = "Other"
+
+
+def show_current(app, typing: bool = False) -> None:
     q = app._ask_questions[app._ask_stage]
     app.statusbar.update("")
     app.static_hintbar.update("")
     app.ask_question_text.update("")
-    if not q["options"]:
+    if typing or not q["options"]:
         # Freeform stage: question above the real prompt, which is the answer box.
         app._option_panel.close()
         accent = theme_store_.get("accent")
@@ -25,13 +28,24 @@ def show_current(app) -> None:
         app.prompt.placeholder = "Type your answer and press enter (esc to skip)"
         return
     items = [PanelItem(o["label"], o["label"], o.get("description", "")) for o in q["options"]]
+    items.append(PanelItem(OTHER, OTHER, "type your own answer"))  # always offered
     panel = app._option_panel
     panel.max_visible, panel.max_desc_lines, panel.max_title_lines = fit(app, items, q["question"])
     multi = bool(q.get("multiSelect"))
+
+    def on_multi(its):
+        labels = [it.label for it in its]
+        if OTHER not in labels:
+            return advance(app, labels)
+        app._ask_picked = [l for l in labels if l != OTHER]  # typed text is appended to these
+        show_current(app, typing=True)
+
+    def on_single(it):
+        advance(app, it.label) if it.label != OTHER else show_current(app, typing=True)
+
     panel.open(
         items,
-        on_select=(lambda its: advance(app, [it.label for it in its])) if multi
-        else (lambda it: advance(app, it.label)),
+        on_select=on_multi if multi else on_single,
         on_cancel=lambda: cancel(app),
         title=q["question"],
         multi=multi,
@@ -40,6 +54,8 @@ def show_current(app) -> None:
 
 def advance(app, answer) -> None:
     q = app._ask_questions[app._ask_stage]
+    if app._ask_picked is not None:
+        answer, app._ask_picked = app._ask_picked + [answer], None
     app._ask_answers[q["header"]] = answer
     app._ask_stage += 1
     if app._ask_stage >= len(app._ask_questions):

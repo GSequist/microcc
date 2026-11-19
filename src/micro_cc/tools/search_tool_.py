@@ -9,6 +9,7 @@ from micro_cc.tools.mcp_client_ import normalize_config, resolve_mcp_tools
 
 # Import all discoverable tools
 from micro_cc.tools.browser_tool_ import browser
+from micro_cc.tools.chart_tool_ import chart_
 from micro_cc.tools.computer_tool_ import computer
 from micro_cc.tools.message_session_ import message_session_
 from micro_cc.tools.monitor_ import monitor_
@@ -62,6 +63,7 @@ async def timer_(delay: str, prompt: str, *, project_dir: str, repeat: bool = Fa
 _register(timer_, "timer alarm wake remind reminder later delay wait schedule sleep cron interval follow up check back in")
 _register(message_session_, "message notify tell list find discover other running micro-cc sessions peers terminal cross-session communicate")
 _register(reload_harness_, "reload restart relaunch harness self apply changes edited source mods mod modification")
+_register(chart_, "chart graph plot diagram visualize visualise line bar histogram scatter heatmap trend timeseries distribution compare numbers over time")
 _register(browser, "browser chrome playwright navigate click type web automation interact page form")
 # Screenshot capture and AX scoping are mac-only: keep the tool out of the catalog elsewhere.
 if platform.system() == "Darwin":
