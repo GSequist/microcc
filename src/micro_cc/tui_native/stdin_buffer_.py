@@ -1,5 +1,6 @@
 """Buffer stdin bytes and detect complete escape sequences before passing onward."""
 
+import codecs
 import re
 import time
 from dataclasses import dataclass
@@ -141,6 +142,7 @@ class StdinBuffer:
         self._paste_buffer = ""
         self._pending_kitty_codepoint: int | None = None
         self._queue: list[str | Paste] = []
+        self._utf8 = codecs.getincrementaldecoder("utf-8")(errors="replace")  # multibyte chars split across reads
 
     def feed(self, data: str | bytes) -> None:
         self._maybe_flush_expired()
@@ -180,10 +182,7 @@ class StdinBuffer:
 
     def _decode(self, data: str | bytes) -> str:
         if isinstance(data, (bytes, bytearray)):
-            if len(data) == 1 and data[0] > 127:
-                # High-bit-set single byte (legacy 8-bit meta encoding) -> ESC + char.
-                return ESC + chr(data[0] - 128)
-            return bytes(data).decode("utf-8", errors="replace")
+            return self._utf8.decode(bytes(data))
         return data
 
     def _process_str(self, s: str) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from types import SimpleNamespace
 from typing import NamedTuple
 
@@ -882,11 +883,11 @@ def parse_key(data: str) -> str | None:
     """Parse input data and return the key identifier if recognized."""
     kitty = parse_kitty_sequence(data)
     if kitty:
-        return format_parsed_key(kitty.codepoint, kitty.modifier, kitty.base_layout_key)
+        return format_parsed_key(kitty.codepoint, kitty.modifier, kitty.base_layout_key) or decode_printable_key(data)
 
     modify_other_keys = parse_modify_other_keys_sequence(data)
     if modify_other_keys:
-        return format_parsed_key(modify_other_keys.codepoint, modify_other_keys.modifier)
+        return format_parsed_key(modify_other_keys.codepoint, modify_other_keys.modifier) or decode_printable_key(data)
 
     # With Kitty protocol, \x1b\r and \n are shift+enter (custom terminal mappings), not alt+enter.
     if _kitty_protocol_active:
@@ -972,6 +973,8 @@ def parse_key(data: str) -> str | None:
             return f"ctrl+{chr(code + 96)}"
         if 32 <= code <= 126:
             return data
+        if code > 126 and unicodedata.category(data) != "Cc":
+            return data  # umlauts, accents, CJK, emoji, ZWJ
 
     return None
 
